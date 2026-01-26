@@ -17,7 +17,11 @@ import {
   sectorMomentum,
   InsertSectorMomentum,
   userPreferences,
-  InsertUserPreference
+  InsertUserPreference,
+  stockFinancials,
+  InsertStockFinancials,
+  stockHistoricalCandles,
+  InsertStockHistoricalCandle,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -346,4 +350,97 @@ export async function insertRallyPrediction(prediction: any) {
     status: "predicted",
     isHistorical: 0,
   });
+}
+
+// Stock Financials
+export async function getStockFinancials(ticker: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(stockFinancials)
+    .where(eq(stockFinancials.ticker, ticker))
+    .orderBy(desc(stockFinancials.lastUpdated))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function insertStockFinancials(financials: InsertStockFinancials) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.insert(stockFinancials).values(financials)
+    .onConflictDoUpdate({
+      target: stockFinancials.ticker,
+      set: {
+        marketCap: financials.marketCap,
+        peRatio: financials.peRatio,
+        eps: financials.eps,
+        dividendYield: financials.dividendYield,
+        beta: financials.beta,
+        high52Week: financials.high52Week,
+        low52Week: financials.low52Week,
+        lastUpdated: new Date(),
+      }
+    });
+}
+
+// Stock Historical Candles
+export async function getStockHistoricalCandles(ticker: string, resolution: string, from: number, to: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(stockHistoricalCandles)
+    .where(
+      sql`${stockHistoricalCandles.ticker} = ${ticker} AND 
+           ${stockHistoricalCandles.resolution} = ${resolution} AND 
+           ${stockHistoricalCandles.from} = ${from} AND 
+           ${stockHistoricalCandles.to} = ${to}`
+    )
+    .orderBy(desc(stockHistoricalCandles.lastUpdated))
+    .limit(1);
+
+  if (result.length === 0) return undefined;
+
+  const data = result[0];
+  return {
+    ...data,
+    open: JSON.parse(data.open || "[]"),
+    high: JSON.parse(data.high || "[]"),
+    low: JSON.parse(data.low || "[]"),
+    close: JSON.parse(data.close || "[]"),
+    volume: JSON.parse(data.volume || "[]"),
+    timestamp: JSON.parse(data.timestamp || "[]"),
+  };
+}
+
+export async function insertStockHistoricalCandles(candles: InsertStockHistoricalCandle) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.insert(stockHistoricalCandles).values({
+    ticker: candles.ticker,
+    resolution: candles.resolution,
+    open: JSON.stringify(candles.open),
+    high: JSON.stringify(candles.high),
+    low: JSON.stringify(candles.low),
+    close: JSON.stringify(candles.close),
+    volume: JSON.stringify(candles.volume),
+    timestamp: JSON.stringify(candles.timestamp),
+    from: candles.from,
+    to: candles.to,
+    lastUpdated: new Date(),
+  })
+    .onConflictDoUpdate({
+      target: [stockHistoricalCandles.ticker, stockHistoricalCandles.resolution, stockHistoricalCandles.from, stockHistoricalCandles.to],
+      set: {
+        open: JSON.stringify(candles.open),
+        high: JSON.stringify(candles.high),
+        low: JSON.stringify(candles.low),
+        close: JSON.stringify(candles.close),
+        volume: JSON.stringify(candles.volume),
+        timestamp: JSON.stringify(candles.timestamp),
+        lastUpdated: new Date(),
+      }
+    });
 }

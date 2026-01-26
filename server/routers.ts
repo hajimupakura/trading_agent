@@ -304,6 +304,108 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return await searchStocks(input.query);
       }),
+
+    getFinancials: publicProcedure
+      .input(z.object({ symbol: z.string() }))
+      .query(async ({ input }) => {
+        const { getStockFinancials, insertStockFinancials } = await import("./db");
+        const { getFinnhubBasicFinancials } = await import("./services/finnhubService");
+        
+        // 1. Check for cached data (e.g., less than 7 days old)
+        const cachedFinancials = await getStockFinancials(input.symbol);
+        if (cachedFinancials) {
+          const sevenDaysAgo = new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000);
+          if (new Date(cachedFinancials.lastUpdated) > sevenDaysAgo) {
+            return cachedFinancials;
+          }
+        }
+        
+        // 2. If no fresh cache, fetch from Finnhub
+        const newFinancials = await getFinnhubBasicFinancials(input.symbol);
+        if (!newFinancials) {
+          return null;
+        }
+        
+        // 3. Store in our database
+        const dataToInsert = {
+          ticker: newFinancials.symbol,
+          marketCap: String(newFinancials.marketCap),
+          peRatio: String(newFinancials.peRatio),
+          eps: String(newFinancials.eps),
+          dividendYield: String(newFinancials.dividendYield),
+          beta: String(newFinancials.beta),
+          high52Week: String(newFinancials.high52Week),
+          low52Week: String(newFinancials.low52Week),
+          lastUpdated: new Date(),
+        };
+
+        await insertStockFinancials(dataToInsert);
+        
+        return dataToInsert;
+      }),
+      
+    getHistoricalData: publicProcedure
+      .input(z.object({
+        symbol: z.string(),
+        resolution: z.string(), // e.g., 'D', 'W', 'M', '60'
+        from: z.number(), // Unix timestamp
+        to: z.number(), // Unix timestamp
+      }))
+      .query(async ({ input }) => {
+        const { getStockHistoricalCandles, insertStockHistoricalCandles } = await import("./db");
+        const { getFinnhubHistoricalCandles } = await import("./services/finnhubService");
+
+        // 1. Check for cached data
+        const cachedCandles = await getStockHistoricalCandles(input.symbol, input.resolution, input.from, input.to);
+        if (cachedCandles) {
+          // Determine freshness based on resolution. For daily, check if last updated today.
+          // For intraday, check if last updated recently (e.g., last hour)
+          const now = new Date();
+          let isFresh = false;
+          if (input.resolution === 'D' || input.resolution === 'W' || input.resolution === 'M') {
+            isFresh = cachedCandles.lastUpdated.toDateString() === now.toDateString();
+          } else { // Intraday resolutions
+            const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+            isFresh = cachedCandles.lastUpdated > oneHourAgo;
+          }
+          
+          if (isFresh) {
+            return {
+              open: JSON.parse(cachedCandles.open || "[]"),
+              high: JSON.parse(cachedCandles.high || "[]"),
+              low: JSON.parse(cachedCandles.low || "[]"),
+              close: JSON.parse(cachedCandles.close || "[]"),
+              volume: JSON.parse(cachedCandles.volume || "[]"),
+              timestamp: JSON.parse(cachedCandles.timestamp || "[]"),
+              symbol: cachedCandles.ticker,
+              resolution: cachedCandles.resolution,
+            };
+          }
+        }
+
+        // 2. If no fresh cache, fetch from Finnhub
+        const newCandles = await getFinnhubHistoricalCandles(input.symbol, input.resolution, input.from, input.to);
+        if (!newCandles) {
+          return null;
+        }
+
+        // 3. Store in our database
+        await insertStockHistoricalCandles({
+          ticker: newCandles.symbol,
+          resolution: newCandles.resolution,
+          open: JSON.stringify(newCandles.open),
+          high: JSON.stringify(newCandles.high),
+          low: JSON.stringify(newCandles.low),
+          close: JSON.stringify(newCandles.close),
+          volume: JSON.stringify(newCandles.volume),
+          timestamp: JSON.stringify(newCandles.timestamp),
+          from: input.from,
+          to: input.to,
+          lastUpdated: new Date(),
+        });
+
+        return newCandles;
+      }),
   }),
 
   // Manual sync triggers
@@ -318,6 +420,35 @@ export const appRouter = router({
       .mutation(async () => {
         const result = await analyzePendingNews();
         return result;
+      }),
+  }),
+
+  // Technical Analysis
+  ta: router({
+    getSMA: publicProcedure
+      .input(z.object({
+        symbol: z.string(),
+        interval: z.string(),
+        period: z.number(),
+        from: z.number(),
+        to: z.number(),
+      }))
+      .query(async ({ input }) => {
+        const { getSMA } = await import("./services/technicalAnalysisService");
+        return await getSMA(input.symbol, input.interval, input.period, input.from, input.to);
+      }),
+    
+    getRSI: publicProcedure
+      .input(z.object({
+        symbol: z.string(),
+        interval: z.string(),
+        period: z.number(),
+        from: z.number(),
+        to: z.number(),
+      }))
+      .query(async ({ input }) => {
+        const { getRSI } = await import("./services/technicalAnalysisService");
+        return await getRSI(input.symbol, input.interval, input.period, input.from, input.to);
       }),
   }),
 });

@@ -4,9 +4,87 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { TrendingUp, TrendingDown, Bell, RefreshCw, Loader2, ExternalLink } from "lucide-react";
+import { TrendingUp, TrendingDown, Bell, RefreshCw, Loader2, ExternalLink, Target, Hourglass, Zap, CheckCircle2 } from "lucide-react";
 import { getLoginUrl } from "@/const";
 import { Link } from "wouter";
+import { cn, formatTimeAgo } from "@/lib/utils";
+import type { NewsArticle, WatchlistStock } from "shared/types";
+import { useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { StockChart } from "@/components/StockChart"; // Import the StockChart component
+
+function FinancialsDialog({ stock, open, onOpenChange }: { stock: WatchlistStock | null, open: boolean, onOpenChange: (open: boolean) => void }) {
+  const { data: financials, isLoading } = trpc.stocks.getFinancials.useQuery(
+    { symbol: stock?.ticker || "" },
+    { enabled: !!stock }
+  );
+
+  if (!stock) return null; // Ensure stock is available when dialog is open
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl"> {/* Make dialog wider for chart */}
+        <DialogHeader>
+          <DialogTitle>{stock.name} ({stock.ticker})</DialogTitle>
+          <DialogDescription>Detailed Stock Information</DialogDescription>
+        </DialogHeader>
+
+        <Tabs defaultValue="financials" className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="financials">Financials</TabsTrigger>
+            <TabsTrigger value="chart">Chart</TabsTrigger>
+          </TabsList>
+          <TabsContent value="financials" className="mt-4">
+            {isLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : financials ? (
+              <div className="grid grid-cols-2 gap-4 py-4">
+                <div className="text-sm">
+                  <div className="text-muted-foreground">Market Cap</div>
+                  <div className="font-semibold">${(Number(financials.marketCap) / 1_000_000_000).toFixed(2)}B</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-muted-foreground">P/E Ratio</div>
+                  <div className="font-semibold">{Number(financials.peRatio).toFixed(2)}</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-muted-foreground">EPS</div>
+                  <div className="font-semibold">{Number(financials.eps).toFixed(2)}</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-muted-foreground">Dividend Yield</div>
+                  <div className="font-semibold">{Number(financials.dividendYield).toFixed(2)}%</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-muted-foreground">Beta</div>
+                  <div className="font-semibold">{Number(financials.beta).toFixed(2)}</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-muted-foreground">52-Week High</div>
+                  <div className="font-semibold">${Number(financials.high52Week).toFixed(2)}</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-muted-foreground">52-Week Low</div>
+                  <div className="font-semibold">${Number(financials.low52Week).toFixed(2)}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                No financial data available.
+              </div>
+            )}
+          </TabsContent>
+          <TabsContent value="chart" className="mt-4">
+            <StockChart symbol={stock.ticker} />
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 
 export default function Dashboard() {
   const { user, loading: authLoading, isAuthenticated } = useAuth();
@@ -16,12 +94,39 @@ export default function Dashboard() {
   const { data: watchlist, isLoading: watchlistLoading } = trpc.watchlist.list.useQuery(undefined, {
     enabled: isAuthenticated,
   });
+
+  const watchlistTickers = watchlist?.map(stock => stock.ticker) || [];
+  const { data: stockQuotes, isLoading: stockQuotesLoading } = trpc.stocks.getMultipleQuotes.useQuery(
+    { symbols: watchlistTickers },
+    {
+      enabled: isAuthenticated && watchlistTickers.length > 0,
+      refetchInterval: (query) => {
+        // Only refetch during market hours (e.g., 9:30 AM to 4:00 PM EST)
+        const now = new Date();
+        const estOffset = -5; // EST is UTC-5
+        const estHour = now.getUTCHours() + estOffset;
+        const estMinute = now.getUTCMinutes();
+        
+        // Simple check for market hours (9:30 AM - 4:00 PM EST) and weekdays
+        const isMarketOpen = estHour >= 9 && (estHour < 16 || (estHour === 16 && estMinute === 0)) && now.getDay() >= 1 && now.getDay() <= 5;
+
+        return isMarketOpen ? 5 * 60 * 1000 : false; // Refetch every 5 minutes if market is open
+      },
+      select: (data) => {
+        // Convert the object returned by tRPC into a Map for easier lookup
+        return new Map(Object.entries(data));
+      }
+    }
+  );
   const { data: arkTrades, isLoading: arkLoading } = trpc.ark.recentTrades.useQuery();
   const { data: rallies, isLoading: ralliesLoading } = trpc.rallies.list.useQuery({ status: "ongoing" });
   const { data: alerts, isLoading: alertsLoading } = trpc.alerts.list.useQuery(
     { unreadOnly: true },
     { enabled: isAuthenticated }
   );
+  const { data: sectorMomentum = [], isLoading: sectorMomentumLoading } = trpc.sectors.momentum.useQuery();
+
+  const [selectedStock, setSelectedStock] = useState<WatchlistStock | null>(null);
 
   // Mutations
   const analyzeNews = trpc.news.analyze.useMutation({
@@ -118,17 +223,55 @@ export default function Dashboard() {
                 <CardDescription>Real-time momentum indicators for key sectors</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                  {["AI", "Metals", "Quantum", "Energy", "Chips"].map((sector) => (
-                    <div key={sector} className="p-4 border border-border rounded-lg">
-                      <div className="text-sm font-medium text-muted-foreground mb-2">{sector}</div>
-                      <div className="flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4 text-green-500" />
-                        <span className="text-lg font-bold text-foreground">Strong</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {sectorMomentumLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : sectorMomentum.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>No sector momentum data available.</p>
+                    <p className="text-sm mt-2">Sector momentum is calculated from news analysis.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    {sectorMomentum.slice(0, 10).map((sector: any) => {
+                      const momentum = sector.momentum || "moderate";
+                      const isStrong = momentum === "very_strong" || momentum === "strong";
+                      const isWeak = momentum === "weak" || momentum === "declining";
+                      const momentumLabel = momentum === "very_strong" ? "Very Strong" :
+                                          momentum === "strong" ? "Strong" :
+                                          momentum === "moderate" ? "Moderate" :
+                                          momentum === "weak" ? "Weak" : "Declining";
+                      
+                      return (
+                        <div key={sector.id || sector.sector} className="p-4 border border-border rounded-lg">
+                          <div className="text-sm font-medium text-muted-foreground mb-2">{sector.sector}</div>
+                          <div className="flex items-center gap-2">
+                            {isStrong ? (
+                              <TrendingUp className="h-4 w-4 text-green-500" />
+                            ) : isWeak ? (
+                              <TrendingDown className="h-4 w-4 text-red-500" />
+                            ) : (
+                              <Target className="h-4 w-4 text-amber-500" />
+                            )}
+                            <span className={`text-lg font-bold ${
+                              isStrong ? "text-green-600 dark:text-green-400" :
+                              isWeak ? "text-red-600 dark:text-red-400" :
+                              "text-amber-600 dark:text-amber-400"
+                            }`}>
+                              {momentumLabel}
+                            </span>
+                          </div>
+                          {sector.newsCount > 0 && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {sector.newsCount} articles
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -207,6 +350,12 @@ export default function Dashboard() {
                       <div key={article.id} className="p-4 border border-border rounded-lg">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="text-sm text-muted-foreground">
+                                {formatTimeAgo(article.publishedAt)}
+                              </div>
+                              {getAiStatus(article)}
+                            </div>
                             <a 
                               href={article.url} 
                               target="_blank" 
@@ -219,7 +368,7 @@ export default function Dashboard() {
                             {article.aiSummary && (
                               <p className="text-sm text-muted-foreground mb-3 mt-2">{article.aiSummary}</p>
                             )}
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap mt-3">
                               <Badge variant="outline">{article.source}</Badge>
                               {article.sentiment && (
                                 <Badge
@@ -257,24 +406,57 @@ export default function Dashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Your Watchlist</CardTitle>
-                <CardDescription>Priority stocks and custom watchlist</CardDescription>
+                <CardDescription>Priority stocks and custom watchlist with real-time quotes</CardDescription>
               </CardHeader>
               <CardContent>
-                {watchlistLoading ? (
+                {(watchlistLoading || stockQuotesLoading) ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
                   </div>
                 ) : watchlist && watchlist.length > 0 ? (
                   <div className="space-y-3">
-                    {watchlist.map((stock) => (
-                      <div key={stock.id} className="flex items-center justify-between p-3 border border-border rounded-lg">
-                        <div>
-                          <div className="font-semibold text-foreground">{stock.ticker}</div>
-                          {stock.name && <div className="text-sm text-muted-foreground">{stock.name}</div>}
+                    {watchlist.map((stock) => {
+                      const quote = stockQuotes?.get(stock.ticker);
+                      const isPositive = quote && quote.change > 0;
+                      const isNegative = quote && quote.change < 0;
+
+                      return (
+                        <div 
+                          key={stock.id} 
+                          className="flex items-center justify-between p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => setSelectedStock(stock)}
+                        >
+                          <div>
+                            <div className="font-semibold text-foreground">{stock.ticker}</div>
+                            {stock.name && <div className="text-sm text-muted-foreground">{stock.name}</div>}
+                          </div>
+                          {quote ? (
+                            <div className="text-right">
+                              <div className="text-lg font-bold text-foreground">
+                                ${quote.currentPrice.toFixed(2)}
+                              </div>
+                              <div className={cn(
+                                "flex items-center justify-end text-sm font-medium",
+                                isPositive && "text-green-600 dark:text-green-400",
+                                isNegative && "text-red-600 dark:text-red-400"
+                              )}>
+                                {isPositive && <TrendingUp className="h-4 w-4 mr-1" />}
+                                {isNegative && <TrendingDown className="h-4 w-4 mr-1" />}
+                                {quote.change.toFixed(2)} ({quote.percentChange.toFixed(2)}%)
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-muted-foreground text-sm">
+                              {stockQuotesLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                "No quote data"
+                              )}
+                            </div>
+                          )}
                         </div>
-                        {stock.isPriority === 1 && <Badge>Priority</Badge>}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-muted-foreground">
@@ -377,6 +559,12 @@ export default function Dashboard() {
           </TabsContent>
         </Tabs>
       </main>
+      
+      <FinancialsDialog 
+        stock={selectedStock} 
+        open={!!selectedStock} 
+        onOpenChange={(open) => !open && setSelectedStock(null)} 
+      />
     </div>
   );
 }

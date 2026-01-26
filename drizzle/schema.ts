@@ -43,6 +43,7 @@ export const newsArticles = pgTable("news_articles", {
   publishedAt: timestamp("published_at").notNull(),
   scrapedAt: timestamp("scraped_at").defaultNow().notNull(),
   isAnalyzed: boolean("isAnalyzed").default(false).notNull(),
+  analysisRequestedAt: timestamp("analysis_requested_at"),
   aiSummary: text("aiSummary"),
   sentiment: sentimentEnum("sentiment"),
   potentialTerm: potentialTermEnum("potentialTerm"),
@@ -166,6 +167,48 @@ export const sectorMomentum = pgTable("sector_momentum", {
 
 export type SectorMomentum = typeof sectorMomentum.$inferSelect;
 export type InsertSectorMomentum = typeof sectorMomentum.$inferInsert;
+
+/**
+ * Stock financials data (cached from Finnhub)
+ */
+export const stockFinancials = pgTable("stock_financials", {
+  id: serial("id").primaryKey(),
+  ticker: varchar("ticker", { length: 32 }).notNull().unique(),
+  marketCap: varchar("market_cap", { length: 64 }),
+  peRatio: varchar("pe_ratio", { length: 32 }),
+  eps: varchar("eps", { length: 32 }),
+  dividendYield: varchar("dividend_yield", { length: 32 }),
+  beta: varchar("beta", { length: 32 }),
+  high52Week: varchar("high_52_week", { length: 32 }),
+  low52Week: varchar("low_52_week", { length: 32 }),
+  lastUpdated: timestamp("last_updated").defaultNow().notNull(),
+});
+
+export type StockFinancials = typeof stockFinancials.$inferSelect;
+export type InsertStockFinancials = typeof stockFinancials.$inferInsert;
+
+/**
+ * Stock historical candle data (cached from Finnhub)
+ */
+export const stockHistoricalCandles = pgTable("stock_historical_candles", {
+  id: serial("id").primaryKey(),
+  ticker: varchar("ticker", { length: 32 }).notNull(),
+  resolution: varchar("resolution", { length: 8 }).notNull(),
+  // Storing arrays as text; convert to/from JSON in service layer
+  open: text("open"),
+  high: text("high"),
+  low: text("low"),
+  close: text("close"),
+  volume: text("volume"),
+  timestamp: text("timestamp"),
+  from: integer("from").notNull(),
+  to: integer("to").notNull(),
+  lastUpdated: timestamp("last_updated").defaultNow().notNull(),
+});
+
+export type StockHistoricalCandle = typeof stockHistoricalCandles.$inferSelect;
+export type InsertStockHistoricalCandle = typeof stockHistoricalCandles.$inferInsert;
+
 
 // Re-export YouTube tables
 export { youtubeInfluencers, youtubeVideos } from "./schema_youtube";

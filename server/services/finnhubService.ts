@@ -13,16 +13,25 @@ const apiKey = process.env.FINNHUB_API_KEY || "d5ro8fhr01qj5oil5r6gd5ro8fhr01qj5
 let api: any = null;
 
 function getApi() {
-  if (!api) {
-    try {
-      const api_client = new (finnhub as any).ApiClient();
-      api_client.authentications["api_key"].apiKey = apiKey;
-      api = new (finnhub as any).DefaultApi(api_client);
-    } catch (error) {
-      console.warn("[Finnhub] Failed to initialize API client:", error);
-      api = null;
-    }
+  if (api) {
+    return api;
   }
+
+  try {
+    // Corrected initialization: Instantiate DefaultApi and configure it.
+    // The ApiClient is implicitly managed by the DefaultApi constructor.
+    const client = new (finnhub as any).DefaultApi();
+    
+    // The authentication is now set on the client instance itself.
+    client.apiClient.authentications["api_key"].apiKey = apiKey;
+    
+    api = client;
+    console.log("[Finnhub] API client initialized successfully.");
+  } catch (error) {
+    console.error("[Finnhub] Failed to initialize API client:", error);
+    api = null;
+  }
+
   return api;
 }
 
@@ -201,6 +210,116 @@ export async function getFinnhubMultipleQuotes(symbols: string[]): Promise<Map<s
   }
   
   return quotes;
+}
+
+
+export interface FinnhubFinancials {
+  symbol: string;
+  marketCap: number;
+  peRatio: number;
+  eps: number;
+  dividendYield: number;
+  beta: number;
+  high52Week: number;
+  low52Week: number;
+}
+
+/**
+ * Get basic financial data for a stock
+ */
+export async function getFinnhubBasicFinancials(symbol: string): Promise<FinnhubFinancials | null> {
+  const api = getApi();
+  if (!api) {
+    console.warn("[Finnhub] API not initialized, skipping financials request");
+    return null;
+  }
+  
+  return new Promise((resolve) => {
+    api.companyBasicFinancials(symbol, (error: any, data: any) => {
+      if (error) {
+        console.error(`[Finnhub] Error fetching financials for ${symbol}:`, error);
+        resolve(null);
+        return;
+      }
+
+      if (!data || Object.keys(data).length === 0) {
+        console.warn(`[Finnhub] No financials data found for ${symbol}`);
+        resolve(null);
+        return;
+      }
+
+      const metric = data.metric || {};
+      resolve({
+        symbol,
+        marketCap: metric.marketCapitalization || 0,
+        peRatio: metric["peNormalizedAnnual"] || 0,
+        eps: metric["epsGrowth5Y"] || 0, // Using 5Y growth as a proxy, you might want a different EPS field
+        dividendYield: metric.dividendYieldIndicatedAnnual || 0,
+        beta: metric.beta || 0,
+        high52Week: metric["52WeekHigh"] || 0,
+        low52Week: metric["52WeekLow"] || 0,
+      });
+    });
+  });
+}
+
+
+export interface FinnhubCandleData {
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  volume: number[];
+  timestamp: number[]; // Unix timestamp
+  symbol: string;
+  resolution: string;
+}
+
+/**
+ * Get historical candle data for a stock
+ * @param symbol Stock symbol
+ * @param resolution Supported resolutions: 1, 5, 15, 30, 60, D, W, M
+ * @param from Unix timestamp. Interval initial value.
+ * @param to Unix timestamp. Interval final value.
+ */
+export async function getFinnhubHistoricalCandles(
+  symbol: string,
+  resolution: string,
+  from: number,
+  to: number
+): Promise<FinnhubCandleData | null> {
+  const api = getApi();
+  if (!api) {
+    console.warn("[Finnhub] API not initialized, skipping historical candles request");
+    return null;
+  }
+  
+  return new Promise((resolve) => {
+    api.stockCandles(symbol, resolution, from, to, (error: any, data: any) => {
+      if (error) {
+        console.error(`[Finnhub] Error fetching historical candles for ${symbol}:`, error);
+        resolve(null);
+        return;
+      }
+
+      if (!data || data.s !== "ok") {
+        console.warn(`[Finnhub] No historical candles data found for ${symbol} with resolution ${resolution}`);
+        resolve(null);
+        return;
+      }
+
+      resolve({
+        open: data.o,
+        high: data.h,
+        low: data.l,
+        close: data.c,
+        volume: data.v,
+        timestamp: data.t,
+        symbol,
+        resolution,
+      });
+    });
+  });
 }
 
 /**

@@ -1,33 +1,12 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1769425658048,
-      "tag": "0000_milky_dagger",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1769425833986,
-      "tag": "0001_wild_vertigo",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1769427355533,
-      "tag": "0002_short_riptide",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1769431620508,
-      "tag": "0003_misty_pet_avengers",
+      "version": "7",
+      "when": 1769461196782,
+      "tag": "0000_colossal_shriek",
       "breakpoints": true
     }
   ]

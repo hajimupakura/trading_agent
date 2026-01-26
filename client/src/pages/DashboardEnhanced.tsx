@@ -38,6 +38,7 @@ export default function DashboardEnhanced() {
     { enabled: isAuthenticated }
   );
   const { data: youtubeVideos = [] } = trpc.youtube.recentVideos.useQuery();
+  const { data: sectorMomentum = [], isLoading: sectorMomentumLoading } = trpc.sectors.momentum.useQuery();
 
   // Mutations
   const analyzeNews = trpc.news.analyze.useMutation({
@@ -168,17 +169,55 @@ export default function DashboardEnhanced() {
                 <CardDescription>Real-time momentum indicators for key sectors</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                  {["AI", "Metals", "Quantum", "Energy", "Chips"].map((sector) => (
-                    <div key={sector} className="p-4 border border-border rounded-lg">
-                      <div className="text-sm font-medium text-muted-foreground mb-2">{sector}</div>
-                      <div className="flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4 text-green-500" />
-                        <span className="text-lg font-bold text-foreground">Strong</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {sectorMomentumLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : sectorMomentum.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>No sector momentum data available.</p>
+                    <p className="text-sm mt-2">Sector momentum is calculated from news analysis.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    {sectorMomentum.slice(0, 10).map((sector: any) => {
+                      const momentum = sector.momentum || "moderate";
+                      const isStrong = momentum === "very_strong" || momentum === "strong";
+                      const isWeak = momentum === "weak" || momentum === "declining";
+                      const momentumLabel = momentum === "very_strong" ? "Very Strong" :
+                                          momentum === "strong" ? "Strong" :
+                                          momentum === "moderate" ? "Moderate" :
+                                          momentum === "weak" ? "Weak" : "Declining";
+                      
+                      return (
+                        <div key={sector.id || sector.sector} className="p-4 border border-border rounded-lg">
+                          <div className="text-sm font-medium text-muted-foreground mb-2">{sector.sector}</div>
+                          <div className="flex items-center gap-2">
+                            {isStrong ? (
+                              <TrendingUp className="h-4 w-4 text-green-500" />
+                            ) : isWeak ? (
+                              <TrendingDown className="h-4 w-4 text-red-500" />
+                            ) : (
+                              <Target className="h-4 w-4 text-amber-500" />
+                            )}
+                            <span className={`text-lg font-bold ${
+                              isStrong ? "text-green-600 dark:text-green-400" :
+                              isWeak ? "text-red-600 dark:text-red-400" :
+                              "text-amber-600 dark:text-amber-400"
+                            }`}>
+                              {momentumLabel}
+                            </span>
+                          </div>
+                          {sector.newsCount > 0 && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {sector.newsCount} articles
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
 

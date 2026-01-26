@@ -27,6 +27,29 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
+
+import { syncRSSNews, analyzePendingNews } from "../services/rssNewsSync";
+import cron from "node-cron";
+
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    server.listen(port, () => {
+      server.close(() => resolve(true));
+    });
+    server.on("error", () => resolve(false));
+  });
+}
+
+async function findAvailablePort(startPort: number = 3000): Promise<number> {
+  for (let port = startPort; port < startPort + 20; port++) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  throw new Error(`No available port found starting from ${startPort}`);
+}
+
 async function startServer() {
   const app = express();
   const server = createServer(app);
@@ -59,6 +82,39 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+
+    // --- Automated Job Scheduler ---
+    console.log("[Scheduler] Initializing background jobs...");
+
+    // 1. Sync RSS feeds every 15 minutes
+    cron.schedule("*/15 * * * *", async () => {
+      console.log("[Scheduler] Running RSS news sync job...");
+      try {
+        const result = await syncRSSNews();
+        console.log(`[Scheduler] RSS news sync completed. Found: ${result.found}, Inserted: ${result.inserted}, Skipped: ${result.skipped}`);
+      } catch (error) {
+        console.error("[Scheduler] Error during RSS news sync:", error);
+      }
+    });
+
+    // 2. Analyze pending news every 30 minutes during market hours (8am - 4pm EST, Mon-Fri)
+    // Note: The cron schedule is in server's local time. Ensure server is set to UTC or adjust schedule accordingly.
+    // This schedule '*/30 12-20 * * 1-5' corresponds to 8am-4pm EST assuming server is in UTC.
+    cron.schedule("*/30 12-20 * * 1-5", async () => {
+      console.log("[Scheduler] Running pending news analysis job...");
+      try {
+        const result = await analyzePendingNews();
+        console.log(`[Scheduler] News analysis completed. Analyzed: ${result.analyzedCount}, Errors: ${result.errorCount}`);
+      } catch (error) {
+        console.error("[Scheduler] Error during news analysis:", error);
+      }
+    }, {
+      timezone: "UTC"
+    });
+
+    console.log("[Scheduler] Background jobs initialized.");
+    console.log("- RSS Sync scheduled for every 15 minutes.");
+    console.log("- News Analysis scheduled for every 30 minutes (8am-4pm EST, Mon-Fri).");
   });
 }
 
