@@ -57,18 +57,19 @@ export default function DashboardV2() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-        <Card className="p-8 bg-slate-900/50 border-slate-800">
-          <h2 className="text-2xl font-bold mb-4 text-slate-100">Sign in to continue</h2>
-          <Button asChild className="bg-emerald-600 hover:bg-emerald-700">
-            <a href={getLoginUrl()}>Sign In</a>
-          </Button>
-        </Card>
-      </div>
-    );
-  }
+  // Allow guest access since most endpoints are public
+  // if (!isAuthenticated) {
+  //   return (
+  //     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+  //       <Card className="p-8 bg-slate-900/50 border-slate-800">
+  //         <h2 className="text-2xl font-bold mb-4 text-slate-100">Sign in to continue</h2>
+  //         <Button asChild className="bg-emerald-600 hover:bg-emerald-700">
+  //           <a href={getLoginUrl()}>Sign In</a>
+  //         </Button>
+  //       </Card>
+  //     </div>
+  //   );
+  // }
 
   const unreadAlerts = alerts.filter(a => a.isRead === 0);
 

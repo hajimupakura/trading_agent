@@ -70,28 +70,29 @@ export default function DashboardEnhanced() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
-        <Card className="max-w-md w-full">
-          <CardHeader>
-            <CardTitle>AI Trading Agent</CardTitle>
-            <CardDescription>
-              Predictive market intelligence for identifying opportunities 2-3 weeks ahead
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground mb-4">
-              Track market news, ARK trades, predicted rallies, and receive AI-powered alerts for your trading strategy.
-            </p>
-            <Button asChild className="w-full">
-              <a href={getLoginUrl()}>Sign In to Continue</a>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  // Allow guest access since most endpoints are public
+  // if (!isAuthenticated) {
+  //   return (
+  //     <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
+  //       <Card className="max-w-md w-full">
+  //         <CardHeader>
+  //           <CardTitle>AI Trading Agent</CardTitle>
+  //           <CardDescription>
+  //             Predictive market intelligence for identifying opportunities 2-3 weeks ahead
+  //           </CardDescription>
+  //         </CardHeader>
+  //         <CardContent>
+  //           <p className="text-sm text-muted-foreground mb-4">
+  //             Track market news, ARK trades, predicted rallies, and receive AI-powered alerts for your trading strategy.
+  //           </p>
+  //           <Button asChild className="w-full">
+  //             <a href={getLoginUrl()}>Sign In to Continue</a>
+  //           </Button>
+  //         </CardContent>
+  //       </Card>
+  //     </div>
+  //   );
+  // }
 
   return (
     <div className="min-h-screen bg-background">
