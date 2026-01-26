@@ -1,26 +1,39 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
+import { lazy, Suspense } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Home from "./pages/Home";
-import DashboardV2 from "./pages/DashboardV2";
-import Dashboard from "./pages/Dashboard";
-import DashboardEnhanced from "./pages/DashboardEnhanced";
+import { Loader2 } from "lucide-react";
+
+// Lazy load pages for code splitting
+const NotFound = lazy(() => import("@/pages/NotFound"));
+const Home = lazy(() => import("@/pages/Home"));
+const DashboardV2 = lazy(() => import("@/pages/DashboardV2"));
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const DashboardEnhanced = lazy(() => import("@/pages/DashboardEnhanced"));
+
+// Loading fallback component
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-background">
+    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+  </div>
+);
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
   return (
-    <Switch>
-      <Route path={"/"} component={DashboardEnhanced} />
-      <Route path={"/v2"} component={DashboardV2} />
-      <Route path={"/v1"} component={Dashboard} />
-      <Route path={"/old"} component={Home} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
-      <Route component={NotFound} />
-    </Switch>
+    <Suspense fallback={<PageLoader />}>
+      <Switch>
+        <Route path={"/"} component={DashboardEnhanced} />
+        <Route path={"/v2"} component={DashboardV2} />
+        <Route path={"/v1"} component={Dashboard} />
+        <Route path={"/old"} component={Home} />
+        <Route path={"/404"} component={NotFound} />
+        {/* Final fallback route */}
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
   );
 }
 

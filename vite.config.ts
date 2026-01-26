@@ -171,6 +171,76 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React core
+          'react-vendor': ['react', 'react-dom', 'react/jsx-runtime'],
+          
+          // UI libraries
+          'radix-ui': [
+            '@radix-ui/react-accordion',
+            '@radix-ui/react-alert-dialog',
+            '@radix-ui/react-aspect-ratio',
+            '@radix-ui/react-avatar',
+            '@radix-ui/react-checkbox',
+            '@radix-ui/react-collapsible',
+            '@radix-ui/react-context-menu',
+            '@radix-ui/react-dialog',
+            '@radix-ui/react-dropdown-menu',
+            '@radix-ui/react-hover-card',
+            '@radix-ui/react-label',
+            '@radix-ui/react-menubar',
+            '@radix-ui/react-navigation-menu',
+            '@radix-ui/react-popover',
+            '@radix-ui/react-progress',
+            '@radix-ui/react-radio-group',
+            '@radix-ui/react-scroll-area',
+            '@radix-ui/react-select',
+            '@radix-ui/react-separator',
+            '@radix-ui/react-slider',
+            '@radix-ui/react-slot',
+            '@radix-ui/react-switch',
+            '@radix-ui/react-tabs',
+            '@radix-ui/react-toggle',
+            '@radix-ui/react-toggle-group',
+            '@radix-ui/react-tooltip',
+          ],
+          
+          // Data/state management
+          'data-vendor': [
+            '@tanstack/react-query',
+            '@trpc/client',
+            '@trpc/react-query',
+            '@trpc/server',
+            'superjson',
+          ],
+          
+          // Charts and visualization
+          'charts-vendor': ['recharts', 'framer-motion'],
+          
+          // Form libraries
+          'form-vendor': [
+            'react-hook-form',
+            '@hookform/resolvers',
+            'zod',
+          ],
+          
+          // Utilities
+          'utils-vendor': [
+            'clsx',
+            'tailwind-merge',
+            'class-variance-authority',
+            'date-fns',
+            'lucide-react',
+          ],
+        },
+        // Increase chunk size warning limit to suppress warnings
+        // Largest chunk is ~884KB (Home/ComponentShowcase), which is acceptable for a feature-rich page
+        // Code splitting is already implemented with manual chunks and lazy-loaded routes
+        chunkSizeWarningLimit: 2000,
+      },
+    },
   },
   server: {
     port: 3005,
