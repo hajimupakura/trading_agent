@@ -9,6 +9,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { syncRSSNews, analyzePendingNews } from "../services/rssNewsSync";
 import { runBacktest } from "../services/backtestingService";
+import { runAlertChecks } from "../services/alertingService";
 import cron from "node-cron";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -108,6 +109,20 @@ async function startServer() {
     console.log("- RSS Sync scheduled for every 15 minutes.");
     console.log("- News Analysis scheduled for every 30 minutes (8am-4pm EST, Mon-Fri).");
     console.log("- Prediction Backtesting scheduled for daily at 5pm EST.");
+
+    // 4. Run user-defined alert checks every 5 minutes during market hours
+    cron.schedule("*/5 12-20 * * 1-5", async () => {
+      console.log("[Scheduler] Running user-defined alert checks...");
+      try {
+        await runAlertChecks();
+      } catch (error) {
+        console.error("[Scheduler] Error during user-defined alert checks:", error);
+      }
+    }, {
+      timezone: "UTC"
+    });
+    
+    console.log("- User Alert Checks scheduled for every 5 minutes (8am-4pm EST, Mon-Fri).");
   });
 }
 

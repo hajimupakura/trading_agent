@@ -22,6 +22,8 @@ import {
   InsertStockFinancials,
   stockHistoricalCandles,
   InsertStockHistoricalCandle,
+  userDefinedAlerts,
+  InsertUserDefinedAlert,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -220,8 +222,70 @@ export async function markAlertAsRead(alertId: number, userId: number) {
   if (!db) throw new Error("Database not available");
   
   return await db.update(alerts)
-    .set({ isRead: 1 })
     .where(sql`${alerts.id} = ${alertId} AND ${alerts.userId} = ${userId}`);
+}
+
+// User Defined Alerts
+export async function getUserDefinedAlerts(userId: number, status: "active" | "triggered" | "inactive" = "active") {
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db.select().from(userDefinedAlerts)
+    .where(sql`${userDefinedAlerts.userId} = ${userId} AND ${userDefinedAlerts.status} = ${status}`)
+    .orderBy(desc(userDefinedAlerts.createdAt));
+}
+
+export async function insertUserDefinedAlert(alert: InsertUserDefinedAlert) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.insert(userDefinedAlerts).values(alert);
+}
+
+export async function updateUserDefinedAlertStatus(alertId: number, status: "active" | "triggered" | "inactive") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.update(userDefinedAlerts)
+    .set({ status, triggeredAt: status === 'triggered' ? new Date() : null })
+    .where(eq(userDefinedAlerts.id, alertId));
+}
+
+// Screener
+export async function getScreenerResults(filters: { minMarketCap?: number, maxPeRatio?: number, sector?: string }) {
+  const db = await getDb();
+  if (!db) return [];
+
+  let query = db.select({
+    ticker: stockFinancials.ticker,
+    marketCap: stockFinancials.marketCap,
+    peRatio: stockFinancials.peRatio,
+    eps: stockFinancials.eps,
+    // Add other fields you want to display in the screener results
+  })
+  .from(stockFinancials)
+  .$dynamic();
+
+  const conditions = [];
+
+  if (filters.minMarketCap) {
+    conditions.push(sql`${stockFinancials.marketCap} >= ${filters.minMarketCap}`);
+  }
+  if (filters.maxPeRatio) {
+    conditions.push(sql`${stockFinancials.peRatio} <= ${filters.maxPeRatio}`);
+  }
+  
+  if (filters.sector) {
+    // This requires a join with newsArticles to filter by sector.
+    // For simplicity, we'll omit this for now and add it in a future iteration.
+    // A better approach would be to have a dedicated `stocks` table with a `sector` column.
+  }
+
+  if (conditions.length > 0) {
+    query = query.where(sql.join(conditions, sql` AND `));
+  }
+
+  return await query.limit(100);
 }
 
 // Rally Events

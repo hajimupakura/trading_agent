@@ -12,6 +12,9 @@ import type { NewsArticle, WatchlistStock } from "shared/types";
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StockChart } from "@/components/StockChart"; // Import the StockChart component
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { X } from "lucide-react";
 
 function FinancialsDialog({ stock, open, onOpenChange }: { stock: WatchlistStock | null, open: boolean, onOpenChange: (open: boolean) => void }) {
   const { data: financials, isLoading } = trpc.stocks.getFinancials.useQuery(
@@ -126,6 +129,16 @@ export default function Dashboard() {
   );
   const { data: sectorMomentum = [], isLoading: sectorMomentumLoading } = trpc.sectors.momentum.useQuery();
 
+  const { data: userDefinedAlerts, refetch: refetchUserDefinedAlerts } = trpc.userAlerts.list.useQuery(undefined, { enabled: isAuthenticated });
+  
+  const createUserAlert = trpc.userAlerts.create.useMutation({
+    onSuccess: () => refetchUserDefinedAlerts(),
+  });
+
+  const deleteUserAlert = trpc.userAlerts.delete.useMutation({
+    onSuccess: () => refetchUserDefinedAlerts(),
+  });
+
   const [selectedStock, setSelectedStock] = useState<WatchlistStock | null>(null);
 
   // Mutations
@@ -212,8 +225,12 @@ export default function Dashboard() {
             <TabsTrigger value="watchlist">Watchlist</TabsTrigger>
             <TabsTrigger value="ark">ARK Trades</TabsTrigger>
             <TabsTrigger value="rallies">Rally Tracker</TabsTrigger>
+            <TabsTrigger value="my-alerts">My Alerts</TabsTrigger>
             <Link href="/performance">
               <TabsTrigger value="performance">Performance</TabsTrigger>
+            </Link>
+            <Link href="/screener">
+              <TabsTrigger value="screener">Screener</TabsTrigger>
             </Link>
           </TabsList>
 
@@ -568,6 +585,77 @@ export default function Dashboard() {
         open={!!selectedStock} 
         onOpenChange={(open) => !open && setSelectedStock(null)} 
       />
+
+      {/* My Alerts Tab */}
+      <TabsContent value="my-alerts" className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>My Custom Alerts</CardTitle>
+            <CardDescription>Create and manage your own alerts for specific stock events.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Create Alert Form */}
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const ticker = formData.get("ticker") as string;
+              const type = formData.get("type") as "price_above" | "price_below";
+              const value = formData.get("value") as string;
+              if (ticker && type && value) {
+                createUserAlert.mutate({ ticker: ticker.toUpperCase(), type, value });
+                e.currentTarget.reset();
+              }
+            }} className="flex items-end gap-2 p-4 border rounded-lg">
+              <div className="flex-1">
+                <label htmlFor="ticker" className="text-sm font-medium">Ticker</label>
+                <Input id="ticker" name="ticker" placeholder="e.g., AAPL" required />
+              </div>
+              <div>
+                <label htmlFor="type" className="text-sm font-medium">Condition</label>
+                <Select id="type" name="type" required>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select condition" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="price_above">Price is Above</SelectItem>
+                    <SelectItem value="price_below">Price is Below</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label htmlFor="value" className="text-sm font-medium">Value</label>
+                <Input id="value" name="value" type="number" step="0.01" placeholder="e.g., 150.00" required />
+              </div>
+              <Button type="submit" disabled={createUserAlert.isPending}>
+                {createUserAlert.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add Alert"}
+              </Button>
+            </form>
+
+            {/* Active Alerts List */}
+            <div>
+              <h3 className="text-lg font-semibold mb-2">Active Alerts</h3>
+              <div className="space-y-2">
+                {userDefinedAlerts && userDefinedAlerts.length > 0 ? (
+                  userDefinedAlerts.map(alert => (
+                    <div key={alert.id} className="flex items-center justify-between p-3 border rounded-lg bg-muted/20">
+                      <div>
+                        <span className="font-semibold">{alert.ticker}</span>
+                        <span className="text-muted-foreground"> price is {alert.type === 'price_above' ? 'above' : 'below'} </span>
+                        <span className="font-semibold">${alert.value}</span>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => deleteUserAlert.mutate({ id: alert.id })}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-muted-foreground text-sm">You have no active alerts.</p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </TabsContent>
     </div>
   );
 }

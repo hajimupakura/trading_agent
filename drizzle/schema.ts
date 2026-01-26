@@ -137,6 +137,26 @@ export const alerts = pgTable("alerts", {
 export type Alert = typeof alerts.$inferSelect;
 export type InsertAlert = typeof alerts.$inferInsert;
 
+export const userDefinedAlertTypeEnum = pgEnum("user_defined_alert_type", ["price_above", "price_below", "volume_increase"]);
+export const userDefinedAlertStatusEnum = pgEnum("user_defined_alert_status", ["active", "triggered", "inactive"]);
+
+/**
+ * User-defined alerts
+ */
+export const userDefinedAlerts = pgTable("user_defined_alerts", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  ticker: varchar("ticker", { length: 32 }).notNull(),
+  type: userDefinedAlertTypeEnum("type").notNull(),
+  value: varchar("value", { length: 64 }).notNull(), // The target price or volume percentage
+  status: userDefinedAlertStatusEnum("status").default("active").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  triggeredAt: timestamp("triggered_at"),
+});
+
+export type UserDefinedAlert = typeof userDefinedAlerts.$inferSelect;
+export type InsertUserDefinedAlert = typeof userDefinedAlerts.$inferInsert;
+
 /**
  * User preferences and settings
  */

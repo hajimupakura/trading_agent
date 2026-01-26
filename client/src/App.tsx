@@ -13,6 +13,7 @@ const DashboardV2 = lazy(() => import("@/pages/DashboardV2"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const DashboardEnhanced = lazy(() => import("@/pages/DashboardEnhanced"));
 const Performance = lazy(() => import("@/pages/Performance"));
+const Screener = lazy(() => import("@/pages/Screener"));
 
 // Loading fallback component
 const PageLoader = () => (
@@ -30,6 +31,7 @@ function Router() {
         <Route path={"/v2"} component={DashboardV2} />
         <Route path={"/v1"} component={Dashboard} />
         <Route path={"/performance"} component={Performance} />
+        <Route path={"/screener"} component={Screener} />
         <Route path={"/old"} component={Home} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}
@@ -48,7 +50,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider
-        defaultTheme="dark"
+        defaultTheme="light"
         // switchable
       >
         <TooltipProvider>

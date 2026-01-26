@@ -240,6 +240,38 @@ export const appRouter = router({
       return await getPredictionPerformanceStats();
     }),
   }),
+
+  // User-defined alerts
+  userAlerts: router({
+    list: protectedProcedure
+      .query(async ({ ctx }) => {
+        const { getUserDefinedAlerts } = await import("./db");
+        return await getUserDefinedAlerts(ctx.user.id, "active");
+      }),
+    create: protectedProcedure
+      .input(z.object({
+        ticker: z.string(),
+        type: z.enum(["price_above", "price_below", "volume_increase"]),
+        value: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { insertUserDefinedAlert } = await import("./db");
+        await insertUserDefinedAlert({
+          userId: ctx.user.id,
+          ticker: input.ticker,
+          type: input.type,
+          value: input.value,
+        });
+        return { success: true };
+      }),
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const { updateUserDefinedAlertStatus } = await import("./db");
+        await updateUserDefinedAlertStatus(input.id, "inactive");
+        return { success: true };
+      }),
+  }),
   
   // YouTube influencers
   youtube: router({
@@ -421,6 +453,17 @@ export const appRouter = router({
         });
 
         return newCandles;
+      }),
+      
+    screener: publicProcedure
+      .input(z.object({
+        minMarketCap: z.number().optional(),
+        maxPeRatio: z.number().optional(),
+        sector: z.string().optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        const { getScreenerResults } = await import("./db");
+        return await getScreenerResults(input || {});
       }),
   }),
 
