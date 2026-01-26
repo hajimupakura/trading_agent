@@ -212,6 +212,9 @@ export default function Dashboard() {
             <TabsTrigger value="watchlist">Watchlist</TabsTrigger>
             <TabsTrigger value="ark">ARK Trades</TabsTrigger>
             <TabsTrigger value="rallies">Rally Tracker</TabsTrigger>
+            <Link href="/performance">
+              <TabsTrigger value="performance">Performance</TabsTrigger>
+            </Link>
           </TabsList>
 
           {/* Overview Tab */}

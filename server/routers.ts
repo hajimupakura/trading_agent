@@ -199,6 +199,15 @@ export const appRouter = router({
         const isPut = pred.opportunityType === "put" || pred.direction === "down";
         const opportunityLabel = isPut ? "Decline" : "Rally";
         
+        // Fetch initial prices for backtesting
+        let initialPrices: { [key: string]: number } = {};
+        if (pred.recommendedStocks && pred.recommendedStocks.length > 0) {
+          const quotes = await getMultipleStockQuotes(pred.recommendedStocks);
+          for (const [symbol, quote] of quotes.entries()) {
+            initialPrices[symbol] = quote.currentPrice;
+          }
+        }
+
         await insertRallyPrediction({
           sector: pred.sector,
           name: `Predicted ${pred.sector} ${opportunityLabel}`,
@@ -207,6 +216,8 @@ export const appRouter = router({
           predictionConfidence: Math.round(pred.confidence),
           earlySignals: JSON.stringify(pred.earlySignals),
           keyStocks: JSON.stringify(pred.recommendedStocks),
+          initialPrices: JSON.stringify(initialPrices),
+          backtestStatus: 'pending',
           // Store additional fields in catalysts as JSON
           catalysts: JSON.stringify({
             opportunityType: pred.opportunityType || (isPut ? "put" : "call"),
@@ -222,6 +233,11 @@ export const appRouter = router({
       console.log("[Rally Predictions] Saved", predictions.length, "predictions to database");
       
       return { success: true, count: predictions.length, predictions };
+    }),
+    
+    getPerformance: publicProcedure.query(async () => {
+      const { getPredictionPerformanceStats } = await import("./db");
+      return await getPredictionPerformanceStats();
     }),
   }),
   

@@ -11,6 +11,8 @@ export const alertTypeEnum = pgEnum("alert_type", ["rally_detected", "ark_trade"
 export const severityEnum = pgEnum("severity", ["high", "medium", "low"]);
 export const alertThresholdEnum = pgEnum("alert_threshold", ["all", "medium_high", "high_only"]);
 export const momentumEnum = pgEnum("momentum", ["very_strong", "strong", "moderate", "weak", "declining"]);
+export const predictionOutcomeEnum = pgEnum("prediction_outcome", ["success", "failure", "neutral"]);
+export const backtestStatusEnum = pgEnum("backtest_status", ["pending", "processing", "completed"]);
 
 /**
  * Core user table backing auth flow.
@@ -109,6 +111,9 @@ export const rallyEvents = pgTable("rally_events", {
   earlySignals: text("early_signals"),
   isHistorical: boolean("is_historical").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  predictionOutcome: predictionOutcomeEnum("prediction_outcome"),
+  backtestStatus: backtestStatusEnum("backtest_status").default("pending"),
+  initialPrices: text("initial_prices"),
 });
 
 export type RallyEvent = typeof rallyEvents.$inferSelect;

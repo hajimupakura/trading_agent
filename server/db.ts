@@ -1,4 +1,4 @@
-import { eq, sql, desc } from "drizzle-orm";
+import { eq, sql, desc, count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { 
@@ -333,7 +333,7 @@ export async function getRecentYoutubeVideos(limit: number = 20) {
 export async function getHistoricalRallies() {
   const db = await getDb();
   if (!db) return [];
-  return await db.select().from(rallyEvents).where(eq(rallyEvents.isHistorical, 1));
+  return await db.select().from(rallyEvents).where(eq(rallyEvents.isHistorical, true));
 }
 
 export async function getPredictedRallies() {
@@ -348,8 +348,38 @@ export async function insertRallyPrediction(prediction: any) {
   return await db.insert(rallyEvents).values({
     ...prediction,
     status: "predicted",
-    isHistorical: 0,
+    isHistorical: false,
   });
+}
+
+export async function getPredictionPerformanceStats() {
+  const db = await getDb();
+  if (!db) return { success: 0, failure: 0, neutral: 0, total: 0 };
+  
+  const stats = await db
+    .select({
+      outcome: rallyEvents.predictionOutcome,
+      count: count(rallyEvents.id),
+    })
+    .from(rallyEvents)
+    .where(sql`${rallyEvents.backtestStatus} = 'completed'`)
+    .groupBy(rallyEvents.predictionOutcome);
+
+  const result = {
+    success: 0,
+    failure: 0,
+    neutral: 0,
+    total: 0,
+  };
+
+  stats.forEach(stat => {
+    if (stat.outcome) {
+      result[stat.outcome] = stat.count;
+    }
+    result.total += stat.count;
+  });
+
+  return result;
 }
 
 // Stock Financials

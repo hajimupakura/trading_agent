@@ -7,28 +7,8 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-
-function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise(resolve => {
-    const server = net.createServer();
-    server.listen(port, () => {
-      server.close(() => resolve(true));
-    });
-    server.on("error", () => resolve(false));
-  });
-}
-
-async function findAvailablePort(startPort: number = 3000): Promise<number> {
-  for (let port = startPort; port < startPort + 20; port++) {
-    if (await isPortAvailable(port)) {
-      return port;
-    }
-  }
-  throw new Error(`No available port found starting from ${startPort}`);
-}
-
-
 import { syncRSSNews, analyzePendingNews } from "../services/rssNewsSync";
+import { runBacktest } from "../services/backtestingService";
 import cron from "node-cron";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -98,7 +78,6 @@ async function startServer() {
     });
 
     // 2. Analyze pending news every 30 minutes during market hours (8am - 4pm EST, Mon-Fri)
-    // Note: The cron schedule is in server's local time. Ensure server is set to UTC or adjust schedule accordingly.
     // This schedule '*/30 12-20 * * 1-5' corresponds to 8am-4pm EST assuming server is in UTC.
     cron.schedule("*/30 12-20 * * 1-5", async () => {
       console.log("[Scheduler] Running pending news analysis job...");
@@ -111,10 +90,24 @@ async function startServer() {
     }, {
       timezone: "UTC"
     });
+    
+    // 3. Run backtesting job daily at 5pm EST
+    // This schedule '0 21 * * *' corresponds to 5pm EST (21:00 UTC)
+    cron.schedule("0 21 * * *", async () => {
+      console.log("[Scheduler] Running daily prediction backtest job...");
+      try {
+        await runBacktest();
+      } catch (error) {
+        console.error("[Scheduler] Error during prediction backtest:", error);
+      }
+    }, {
+      timezone: "UTC"
+    });
 
     console.log("[Scheduler] Background jobs initialized.");
     console.log("- RSS Sync scheduled for every 15 minutes.");
     console.log("- News Analysis scheduled for every 30 minutes (8am-4pm EST, Mon-Fri).");
+    console.log("- Prediction Backtesting scheduled for daily at 5pm EST.");
   });
 }
 
