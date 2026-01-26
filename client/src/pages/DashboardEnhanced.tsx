@@ -3,7 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
+import { useState } from "react";
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -14,13 +16,15 @@ import {
   Sparkles,
   ArrowRight,
   Clock,
-  Youtube
+  Youtube,
+  ExternalLink
 } from "lucide-react";
 import { getLoginUrl } from "@/const";
 import { toast } from "sonner";
 
 export default function DashboardEnhanced() {
   const { user, loading: authLoading, isAuthenticated } = useAuth();
+  const [selectedPrediction, setSelectedPrediction] = useState<any | null>(null);
 
   // Fetch data
   const { data: news, isLoading: newsLoading, refetch: refetchNews } = trpc.news.recent.useQuery();
@@ -262,9 +266,17 @@ export default function DashboardEnhanced() {
                       <div key={article.id} className="p-4 border border-border rounded-lg hover:border-primary/50 transition-colors">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
-                            <h3 className="font-semibold text-foreground mb-2">{article.title}</h3>
+                            <a 
+                              href={article.url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="font-semibold text-foreground mb-2 hover:text-primary transition-colors inline-flex items-center gap-1"
+                            >
+                              {article.title}
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
                             {article.aiSummary && (
-                              <p className="text-sm text-muted-foreground mb-3">{article.aiSummary}</p>
+                              <p className="text-sm text-muted-foreground mb-3 mt-2">{article.aiSummary}</p>
                             )}
                             <div className="flex items-center gap-2 flex-wrap">
                               <Badge variant="outline">{article.source}</Badge>
@@ -451,7 +463,12 @@ export default function DashboardEnhanced() {
                             </div>
                           )}
 
-                          <Button size="sm" variant="ghost" className="w-full mt-2 group">
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="w-full mt-2 group"
+                            onClick={() => setSelectedPrediction(pred)}
+                          >
                             View Details
                             <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
                           </Button>
@@ -538,6 +555,157 @@ export default function DashboardEnhanced() {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* Prediction Details Dialog */}
+      <Dialog open={!!selectedPrediction} onOpenChange={(open) => !open && setSelectedPrediction(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-slate-900 border-slate-800">
+          {selectedPrediction && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-2xl text-slate-100 flex items-center gap-2">
+                  {(() => {
+                    let opportunityType = null;
+                    try {
+                      const catalysts = selectedPrediction.catalysts ? JSON.parse(selectedPrediction.catalysts) : {};
+                      opportunityType = catalysts.opportunityType;
+                    } catch (e) {
+                      // Ignore parse errors
+                    }
+                    return opportunityType === "call" ? (
+                      <TrendingUp className="w-6 h-6 text-emerald-400" />
+                    ) : opportunityType === "put" ? (
+                      <TrendingDown className="w-6 h-6 text-red-400" />
+                    ) : (
+                      <Target className="w-6 h-6 text-cyan-400" />
+                    );
+                  })()}
+                  {selectedPrediction.name}
+                </DialogTitle>
+                <DialogDescription className="text-slate-400">
+                  {selectedPrediction.sector} • {selectedPrediction.predictionConfidence}% Confidence
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-6 mt-4">
+                {(() => {
+                  // Parse catalysts to get additional fields
+                  let metadata: any = {};
+                  try {
+                    metadata = selectedPrediction.catalysts ? JSON.parse(selectedPrediction.catalysts) : {};
+                  } catch (e) {
+                    console.error("Failed to parse catalysts:", e);
+                  }
+
+                  return (
+                    <>
+                      {/* Confidence & Timeframe */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <Card className="p-4 bg-slate-800/50 border-slate-700">
+                          <div className="text-sm text-slate-400 mb-1">Confidence</div>
+                          <div className="text-2xl font-bold text-emerald-400">{selectedPrediction.predictionConfidence}%</div>
+                        </Card>
+                        <Card className="p-4 bg-slate-800/50 border-slate-700">
+                          <div className="text-sm text-slate-400 mb-1">Timeframe</div>
+                          <div className="text-lg font-semibold text-slate-200">{metadata.timeframe || "2-3 weeks"}</div>
+                        </Card>
+                      </div>
+
+                      {/* Opportunity Type */}
+                      {metadata.opportunityType && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2">Opportunity Type</h3>
+                          <Badge variant={metadata.opportunityType === "call" ? "default" : "destructive"} className="capitalize">
+                            {metadata.opportunityType.toUpperCase()} - {metadata.direction === "up" ? "Upside" : "Downside"}
+                          </Badge>
+                        </div>
+                      )}
+
+                      {/* Early Signals */}
+                      {selectedPrediction.earlySignals && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2">Early Warning Signals</h3>
+                          <div className="flex flex-wrap gap-2">
+                            {(() => {
+                              try {
+                                const signals = JSON.parse(selectedPrediction.earlySignals);
+                                return Array.isArray(signals) ? signals.map((signal: string, i: number) => (
+                                  <Badge key={i} variant="secondary" className="bg-slate-800 text-slate-300">
+                                    {signal}
+                                  </Badge>
+                                )) : null;
+                              } catch (e) {
+                                return <span className="text-sm text-slate-400">No signals available</span>;
+                              }
+                            })()}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Recommended Stocks */}
+                      {selectedPrediction.keyStocks && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2">Recommended Stocks</h3>
+                          <div className="flex flex-wrap gap-2">
+                            {(() => {
+                              try {
+                                const stocks = JSON.parse(selectedPrediction.keyStocks);
+                                return Array.isArray(stocks) ? stocks.map((stock: string, i: number) => (
+                                  <Badge key={i} variant="outline" className="bg-emerald-950/30 border-emerald-600/50 text-emerald-400">
+                                    {stock}
+                                  </Badge>
+                                )) : null;
+                              } catch (e) {
+                                return <span className="text-sm text-slate-400">No stocks available</span>;
+                              }
+                            })()}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reasoning / Analysis */}
+                      {(metadata.reasoning || selectedPrediction.description) && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2">Analysis & Reasoning</h3>
+                          <p className="text-sm text-slate-400 leading-relaxed">
+                            {metadata.reasoning || selectedPrediction.description}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Entry Timing */}
+                      {metadata.entryTiming && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+                            <Clock className="w-4 h-4" />
+                            Entry Timing
+                          </h3>
+                          <p className="text-sm text-slate-400">{metadata.entryTiming}</p>
+                        </div>
+                      )}
+
+                      {/* Exit Strategy */}
+                      {metadata.exitStrategy && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2">Exit Strategy</h3>
+                          <p className="text-sm text-slate-400">{metadata.exitStrategy}</p>
+                        </div>
+                      )}
+
+                      {/* Description (fallback) */}
+                      {selectedPrediction.description && !metadata.reasoning && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-300 mb-2">Overview</h3>
+                          <p className="text-sm text-slate-400 leading-relaxed">{selectedPrediction.description}</p>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

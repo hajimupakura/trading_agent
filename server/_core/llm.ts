@@ -209,10 +209,18 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://forge.manus.im/v1/chat/completions";
+const resolveApiUrl = () => {
+  if (ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0) {
+    // If the URL already includes /api/v1 or /v1, just append /chat/completions
+    const baseUrl = ENV.forgeApiUrl.replace(/\/$/, "");
+    if (baseUrl.includes("/v1")) {
+      return `${baseUrl}/chat/completions`;
+    }
+    // Otherwise append /v1/chat/completions
+    return `${baseUrl}/v1/chat/completions`;
+  }
+  return "https://forge.manus.im/v1/chat/completions";
+};
 
 const assertApiKey = () => {
   if (!ENV.forgeApiKey) {
@@ -280,7 +288,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   } = params;
 
   const payload: Record<string, unknown> = {
-    model: "gemini-2.5-flash",
+    model: "google/gemini-2.5-flash-preview-09-2025",
     messages: messages.map(normalizeMessage),
   };
 
@@ -317,6 +325,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${ENV.forgeApiKey}`,
+      // OpenRouter specific headers
+      ...(ENV.forgeApiUrl?.includes('openrouter') ? {
+        "HTTP-Referer": "http://35.238.160.230:5005",
+        "X-Title": "Trading Agent"
+      } : {})
     },
     body: JSON.stringify(payload),
   });

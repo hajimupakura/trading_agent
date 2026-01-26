@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { TrendingUp, TrendingDown, Bell, RefreshCw, Loader2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Bell, RefreshCw, Loader2, ExternalLink } from "lucide-react";
 import { getLoginUrl } from "@/const";
 import { Link } from "wouter";
 
@@ -207,9 +207,17 @@ export default function Dashboard() {
                       <div key={article.id} className="p-4 border border-border rounded-lg">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
-                            <h3 className="font-semibold text-foreground mb-2">{article.title}</h3>
+                            <a 
+                              href={article.url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="font-semibold text-foreground mb-2 hover:text-primary transition-colors inline-flex items-center gap-1"
+                            >
+                              {article.title}
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
                             {article.aiSummary && (
-                              <p className="text-sm text-muted-foreground mb-3">{article.aiSummary}</p>
+                              <p className="text-sm text-muted-foreground mb-3 mt-2">{article.aiSummary}</p>
                             )}
                             <div className="flex items-center gap-2 flex-wrap">
                               <Badge variant="outline">{article.source}</Badge>

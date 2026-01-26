@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { 
@@ -120,7 +120,7 @@ export async function getRecentNews(limit: number = 50, sector?: string) {
   const db = await getDb();
   if (!db) return [];
   
-  let query = db.select().from(newsArticles).orderBy(newsArticles.publishedAt).$dynamic();
+  let query = db.select().from(newsArticles).orderBy(desc(newsArticles.publishedAt)).$dynamic();
   
   return await query.limit(limit);
 }
@@ -131,7 +131,7 @@ export async function getNewsByDateRange(startDate: Date, endDate: Date) {
   
   return await db.select().from(newsArticles)
     .where(sql`${newsArticles.publishedAt} BETWEEN ${startDate} AND ${endDate}`)
-    .orderBy(newsArticles.publishedAt);
+    .orderBy(desc(newsArticles.publishedAt));
 }
 
 // Watchlist

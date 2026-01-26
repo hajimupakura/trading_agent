@@ -56,16 +56,72 @@ export async function predictUpcomingRallies(
   historicalPatterns: HistoricalPattern[]
 ): Promise<RallyPrediction[]> {
   try {
-    // Prepare data for LLM analysis
-    const newsData = recentNews.map(n => ({
-      title: n.title,
-      summary: n.aiSummary || n.summary,
-      sentiment: n.sentiment,
-      sectors: n.sectors ? JSON.parse(n.sectors) : [],
-      stocks: n.mentionedStocks ? JSON.parse(n.mentionedStocks) : [],
-      rallyIndicator: n.rallyIndicator,
-      publishedAt: n.publishedAt,
-    }));
+    console.log("[Rally Predictions] Starting with", recentNews.length, "news articles");
+    
+    // Filter only articles with AI analysis and sentiment
+    const analyzedNews = recentNews.filter(n => 
+      n.sentiment !== null && 
+      n.sentiment !== undefined &&
+      (n.aiSummary || n.summary)
+    );
+    
+    console.log("[Rally Predictions] Filtered to", analyzedNews.length, "analyzed articles");
+    
+    if (analyzedNews.length < 10) {
+      console.log("[Rally Predictions] Not enough analyzed articles for predictions");
+      return [];
+    }
+    
+    // Prepare clean data for LLM (limit to most recent 40 articles)
+    const newsData = analyzedNews.slice(0, 40).map(n => {
+      let sectors = [];
+      let stocks = [];
+      
+      try {
+        if (n.sectors) {
+          sectors = typeof n.sectors === 'string' ? JSON.parse(n.sectors) : n.sectors;
+        }
+      } catch (e) {
+        sectors = [];
+      }
+      
+      try {
+        if (n.mentionedStocks) {
+          stocks = typeof n.mentionedStocks === 'string' ? JSON.parse(n.mentionedStocks) : n.mentionedStocks;
+        }
+      } catch (e) {
+        stocks = [];
+      }
+      
+      return {
+        title: n.title,
+        summary: (n.aiSummary || n.summary || '').substring(0, 200),
+        sentiment: n.sentiment,
+        sectors: sectors,
+        stocks: stocks,
+      };
+    });
+
+    console.log("[Rally Predictions] Prepared", newsData.length, "articles for AI");
+    
+    // Use early signal detection for each sector
+    const sectorSignals = new Map<string, string[]>();
+    analyzedNews.forEach(n => {
+      let sectors = [];
+      try {
+        if (n.sectors) {
+          sectors = typeof n.sectors === 'string' ? JSON.parse(n.sectors) : n.sectors;
+        }
+      } catch (e) {
+        sectors = [];
+      }
+      
+      sectors.forEach((sector: string) => {
+        if (!sectorSignals.has(sector)) {
+          sectorSignals.set(sector, detectEarlySignals(sector, analyzedNews));
+        }
+      });
+    });
 
     const response = await invokeLLM({
       messages: [
@@ -107,110 +163,81 @@ These patterns show what early signals preceded major rallies. Use them to ident
         },
         {
           role: "user",
-          content: `Analyze these ${recentNews.length} recent news articles and predict upcoming opportunities:
+          content: `Analyze these ${newsData.length} recent news articles and predict upcoming opportunities:
 
 ${JSON.stringify(newsData, null, 2)}
+
+DETECTED EARLY SIGNALS BY SECTOR:
+${Array.from(sectorSignals.entries()).map(([sector, signals]) => 
+  `${sector}: ${signals.join(', ')}`
+).join('\n')}
 
 Identify BOTH:
 1. Upside opportunities (calls) - sectors/stocks showing early rally signals
 2. Downside opportunities (puts) - sectors/stocks showing early decline signals
 
-Focus on what's MOVING in the market, regardless of sector. Discover new emerging sectors automatically.`,
+Focus on what's MOVING in the market, regardless of sector. Discover new emerging sectors automatically.
+
+Provide predictions in this exact JSON format:
+{
+  "predictions": [
+    {
+      "sector": "Sector Name",
+      "opportunityType": "call",
+      "direction": "up",
+      "confidence": 75,
+      "timeframe": "2-3 weeks",
+      "earlySignals": ["signal1", "signal2"],
+      "recommendedStocks": ["STOCK1", "STOCK2"],
+      "reasoning": "Why this opportunity exists",
+      "entryTiming": "Now or wait",
+      "exitStrategy": "When to take profits"
+    }
+  ]
+}`,
         },
       ],
       response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "rally_predictions",
-          strict: true,
-          schema: {
-            type: "object",
-            properties: {
-              predictions: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    sector: {
-                      type: "string",
-                      description: "Specific sector or category name (discover new sectors)",
-                    },
-                    opportunityType: {
-                      type: "string",
-                      enum: ["call", "put"],
-                      description: "Type of opportunity - call for upside, put for downside",
-                    },
-                    direction: {
-                      type: "string",
-                      enum: ["up", "down"],
-                      description: "Expected market direction - up for rallies, down for declines",
-                    },
-                    confidence: {
-                      type: "number",
-                      description: "Confidence score 0-100",
-                    },
-                    timeframe: {
-                      type: "string",
-                      enum: ["2-3 weeks", "1-2 months", "3-6 months"],
-                      description: "Expected timeframe for rally",
-                    },
-                    earlySignals: {
-                      type: "array",
-                      items: { type: "string" },
-                      description: "Specific early warning signals detected",
-                    },
-                    recommendedStocks: {
-                      type: "array",
-                      items: { type: "string" },
-                      description: "Stock tickers to consider",
-                    },
-                    reasoning: {
-                      type: "string",
-                      description: "Detailed explanation of why this rally is predicted",
-                    },
-                    entryTiming: {
-                      type: "string",
-                      description: "When to enter positions (e.g., 'Now', 'Wait for dip', 'After catalyst X')",
-                    },
-                    exitStrategy: {
-                      type: "string",
-                      description: "When to take profits (e.g., '2-3 weeks', 'After 20% gain', 'Before earnings')",
-                    },
-                  },
-                  required: [
-                    "sector",
-                    "opportunityType",
-                    "direction",
-                    "confidence",
-                    "timeframe",
-                    "earlySignals",
-                    "recommendedStocks",
-                    "reasoning",
-                    "entryTiming",
-                    "exitStrategy",
-                  ],
-                  additionalProperties: false,
-                },
-              },
-            },
-            required: ["predictions"],
-            additionalProperties: false,
-          },
-        },
+        type: "json_object"
       },
     });
 
+    console.log("[Rally Predictions] Got response from AI");
+    
     const content = response.choices[0]?.message?.content;
+    
     if (!content || typeof content !== "string") {
+      console.log("[Rally Predictions] No content in response");
       return [];
     }
 
+    console.log("[Rally Predictions] Parsing JSON (length:", content.length, ")");
     const result = JSON.parse(content) as { predictions: RallyPrediction[] };
     
-    // Filter for medium to high confidence predictions
-    return result.predictions.filter(p => p.confidence >= 55);
+    console.log(`[Rally Predictions] Parsed ${result.predictions?.length || 0} predictions`);
+    
+    if (!result.predictions || !Array.isArray(result.predictions)) {
+      console.log("[Rally Predictions] Invalid predictions format");
+      return [];
+    }
+    
+    // Validate and filter predictions
+    const validPredictions = result.predictions.filter(p => 
+      p.sector && 
+      p.opportunityType && 
+      p.confidence >= 40 &&
+      p.recommendedStocks &&
+      p.recommendedStocks.length > 0
+    );
+    
+    console.log(`[Rally Predictions] ${validPredictions.length} valid predictions after filtering`);
+    
+    return validPredictions;
   } catch (error) {
-    console.error("Error predicting rallies:", error);
+    console.error("[Rally Predictions] ERROR:", error instanceof Error ? error.message : String(error));
+    if (error instanceof Error && error.stack) {
+      console.error("[Rally Predictions] Stack:", error.stack.substring(0, 500));
+    }
     return [];
   }
 }

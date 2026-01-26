@@ -175,28 +175,51 @@ export const appRouter = router({
       const { getPredictedRallies } = await import("./db");
       return await getPredictedRallies();
     }),
-    generate: protectedProcedure.mutation(async () => {
+    generate: publicProcedure.mutation(async () => {
       const { predictUpcomingRallies, extractHistoricalPatterns } = await import("./services/rallyPrediction");
       const { getRecentNews, getHistoricalRallies, insertRallyPrediction } = await import("./db");
       
-      const recentNews = await getRecentNews(100);
-      const historicalRallies = await getHistoricalRallies();
-      const patterns = extractHistoricalPatterns(historicalRallies);
+      console.log("[Rally Predictions] Starting generation...");
       
+      const recentNews = await getRecentNews(100);
+      console.log("[Rally Predictions] Fetched", recentNews.length, "news articles");
+      
+      const historicalRallies = await getHistoricalRallies();
+      console.log("[Rally Predictions] Fetched", historicalRallies.length, "historical rallies");
+      
+      const patterns = extractHistoricalPatterns(historicalRallies);
+      console.log("[Rally Predictions] Extracted", patterns.length, "patterns");
+      
+      console.log("[Rally Predictions] Calling AI...");
       const predictions = await predictUpcomingRallies(recentNews, patterns);
+      console.log("[Rally Predictions] AI generated", predictions.length, "predictions");
       
       // Save predictions to database
       for (const pred of predictions) {
+        const isPut = pred.opportunityType === "put" || pred.direction === "down";
+        const opportunityLabel = isPut ? "Decline" : "Rally";
+        
         await insertRallyPrediction({
           sector: pred.sector,
-          name: `Predicted ${pred.sector} Rally`,
+          name: `Predicted ${pred.sector} ${opportunityLabel}`,
           startDate: new Date(),
           description: pred.reasoning,
-          predictionConfidence: pred.confidence,
+          predictionConfidence: Math.round(pred.confidence),
           earlySignals: JSON.stringify(pred.earlySignals),
           keyStocks: JSON.stringify(pred.recommendedStocks),
+          // Store additional fields in catalysts as JSON
+          catalysts: JSON.stringify({
+            opportunityType: pred.opportunityType || (isPut ? "put" : "call"),
+            direction: pred.direction || (isPut ? "down" : "up"),
+            timeframe: pred.timeframe,
+            entryTiming: pred.entryTiming,
+            exitStrategy: pred.exitStrategy,
+            reasoning: pred.reasoning, // Also store here for easy access
+          }),
         });
       }
+      
+      console.log("[Rally Predictions] Saved", predictions.length, "predictions to database");
       
       return { success: true, count: predictions.length, predictions };
     }),
