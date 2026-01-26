@@ -1,0 +1,178 @@
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                   TRADING AGENT - PostgreSQL CONFIGURATION                    │
+│                              ✅ UPDATED                                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CHANGES FROM MySQL TO PostgreSQL                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+✅ Updated drizzle.config.ts (dialect: postgresql)
+✅ Updated server/db.ts (drizzle-orm/postgres-js)
+✅ Updated package.json (replaced mysql2 with postgres)
+✅ Updated .env.production (PostgreSQL connection string)
+✅ Rewrote setup-database.sh (PostgreSQL commands)
+✅ Updated SETUP_GUIDE.md (PostgreSQL instructions)
+✅ Updated STATUS.txt (PostgreSQL references)
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  DATABASE CONFIGURATION                                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Database System:  PostgreSQL (NOT MySQL)
+Instance:         SAME as buildzim-platform (port 5434)
+Database Name:    trading_agent (NEW separate database)
+User:             trading_user
+Password:         trading_password
+Host:             localhost
+Port:             5434
+
+Connection String:
+postgresql://trading_user:trading_password@localhost:5434/trading_agent
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  KEY BENEFITS OF USING PostgreSQL                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+✅ Uses EXISTING PostgreSQL instance (no new database server needed)
+✅ Same database system as buildzim-platform
+✅ Leverages existing Docker setup (buildzim-platform/docker-compose.yml)
+✅ Consistent backup and management strategy
+✅ Better performance for complex queries
+✅ Superior JSON support for AI model outputs
+✅ More robust transaction handling
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  DATABASE ARCHITECTURE                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+PostgreSQL Instance @ localhost:5434 (via Docker)
+│
+├── buildzim_dev (database)
+│   ├── public schema
+│   │   └── buildzim tables (projects, contractors, etc.)
+│   │
+│   └── kumusha schema (if configured)
+│       └── kumusha tables (experiences, bookings, etc.)
+│
+└── trading_agent (database) ← NEW!
+    └── public schema
+        └── Trading Agent tables:
+            ├── users
+            ├── news_articles
+            ├── watchlist_stocks
+            ├── ark_trades
+            ├── alerts
+            ├── rally_events
+            ├── sector_momentum
+            ├── user_preferences
+            └── youtube_videos
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  DEPLOYMENT STEPS                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+1. ENSURE POSTGRESQL IS RUNNING:
+   cd /home/hmpakula_gmail_com/git_repos/buildzim-platform
+   docker-compose up -d postgres
+   
+   # Verify it's running
+   docker-compose ps postgres
+
+2. CREATE THE TRADING_AGENT DATABASE:
+   cd /home/hmpakula_gmail_com/git_repos/trading_agent
+   ./setup-database.sh
+   
+   # When prompted, enter password: buildzim_password
+
+3. INSTALL DEPENDENCIES (updates postgres package):
+   pnpm install
+
+4. DEPLOY THE APPLICATION:
+   ./deploy.sh
+
+That's it! The database will be created and populated automatically.
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  TESTING THE SETUP                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+# 1. Check if database was created
+psql -h localhost -p 5434 -U trading_user -d trading_agent -c "\dt"
+
+# 2. Test the application
+curl http://localhost:5005/api/health
+
+# 3. Access the UI
+http://35.238.160.230:5005
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  TROUBLESHOOTING                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Issue: "PostgreSQL is not running"
+Solution:
+  cd /home/hmpakula_gmail_com/git_repos/buildzim-platform
+  docker-compose up -d postgres
+
+Issue: "Database already exists"
+Solution: Database was created successfully on previous run, continue to deploy
+
+Issue: "Connection refused"
+Solution: 
+  # Check PostgreSQL is listening on 5434
+  netstat -tulpn | grep 5434
+  
+  # Or check Docker container
+  docker ps | grep postgres
+
+Issue: "Permission denied"
+Solution:
+  # Grant privileges again
+  PGPASSWORD=buildzim_password psql -h localhost -p 5434 -U buildzim_user \
+    -d trading_agent -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO trading_user;"
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  WHAT'S DIFFERENT FROM ORIGINAL SETUP                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+BEFORE (MySQL):
+❌ Separate MySQL server needed (port 3306)
+❌ Different database system from other projects
+❌ Additional setup and management overhead
+
+AFTER (PostgreSQL):
+✅ Uses existing PostgreSQL (port 5434)
+✅ Same database system as buildzim-platform
+✅ Simpler setup - just create a new database
+✅ Consistent tooling and backup strategy
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  IMPORTANT NOTES                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+📌 The trading_agent database is COMPLETELY SEPARATE
+   - Different database name: trading_agent
+   - Different tables and data
+   - No conflicts with buildzim or kumusha
+
+📌 Shares PostgreSQL INSTANCE but not DATA
+   - Same server (localhost:5434)
+   - Same credentials can be used for admin tasks
+   - But each database is isolated
+
+📌 Dependencies Updated
+   - Removed: mysql2
+   - Added: postgres
+   - Updated: drizzle-orm configuration
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    🎉 POSTGRESQL MIGRATION COMPLETE 🎉
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Next Steps:
+1. Run: pnpm install (to get postgres package)
+2. Run: ./setup-database.sh (to create database)
+3. Run: ./deploy.sh (to deploy the app)
+
+The trading agent will now use PostgreSQL on the same instance as buildzim!

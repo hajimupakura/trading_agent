@@ -9,9 +9,22 @@ import * as finnhub from "finnhub";
  */
 
 const apiKey = process.env.FINNHUB_API_KEY || "d5ro8fhr01qj5oil5r6gd5ro8fhr01qj5oil5r70";
-const api_client = new (finnhub as any).ApiClient();
-api_client.authentications["api_key"].apiKey = apiKey;
-const api = new (finnhub as any).DefaultApi(api_client);
+
+let api: any = null;
+
+function getApi() {
+  if (!api) {
+    try {
+      const api_client = new (finnhub as any).ApiClient();
+      api_client.authentications["api_key"].apiKey = apiKey;
+      api = new (finnhub as any).DefaultApi(api_client);
+    } catch (error) {
+      console.warn("[Finnhub] Failed to initialize API client:", error);
+      api = null;
+    }
+  }
+  return api;
+}
 
 export interface FinnhubQuote {
   symbol: string;
@@ -41,6 +54,12 @@ export interface FinnhubNews {
  * Get real-time quote for a stock
  */
 export async function getFinnhubQuote(symbol: string): Promise<FinnhubQuote | null> {
+  const api = getApi();
+  if (!api) {
+    console.warn("[Finnhub] API not initialized, skipping quote request");
+    return null;
+  }
+  
   return new Promise((resolve) => {
     api.quote(symbol, (error: any, data: any) => {
       if (error) {
@@ -78,6 +97,9 @@ export async function getFinnhubCompanyNews(
   from: Date,
   to: Date
 ): Promise<FinnhubNews[]> {
+  const api = getApi();
+  if (!api) return [];
+  
   return new Promise((resolve) => {
     const fromStr = from.toISOString().split("T")[0];
     const toStr = to.toISOString().split("T")[0];
@@ -115,6 +137,9 @@ export async function getFinnhubMarketNews(category: string = "general"): Promis
  * Get company profile
  */
 export async function getFinnhubCompanyProfile(symbol: string): Promise<any> {
+  const api = getApi();
+  if (!api) return null;
+  
   return new Promise((resolve) => {
     api.companyProfile2({ symbol }, (error: any, data: any) => {
       if (error) {
@@ -132,6 +157,9 @@ export async function getFinnhubCompanyProfile(symbol: string): Promise<any> {
  * Search for stocks by query
  */
 export async function searchFinnhubStocks(query: string): Promise<Array<{ symbol: string; description: string }>> {
+  const api = getApi();
+  if (!api) return [];
+  
   return new Promise((resolve) => {
     api.symbolSearch(query, (error: any, data: any) => {
       if (error) {
