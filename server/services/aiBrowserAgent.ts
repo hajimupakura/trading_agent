@@ -80,31 +80,58 @@ export async function executeAIBrowserTask(
     while (currentStep < maxSteps) {
       currentStep++;
       
-      // Get current page state
-      const pageState = await getPageState(page);
-      
-      // Ask Gemini what to do next
-      const action = await decideNextAction(task, pageState, steps);
-      
-      if (action.type === "complete") {
-        steps.push("Task completed");
-        const screenshot = returnScreenshot ? await page.screenshot({ encoding: "base64" }) : undefined;
-        await page.close();
+      try {
+        // Get current page state
+        const pageState = await getPageState(page);
         
-        return {
-          success: true,
-          data: action.data,
-          steps,
-          screenshot: screenshot as string | undefined,
-        };
+        // Ask Gemini what to do next
+        const action = await decideNextAction(task, pageState, steps);
+        
+        if (action.type === "complete") {
+          steps.push("Task completed");
+          
+          // Validate that we actually have data
+          if (action.data === null || action.data === undefined) {
+            console.warn("[AI Browser Agent] Task marked complete but data is null/undefined");
+            steps.push("WARNING: Task completed but no data extracted");
+          }
+          
+          const screenshot = returnScreenshot ? await page.screenshot({ encoding: "base64" }) : undefined;
+          await page.close();
+          
+          return {
+            success: true,
+            data: action.data,
+            steps,
+            screenshot: screenshot as string | undefined,
+          };
+        }
+        
+        // Execute the action
+        const actionResult = await executeAction(page, action);
+        steps.push(`Step ${currentStep}: ${action.description} - ${actionResult}`);
+        
+        // Wait a bit between actions
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (actionError: any) {
+        console.error(`[AI Browser Agent] Error in step ${currentStep}:`, actionError);
+        steps.push(`ERROR in step ${currentStep}: ${actionError.message}`);
+        
+        // If it's an LLM error, fail immediately rather than continuing
+        if (actionError.message?.includes("Failed to get valid action from LLM")) {
+          await page.close();
+          return {
+            success: false,
+            data: null,
+            steps,
+            error: `LLM error: ${actionError.message}`,
+          };
+        }
+        
+        // For other errors, continue but log them
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
-      
-      // Execute the action
-      const actionResult = await executeAction(page, action);
-      steps.push(`Step ${currentStep}: ${action.description} - ${actionResult}`);
-      
-      // Wait a bit between actions
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
     // Max steps reached
@@ -175,6 +202,8 @@ async function decideNextAction(
   type: "navigate" | "click" | "type" | "extract" | "complete";
   description: string;
   data?: any;
+  target?: string;
+  text?: string;
 }> {
   const prompt = `You are an AI browser automation agent. Your task is: "${task}"
 
@@ -184,48 +213,102 @@ ${previousSteps.join("\n")}
 Current page state:
 ${pageState}
 
-Based on the task and current page state, decide the next action. Respond in JSON format:
-{
-  "type": "navigate|click|type|extract|complete",
-  "description": "Brief description of what you're doing",
-  "target": "URL or CSS selector or text to type",
-  "data": "extracted data (only if type is 'extract' or 'complete')"
-}
+Based on the task and current page state, decide the next action. You MUST respond with valid JSON only, no markdown, no code blocks, just the JSON object.
 
 Action types:
-- navigate: Go to a URL
-- click: Click an element (provide CSS selector)
-- type: Type text into an input (provide CSS selector and text)
-- extract: Extract data from current page
-- complete: Task is finished (provide final extracted data)`;
+- navigate: Go to a URL (provide "target" with the URL)
+- click: Click an element (provide "target" with CSS selector)
+- type: Type text into an input (provide "target" with CSS selector and "text" with the text to type)
+- extract: Extract data from current page (no additional fields needed)
+- complete: Task is finished (provide "data" with the final extracted data as JSON object or array)
 
-  const response = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: "You are a browser automation agent. Always respond with valid JSON.",
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-  });
+Example for navigate:
+{"type": "navigate", "description": "Navigate to Yahoo Finance", "target": "https://finance.yahoo.com"}
 
+Example for complete with stock price data:
+{"type": "complete", "description": "Extracted stock price", "data": {"price": 150.25, "change": 2.5, "changePercent": 1.69}}`;
+
+  let response: any = null;
   try {
+    response = await invokeLLM({
+      messages: [
+        {
+          role: "system",
+          content: "You are a browser automation agent. You MUST respond with ONLY valid JSON, no markdown formatting, no code blocks, no explanations. Just the raw JSON object.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      response_format: {
+        type: "json_object"
+      },
+      output_schema: {
+        name: "browser_action",
+        schema: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["navigate", "click", "type", "extract", "complete"],
+              description: "The type of action to perform"
+            },
+            description: {
+              type: "string",
+              description: "Brief description of what you're doing"
+            },
+            target: {
+              type: "string",
+              description: "URL or CSS selector (required for navigate, click, type)"
+            },
+            text: {
+              type: "string",
+              description: "Text to type (required for type action)"
+            },
+            data: {
+              type: ["object", "array", "string", "number"],
+              description: "Extracted data (required for complete action)"
+            }
+          },
+          required: ["type", "description"]
+        }
+      }
+    });
+
     const messageContent = response.choices[0]?.message?.content || "{}";
     // Handle both string and array content formats
-    const content = typeof messageContent === "string"
+    let content = typeof messageContent === "string"
       ? messageContent
-      : messageContent.map(c => c.type === "text" ? c.text : "").join("");
-    return JSON.parse(content);
-  } catch (error) {
-    // Fallback if JSON parsing fails
-    return {
-      type: "complete",
-      description: "Unable to parse action",
-      data: null,
-    };
+      : messageContent.map((c: any) => c.type === "text" ? c.text : "").join("");
+    
+    // Remove markdown code blocks if present
+    content = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+
+    let parsed = JSON.parse(content);
+
+    // If LLM returns an array, take the first element
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      parsed = parsed[0];
+    }
+
+    // Validate required fields
+    if (!parsed.type || !parsed.description) {
+      console.error("[AI Browser Agent] Invalid action response - missing type or description:", parsed);
+      throw new Error("Invalid action format");
+    }
+    
+    return parsed;
+  } catch (error: any) {
+    console.error("[AI Browser Agent] Error parsing LLM response:", error);
+    if (response) {
+      console.error("[AI Browser Agent] Raw response:", response.choices[0]?.message?.content);
+    } else {
+      console.error("[AI Browser Agent] No response received from LLM");
+    }
+    
+    // Don't silently fail - throw error so caller knows something went wrong
+    throw new Error(`Failed to get valid action from LLM: ${error.message}`);
   }
 }
 
@@ -266,59 +349,138 @@ async function executeAction(page: Page, action: any): Promise<string> {
 export async function scrapeFinancialNews(topics: string[] = []): Promise<any[]> {
   const topicsStr = topics.length > 0 ? topics.join(", ") : "AI stocks, quantum computing, rare earth metals";
   
-  const task = `Find the latest financial news articles about ${topicsStr} from Reuters, Bloomberg, or Yahoo Finance. Extract title, summary, URL, source, and date for each article. Return as JSON array.`;
+  const task = `Find the latest financial news articles about ${topicsStr} from Reuters (https://www.reuters.com), Bloomberg (https://www.bloomberg.com), or Yahoo Finance (https://finance.yahoo.com). 
+
+For each article, extract:
+- title: article headline
+- summary: brief summary or description
+- url: full article URL
+- source: website name (Reuters, Bloomberg, or Yahoo Finance)
+- date: publication date
+
+Return as a JSON array of objects. Each object should have: {title, summary, url, source, date}`;
   
+  console.log(`[News Scraper] Starting scrape for topics: ${topicsStr}`);
   const result = await executeAIBrowserTask(task, { maxSteps: 15 });
   
-  if (result.success && result.data) {
-    try {
-      return Array.isArray(result.data) ? result.data : [result.data];
-    } catch {
-      return [];
-    }
+  if (!result.success) {
+    console.error(`[News Scraper] Failed: ${result.error}`);
+    return [];
   }
   
-  return [];
+  if (!result.data || result.data === null) {
+    console.warn(`[News Scraper] Success but no data returned. Steps:`, result.steps);
+    return [];
+  }
+  
+  try {
+    const articles = Array.isArray(result.data) ? result.data : [result.data];
+    console.log(`[News Scraper] Successfully extracted ${articles.length} articles`);
+    return articles;
+  } catch (error) {
+    console.error(`[News Scraper] Error processing data:`, error);
+    return [];
+  }
 }
 
 export async function scrapeARKTrades(): Promise<any[]> {
-  const task = `Go to ark-funds.com and find the latest daily trade data for all ARK ETFs. Extract fund name, ticker, company, direction (buy/sell), shares, and date. Return as JSON array.`;
+  const task = `Go to ark-funds.com and find the latest daily trade data for all ARK ETFs. 
+
+For each trade, extract:
+- fundName: name of the ARK fund (e.g., "ARK Innovation ETF")
+- ticker: fund ticker symbol (e.g., "ARKK")
+- company: company stock being traded
+- direction: "buy" or "sell"
+- shares: number of shares traded
+- date: trade date
+
+Return as a JSON array of trade objects. Each object should have: {fundName, ticker, company, direction, shares, date}`;
   
+  console.log(`[ARK Scraper] Starting scrape`);
   const result = await executeAIBrowserTask(task, { maxSteps: 15 });
   
-  if (result.success && result.data) {
-    try {
-      return Array.isArray(result.data) ? result.data : [result.data];
-    } catch {
-      return [];
-    }
+  if (!result.success) {
+    console.error(`[ARK Scraper] Failed: ${result.error}`);
+    return [];
   }
   
-  return [];
+  if (!result.data || result.data === null) {
+    console.warn(`[ARK Scraper] Success but no data returned. Steps:`, result.steps);
+    return [];
+  }
+  
+  try {
+    const trades = Array.isArray(result.data) ? result.data : [result.data];
+    console.log(`[ARK Scraper] Successfully extracted ${trades.length} trades`);
+    return trades;
+  } catch (error) {
+    console.error(`[ARK Scraper] Error processing data:`, error);
+    return [];
+  }
 }
 
 export async function scrapeYouTubeVideos(channelNames: string[]): Promise<any[]> {
   const channelsStr = channelNames.join(", ");
   
-  const task = `Search YouTube for the latest videos from these channels: ${channelsStr}. Get the 3 most recent videos from each. Extract title, channel, URL, date, views, and description. Return as JSON array.`;
+  const task = `Search YouTube (https://www.youtube.com) for the latest videos from these channels: ${channelsStr}. Get the 3 most recent videos from each channel.
+
+For each video, extract:
+- title: video title
+- channel: channel name
+- url: full YouTube URL
+- date: publication date
+- views: view count (if available)
+- description: video description or summary
+
+Return as a JSON array of video objects. Each object should have: {title, channel, url, date, views, description}`;
   
+  console.log(`[YouTube Scraper] Starting scrape for channels: ${channelsStr}`);
   const result = await executeAIBrowserTask(task, { maxSteps: 20 });
   
-  if (result.success && result.data) {
-    try {
-      return Array.isArray(result.data) ? result.data : [result.data];
-    } catch {
-      return [];
-    }
+  if (!result.success) {
+    console.error(`[YouTube Scraper] Failed: ${result.error}`);
+    return [];
   }
   
-  return [];
+  if (!result.data || result.data === null) {
+    console.warn(`[YouTube Scraper] Success but no data returned. Steps:`, result.steps);
+    return [];
+  }
+  
+  try {
+    const videos = Array.isArray(result.data) ? result.data : [result.data];
+    console.log(`[YouTube Scraper] Successfully extracted ${videos.length} videos`);
+    return videos;
+  } catch (error) {
+    console.error(`[YouTube Scraper] Error processing data:`, error);
+    return [];
+  }
 }
 
 export async function getStockPrice(ticker: string): Promise<any> {
-  const task = `Go to Yahoo Finance and get the current stock price for ${ticker}. Extract current price, change, change percentage, previous close, and day's range. Return as JSON object.`;
-  
+  const task = `Go to Yahoo Finance (https://finance.yahoo.com/quote/${ticker}) and get the current stock price for ${ticker}. Extract the following information as a JSON object:
+- price: current stock price (number)
+- change: price change from previous close (number)
+- changePercent: percentage change (number)
+- previousClose: previous day's close price (number)
+- dayRange: day's high and low range (string like "150.00 - 155.00")
+- volume: trading volume (number if available)
+
+Return ONLY the JSON object with this data, no other text.`;
+
+  console.log(`[Stock Price Scraper] Starting scrape for ${ticker}`);
   const result = await executeAIBrowserTask(task, { maxSteps: 10 });
   
-  return result.success ? result.data : null;
+  if (!result.success) {
+    console.error(`[Stock Price Scraper] Failed: ${result.error}`);
+    return null;
+  }
+  
+  if (!result.data || result.data === null) {
+    console.warn(`[Stock Price Scraper] Success but no data returned. Steps:`, result.steps);
+    return null;
+  }
+  
+  console.log(`[Stock Price Scraper] Successfully extracted data for ${ticker}:`, result.data);
+  return result.data;
 }
