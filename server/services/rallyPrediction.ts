@@ -191,7 +191,13 @@ Identify BOTH:
 
 Focus on what's MOVING in the market, regardless of sector. Discover new emerging sectors automatically.
 
-Provide predictions in this exact JSON format:
+**CRITICAL: CORRECTLY LABEL OPPORTUNITY TYPE:**
+- If news is BULLISH/POSITIVE/UPSIDE → use "opportunityType": "call" and "direction": "up"
+- If news is BEARISH/NEGATIVE/DOWNSIDE → use "opportunityType": "put" and "direction": "down"
+
+DO NOT label bearish scenarios (downgrades, shutdowns, weakness, decline, shorting) as "call" - those are "put" opportunities!
+
+Provide predictions in this exact JSON format with BOTH examples:
 {
   "predictions": [
     {
@@ -202,9 +208,21 @@ Provide predictions in this exact JSON format:
       "timeframe": "2-3 weeks",
       "earlySignals": ["signal1", "signal2"],
       "recommendedStocks": ["STOCK1", "STOCK2"],
-      "reasoning": "Why this opportunity exists",
+      "reasoning": "Positive catalyst driving upside",
       "entryTiming": "Now or wait",
       "exitStrategy": "When to take profits"
+    },
+    {
+      "sector": "Another Sector",
+      "opportunityType": "put",
+      "direction": "down",
+      "confidence": 80,
+      "timeframe": "2-3 weeks",
+      "earlySignals": ["negative signal1", "bearish signal2"],
+      "recommendedStocks": ["STOCK3", "STOCK4"],
+      "reasoning": "Negative catalyst driving downside - government shutdown risk, downgrades, weakness",
+      "entryTiming": "Enter puts now",
+      "exitStrategy": "Exit when risk subsides"
     }
   ]
 }`,
@@ -235,16 +253,55 @@ Provide predictions in this exact JSON format:
     }
     
     // Validate and filter predictions
-    const validPredictions = result.predictions.filter(p => 
-      p.sector && 
-      p.opportunityType && 
+    const validPredictions = result.predictions.filter(p =>
+      p.sector &&
+      p.opportunityType &&
       p.confidence >= 40 &&
       p.recommendedStocks &&
       p.recommendedStocks.length > 0
     );
-    
-    console.log(`[Rally Predictions] ${validPredictions.length} valid predictions after filtering`);
-    
+
+    // Fix mismatched opportunityType - if reasoning is bearish but labeled as "call", fix it
+    validPredictions.forEach(p => {
+      const reasoningLower = (p.reasoning || '').toLowerCase();
+      const signalsText = (p.earlySignals || []).join(' ').toLowerCase();
+      const combinedText = reasoningLower + ' ' + signalsText;
+
+      // Bearish keywords that indicate PUT opportunity
+      const bearishKeywords = [
+        'bearish', 'downside', 'decline', 'downgrade', 'weakness', 'weak',
+        'negative', 'shutdown', 'risk-off', 'puts', 'short', 'shorting',
+        'falling', 'drop', 'crash', 'sell', 'exits', 'failure', 'worst',
+        'headwind', 'threat', 'investigation', 'warning', 'cut', 'breakdown'
+      ];
+
+      // Bullish keywords that indicate CALL opportunity
+      const bullishKeywords = [
+        'bullish', 'upside', 'rally', 'upgrade', 'strength', 'strong',
+        'positive', 'breakthrough', 'buying', 'breakout', 'surge', 'gain',
+        'approval', 'rising', 'growth', 'opportunity', 'momentum'
+      ];
+
+      const bearishCount = bearishKeywords.filter(kw => combinedText.includes(kw)).length;
+      const bullishCount = bullishKeywords.filter(kw => combinedText.includes(kw)).length;
+
+      // If predominantly bearish but labeled as call, fix it
+      if (bearishCount > bullishCount && p.opportunityType === 'call') {
+        console.log(`[Rally Predictions] Auto-correcting: "${p.sector}" was labeled CALL but is bearish (${bearishCount} bearish keywords vs ${bullishCount} bullish)`);
+        p.opportunityType = 'put';
+        p.direction = 'down';
+      }
+
+      // If predominantly bullish but labeled as put, fix it
+      if (bullishCount > bearishCount && p.opportunityType === 'put') {
+        console.log(`[Rally Predictions] Auto-correcting: "${p.sector}" was labeled PUT but is bullish (${bullishCount} bullish keywords vs ${bearishCount} bearish)`);
+        p.opportunityType = 'call';
+        p.direction = 'up';
+      }
+    });
+
+    console.log(`[Rally Predictions] ${validPredictions.length} valid predictions after filtering and correction`);
+
     return validPredictions;
   } catch (error) {
     console.error("[Rally Predictions] ERROR:", error instanceof Error ? error.message : String(error));
