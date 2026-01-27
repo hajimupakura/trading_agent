@@ -370,12 +370,12 @@ export async function scrapeFinancialNews(topics: string[] = []): Promise<any[]>
     });
 
     // Wait for articles to load
-    await page.waitForSelector('li[data-test-locator="stream-item"]', { timeout: 10000 });
+    await page.waitForSelector('li.js-stream-content', { timeout: 10000 });
 
     // Extract articles
     const articles = await page.evaluate(() => {
       const results: any[] = [];
-      const articleElements = document.querySelectorAll('li[data-test-locator="stream-item"]');
+      const articleElements = document.querySelectorAll('li.js-stream-content');
 
       articleElements.forEach((article, index) => {
         if (index >= 10) return; // Limit to 10 articles

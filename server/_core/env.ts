@@ -5,7 +5,7 @@ export const ENV = {
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
   isProduction: process.env.NODE_ENV === "production",
-  forgeApiUrl: process.env.OPENAI_API_BASE_URL ?? "",
-  forgeApiKey: process.env.OPENAI_API_KEY ?? "",
-  llmModel: process.env.LLM_MODEL ?? "gemini-2.0-flash-exp",
+  forgeApiUrl: "https://generativelanguage.googleapis.com",
+  forgeApiKey: process.env.GEMINI_API_KEY ?? "",
+  llmModel: process.env.LLM_MODEL ?? "gemini-2.5-flash",
 };
