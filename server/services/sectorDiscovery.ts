@@ -34,26 +34,34 @@ export async function discoverEmergingSectors(articles: NewsArticle[]): Promise<
           role: "system",
           content: `You are a financial market analyst specializing in identifying emerging investment sectors and trends.
 
-Your task is to analyze financial news and identify emerging sectors that show potential for market rallies. Look for:
-1. NEW sectors or industries gaining attention (not just established ones like "tech" or "finance")
-2. Specific sub-sectors within broader categories (e.g., "computational drug design" within healthcare, "rare earth metals" within materials, "UAVs/drones" within aerospace)
-3. Patterns of increasing news coverage and positive sentiment
-4. Multiple stocks or companies in the same space being mentioned
-5. Early-stage trends that could develop into 2-3 week rallies or longer
+Your task is to analyze financial news and identify emerging sectors that show potential for market rallies.
 
-Examples of emerging sectors to look for:
-- UAVs/Drones and autonomous systems
-- Rare earth metals and critical minerals
-- Computational drug design and AI-driven healthcare
-- Virtual twinning and digital twins
-- Space tourism and commercial space
-- Quantum sensing and quantum communications
-- Green hydrogen and alternative energy storage
-- Synthetic biology and gene editing
-- Edge computing and decentralized networks
-- Carbon capture and climate tech
+**PRIORITY SECTORS** (Focus heavily on these):
+1. **AI Companies** - OpenAI (ChatGPT, GPT-5), Anthropic (Claude), Google/Gemini (GOOGL), Perplexity
+2. **Artificial Intelligence (AI)** - All AI applications, models, chips, AGI, AI agents
+3. **Semiconductors/Chips** - AI chips, GPUs, TPUs, chip manufacturing, TSMC, NVIDIA (NVDA), AMD, Intel
+4. **Quantum Computing** - Quantum processors, quantum algorithms, quantum communications
+5. **Unmanned Aerial Vehicles (UAVs)** - Drones, autonomous aircraft, delivery drones
+6. **Tesla (TSLA)** - EVs, Full Self-Driving, energy products, robotics, Optimus
+7. **SpaceX** - Rockets, Starlink, Starship, space exploration, satellite internet
+8. **Metals** - Critical minerals, rare earth elements, copper, lithium, aluminum
+9. **Energy** - Renewable energy, nuclear, solar, wind, grid infrastructure
+10. **Batteries** - Lithium-ion, solid-state, battery manufacturing, energy storage
+11. **AI-Powered Healthcare/Biotech** - AI drug discovery, computational biology, gene editing, CRISPR
 
-Return ONLY truly emerging or specific sectors, not generic categories.`,
+Look for specific sub-sectors and trends within these areas:
+- AI chips and accelerators (H100, MI300, TPUs)
+- Quantum sensing and quantum networking
+- Battery energy storage systems (BESS)
+- Next-generation nuclear (SMRs, fusion)
+- AI-driven drug discovery and protein folding
+- Autonomous systems and robotics
+- Space commercialization and satellite technology
+- Advanced materials and nanotechnology
+- EV charging infrastructure
+- Green hydrogen production
+
+Return ONLY specific, emerging sectors with clear investment potential.`,
         },
         {
           role: "user",

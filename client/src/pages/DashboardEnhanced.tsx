@@ -67,6 +67,16 @@ export default function DashboardEnhanced() {
     },
   });
 
+  const discoverSectors = trpc.sectors.discover.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Discovered ${data.count} sectors!`);
+      window.location.reload(); // Refresh to show new sector momentum
+    },
+    onError: () => {
+      toast.error("Failed to discover sectors");
+    },
+  });
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -134,6 +144,19 @@ export default function DashboardEnhanced() {
                 <Sparkles className="h-4 w-4 mr-2" />
               )}
               Generate Predictions
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => discoverSectors.mutate()}
+              disabled={discoverSectors.isPending}
+            >
+              {discoverSectors.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Target className="h-4 w-4 mr-2" />
+              )}
+              Discover Sectors
             </Button>
             <div className="relative">
               <Bell className="h-5 w-5 text-muted-foreground" />

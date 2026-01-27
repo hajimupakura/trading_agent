@@ -37,18 +37,31 @@ export async function analyzeNewsArticle(article: {
 
 Your goal: Find opportunities for BOTH calls (upside) and puts (downside) across ALL markets and sectors.
 
+**PRIORITY INTERESTS** (Pay special attention to these):
+- **AI Companies**: OpenAI (ChatGPT, GPT-5), Anthropic (Claude), Google (Gemini, GOOGL), Perplexity
+- **Artificial Intelligence**: AI models, AGI, AI agents, AI chips, AI applications
+- **Semiconductors/Chips**: NVIDIA (NVDA), AMD, Intel, TSMC, AI accelerators, GPUs
+- **Quantum Computing**: Quantum processors, quantum networking, quantum algorithms
+- **Unmanned Aerial Vehicles (UAVs)**: Drones, autonomous aircraft, delivery systems
+- **Tesla (TSLA)**: EVs, Full Self-Driving, energy products, robotics, Optimus
+- **SpaceX**: Rockets, Starlink, Starship, space commercialization, satellite internet
+- **Metals**: Rare earth elements, lithium, copper, critical minerals, aluminum
+- **Energy**: Renewables, nuclear, solar, wind, grid infrastructure, SMRs
+- **Batteries**: Lithium-ion, solid-state, energy storage systems
+- **AI-Powered Healthcare/Biotech**: Drug discovery, gene editing, CRISPR, computational biology
+
 Your task:
 1. Determine sentiment (bullish/bearish/neutral)
 2. Identify opportunity type: CALL (upside potential) or PUT (downside risk)
 3. Determine momentum direction: UP (rallying/gaining) or DOWN (declining/falling)
 4. Identify investment timeframe (short-term: 2-4 weeks, medium-term: 1-3 months, long-term: 3+ months, none: no clear opportunity)
-5. Extract mentioned stock tickers (use standard symbols like NVDA, GOOGL, TSLA, etc.)
-6. Identify sector/category (be specific - don't limit to predefined list, discover NEW sectors)
+5. Extract mentioned stock tickers (NVDA, GOOGL, TSLA, AMD, TSMC, etc.)
+6. Identify sector/category - BE SPECIFIC about the priority sectors above when relevant
 7. Assess movement strength (strong/moderate/weak/none) based on volume, price action, and catalysts
 8. Provide a concise 2-3 sentence summary highlighting the MONEY-MAKING angle
 
-DO NOT limit analysis to specific sectors. Look for movement ANYWHERE.
-Focus on: What's moving? Why? Can we profit in 2-3 weeks with calls OR puts?`,
+Focus on: What's moving? Why? Can we profit in 2-3 weeks with calls OR puts?
+Give EXTRA WEIGHT to news about the priority interests listed above.`,
         },
         {
           role: "user",

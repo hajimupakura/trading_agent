@@ -273,6 +273,66 @@ const normalizeResponseFormat = ({
   };
 };
 
+// Convert OpenAI format to Google Gemini format
+function convertToGeminiFormat(messages: Message[]): any {
+  const contents = [];
+  let systemInstruction = "";
+
+  for (const msg of messages) {
+    if (msg.role === "system") {
+      systemInstruction = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+      continue;
+    }
+
+    const role = msg.role === "assistant" ? "model" : "user";
+    const parts = [];
+
+    if (typeof msg.content === "string") {
+      parts.push({ text: msg.content });
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (typeof part === "string") {
+          parts.push({ text: part });
+        } else if (part.type === "text") {
+          parts.push({ text: part.text });
+        } else if (part.type === "image_url") {
+          // Handle images if needed
+          parts.push({ text: `[Image: ${part.image_url.url}]` });
+        }
+      }
+    }
+
+    contents.push({ role, parts });
+  }
+
+  return { contents, systemInstruction };
+}
+
+// Convert Gemini response to OpenAI format
+function convertFromGeminiFormat(geminiResponse: any): InvokeResult {
+  const candidate = geminiResponse.candidates?.[0];
+  const content = candidate?.content?.parts?.map((p: any) => p.text).join("") || "";
+
+  return {
+    id: geminiResponse.id || "gemini-" + Date.now(),
+    created: Date.now(),
+    model: geminiResponse.modelVersion || "gemini-2.0-flash-exp",
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        content: content,
+      },
+      finish_reason: candidate?.finishReason || "stop",
+    }],
+    usage: {
+      prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
+      completion_tokens: geminiResponse.usageMetadata?.candidatesTokenCount || 0,
+      total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
+    },
+  };
+}
+
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   assertApiKey();
 
@@ -287,59 +347,119 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     response_format,
   } = params;
 
-  const payload: Record<string, unknown> = {
-    model: "google/gemini-2.5-flash-preview-09-2025",
-    messages: messages.map(normalizeMessage),
-  };
+  // Check if we should use Google Gemini API directly
+  const useGoogleDirect = process.env.USE_GOOGLE_DIRECT === "true" ||
+                         ENV.forgeApiUrl?.includes("generativelanguage.googleapis.com");
 
-  if (tools && tools.length > 0) {
-    payload.tools = tools;
-  }
+  if (useGoogleDirect) {
+    // Use Google Gemini API format
+    const model = ENV.llmModel || "gemini-2.0-flash-exp";
+    const { contents, systemInstruction } = convertToGeminiFormat(messages);
 
-  const normalizedToolChoice = normalizeToolChoice(
-    toolChoice || tool_choice,
-    tools
-  );
-  if (normalizedToolChoice) {
-    payload.tool_choice = normalizedToolChoice;
-  }
+    const geminiPayload: any = {
+      contents,
+      generationConfig: {
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      }
+    };
 
-  payload.max_tokens = 32768
-  payload.thinking = {
-    "budget_tokens": 128
-  }
+    if (systemInstruction) {
+      geminiPayload.systemInstruction = {
+        parts: [{ text: systemInstruction }]
+      };
+    }
 
-  const normalizedResponseFormat = normalizeResponseFormat({
-    responseFormat,
-    response_format,
-    outputSchema,
-    output_schema,
-  });
+    // Handle JSON output format
+    const normalizedResponseFormat = normalizeResponseFormat({
+      responseFormat,
+      response_format,
+      outputSchema,
+      output_schema,
+    });
 
-  if (normalizedResponseFormat) {
-    payload.response_format = normalizedResponseFormat;
-  }
+    if (normalizedResponseFormat?.type === "json_object" || normalizedResponseFormat?.type === "json_schema") {
+      geminiPayload.generationConfig.responseMimeType = "application/json";
+      if (normalizedResponseFormat.type === "json_schema" && normalizedResponseFormat.json_schema) {
+        geminiPayload.generationConfig.responseSchema = normalizedResponseFormat.json_schema.schema;
+      }
+    }
 
-  const response = await fetch(resolveApiUrl(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-      // OpenRouter specific headers
-      ...(ENV.forgeApiUrl?.includes('openrouter') ? {
-        "HTTP-Referer": "http://35.238.160.230:5005",
-        "X-Title": "Trading Agent"
-      } : {})
-    },
-    body: JSON.stringify(payload),
-  });
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${ENV.forgeApiKey}`;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(geminiPayload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      );
+    }
+
+    const geminiResponse = await response.json();
+    return convertFromGeminiFormat(geminiResponse);
+  } else {
+    // Use OpenAI-compatible format (OpenRouter, etc.)
+    const payload: Record<string, unknown> = {
+      model: ENV.llmModel || "google/gemini-2.5-flash-preview-09-2025",
+      messages: messages.map(normalizeMessage),
+    };
+
+    if (tools && tools.length > 0) {
+      payload.tools = tools;
+    }
+
+    const normalizedToolChoice = normalizeToolChoice(
+      toolChoice || tool_choice,
+      tools
     );
-  }
+    if (normalizedToolChoice) {
+      payload.tool_choice = normalizedToolChoice;
+    }
 
-  return (await response.json()) as InvokeResult;
+    payload.max_tokens = 32768;
+    payload.thinking = {
+      "budget_tokens": 128
+    };
+
+    const normalizedResponseFormat = normalizeResponseFormat({
+      responseFormat,
+      response_format,
+      outputSchema,
+      output_schema,
+    });
+
+    if (normalizedResponseFormat) {
+      payload.response_format = normalizedResponseFormat;
+    }
+
+    const response = await fetch(resolveApiUrl(), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${ENV.forgeApiKey}`,
+        // OpenRouter specific headers
+        ...(ENV.forgeApiUrl?.includes('openrouter') ? {
+          "HTTP-Referer": "http://35.238.160.230:5005",
+          "X-Title": "Trading Agent"
+        } : {})
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      );
+    }
+
+    return (await response.json()) as InvokeResult;
+  }
 }

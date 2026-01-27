@@ -131,10 +131,23 @@ export async function predictUpcomingRallies(
 
 Your task: Analyze current news patterns and historical data to predict upcoming opportunities for BOTH calls (upside) and puts (downside).
 
+**PRIORITY SECTORS** (Focus extra attention on these):
+- AI Companies: OpenAI (ChatGPT), Anthropic (Claude), Google/Gemini (GOOGL), Perplexity
+- Artificial Intelligence: AI chips, models, AGI, AI agents, AI applications
+- Semiconductors: NVIDIA (NVDA), AMD, Intel, TSMC, AI accelerators
+- Quantum Computing: Quantum processors, quantum networking
+- UAVs/Drones: Autonomous aircraft, delivery drones
+- Tesla (TSLA): EVs, Full Self-Driving, robotics, energy
+- SpaceX: Rockets, Starlink, Starship, satellites
+- Metals: Rare earths, lithium, copper, critical minerals
+- Energy: Renewables, nuclear, solar, wind, grid
+- Batteries: Lithium-ion, solid-state, energy storage
+- AI Healthcare/Biotech: Drug discovery, gene editing, CRISPR
+
 CRITICAL RULES FOR PREDICTIONS:
 1. Focus on EARLY SIGNALS - indicators that appear 2-3 weeks BEFORE major moves
 2. Detect BOTH upward rallies (call opportunities) AND downward moves (put opportunities)
-3. DO NOT limit to specific sectors - look for movement ANYWHERE in the market
+3. Give EXTRA WEIGHT to news about the priority sectors above
 4. Identify NEW emerging sectors automatically
 5. Prioritize short-term opportunities (2-3 weeks to 2 months)
 6. Be specific about entry timing and exit strategy
