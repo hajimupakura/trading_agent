@@ -169,19 +169,22 @@ async function getPageState(page: Page): Promise<string> {
   const dom = await page.evaluate(() => {
     const getSimplifiedDOM = (element: Element, depth: number = 0): string => {
       if (depth > 3) return "";
-      
+
+      // Skip elements without tagName (text nodes, etc)
+      if (!element || !element.tagName) return "";
+
       let result = "";
       const tag = element.tagName.toLowerCase();
       const id = element.id ? `#${element.id}` : "";
-      const classes = element.className ? `.${element.className.split(" ").join(".")}` : "";
+      const classes = (element as HTMLElement).className ? `.${(element as HTMLElement).className.split(" ").join(".")}` : "";
       const text = element.textContent?.trim().substring(0, 50) || "";
-      
+
       result += `${"  ".repeat(depth)}<${tag}${id}${classes}>${text ? ` "${text}"` : ""}\n`;
-      
+
       for (const child of Array.from(element.children).slice(0, 5)) {
         result += getSimplifiedDOM(child, depth + 1);
       }
-      
+
       return result;
     };
     
@@ -348,18 +351,40 @@ async function executeAction(page: Page, action: any): Promise<string> {
 
 export async function scrapeFinancialNews(topics: string[] = []): Promise<any[]> {
   const topicsStr = topics.length > 0 ? topics.join(", ") : "AI stocks, quantum computing, rare earth metals";
-  
-  const task = `Find the latest financial news articles about ${topicsStr} from Reuters (https://www.reuters.com), Bloomberg (https://www.bloomberg.com), or Yahoo Finance (https://finance.yahoo.com). 
 
-For each article, extract:
-- title: article headline
-- summary: brief summary or description
-- url: full article URL
-- source: website name (Reuters, Bloomberg, or Yahoo Finance)
-- date: publication date
+  const task = `You are a financial news scraper. Your goal is to find recent news articles about: ${topicsStr}
 
-Return as a JSON array of objects. Each object should have: {title, summary, url, source, date}`;
-  
+Step-by-step instructions:
+1. Navigate to Yahoo Finance: https://finance.yahoo.com/topic/stock-market-news/
+2. Wait for the page to load
+3. Look for article headlines, links, and summaries on the page
+4. For EACH article you find (get at least 5-10 articles):
+   - Extract the article title/headline
+   - Extract the article URL (full link)
+   - Extract any visible summary or description
+   - Extract the publication date (e.g., "2 hours ago", "Jan 27")
+   - Note the source as "Yahoo Finance"
+
+CRITICAL: Every article MUST have:
+- title: non-empty headline text
+- url: complete URL starting with https://
+- summary: at least a brief description (use first paragraph if no summary)
+- source: "Yahoo Finance"
+- date: publication date string
+
+Return a JSON array with this exact structure:
+[
+  {
+    "title": "Article headline here",
+    "summary": "Brief description of the article",
+    "url": "https://finance.yahoo.com/news/...",
+    "source": "Yahoo Finance",
+    "date": "2 hours ago"
+  }
+]
+
+If you cannot extract all required fields for an article, skip it. Only return articles with complete data.`;
+
   console.log(`[News Scraper] Starting scrape for topics: ${topicsStr}`);
   const result = await executeAIBrowserTask(task, { maxSteps: 15 });
   
@@ -421,21 +446,50 @@ Return as a JSON array of trade objects. Each object should have: {fundName, tic
 
 export async function scrapeYouTubeVideos(channelNames: string[]): Promise<any[]> {
   const channelsStr = channelNames.join(", ");
-  
-  const task = `Search YouTube (https://www.youtube.com) for the latest videos from these channels: ${channelsStr}. Get the 3 most recent videos from each channel.
 
-For each video, extract:
-- title: video title
+  const task = `You are a YouTube video scraper. Your goal is to find recent videos from specific trading channels.
+
+IMPORTANT: For each channel name: ${channelsStr}
+
+Step-by-step instructions:
+1. Navigate to: https://www.youtube.com/results?search_query=[CHANNEL_NAME]&sp=CAI%253D (this sorts by upload date)
+2. Wait for the page to load completely
+3. Extract video data from the search results page
+4. For EACH video in the results (get at least 3 per channel):
+   - Find the video title (usually in an <a> tag with id containing "video-title")
+   - Find the video URL (href attribute, should be /watch?v=...)
+   - Find the channel name (verify it matches the search)
+   - Find the upload date (look for text like "1 day ago", "2 weeks ago")
+   - Find view count if available
+   - Find the video thumbnail URL
+   - Extract any visible description text
+
+CRITICAL: Make sure to capture:
+- title: exact video title text
+- url: complete YouTube URL (https://www.youtube.com/watch?v=...)
 - channel: channel name
-- url: full YouTube URL
-- date: publication date
-- views: view count (if available)
-- description: video description or summary
+- date: relative date string (e.g., "1 day ago")
+- views: view count string (e.g., "10K views")
+- thumbnail: thumbnail image URL
+- description: short description if visible
 
-Return as a JSON array of video objects. Each object should have: {title, channel, url, date, views, description}`;
-  
+After extracting all videos from all channels, return a JSON array with this exact structure:
+[
+  {
+    "title": "video title here",
+    "channel": "channel name",
+    "url": "https://www.youtube.com/watch?v=...",
+    "date": "1 day ago",
+    "views": "10K views",
+    "thumbnail": "https://...",
+    "description": "video description"
+  }
+]
+
+Make sure EVERY video object has a non-empty title and url field. If you cannot find these, skip that video.`;
+
   console.log(`[YouTube Scraper] Starting scrape for channels: ${channelsStr}`);
-  const result = await executeAIBrowserTask(task, { maxSteps: 20 });
+  const result = await executeAIBrowserTask(task, { maxSteps: 25 });
   
   if (!result.success) {
     console.error(`[YouTube Scraper] Failed: ${result.error}`);
