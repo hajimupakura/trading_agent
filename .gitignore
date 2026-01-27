@@ -116,3 +116,4 @@ screenshots/
 
 # Production environment
 .env.production
+ecosystem.config.cjs
