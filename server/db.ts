@@ -306,7 +306,8 @@ export async function getRallyEvents(status?: "ongoing" | "ended" | "potential")
     query = query.where(eq(rallyEvents.status, status));
   }
   
-  return await query.orderBy(rallyEvents.startDate);
+  // Order by created_at DESC to show latest predictions first
+  return await query.orderBy(desc(rallyEvents.createdAt));
 }
 
 // Sector Momentum
