@@ -658,6 +658,21 @@ export const appRouter = router({
         const result = await analyzePendingNews();
         return result;
       }),
+    
+    // Data retention management
+    runRetentionCleanup: protectedProcedure
+      .mutation(async () => {
+        const { runDataRetentionCleanup } = await import("./services/dataRetentionService");
+        const stats = await runDataRetentionCleanup();
+        return stats;
+      }),
+    
+    getDatabaseStats: protectedProcedure
+      .query(async () => {
+        const { getDatabaseStats } = await import("./services/dataRetentionService");
+        const stats = await getDatabaseStats();
+        return stats;
+      }),
   }),
 
   // Technical Analysis

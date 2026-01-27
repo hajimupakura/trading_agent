@@ -10,6 +10,7 @@ import { serveStatic, setupVite } from "./vite";
 import { syncRSSNews, analyzePendingNews } from "../services/rssNewsSync";
 import { runBacktest } from "../services/backtestingService";
 import { runAlertChecks } from "../services/alertingService";
+import { runDataRetentionCleanup } from "../services/dataRetentionService";
 import cron from "node-cron";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -154,7 +155,25 @@ async function startServer() {
       timezone: "UTC"
     });
     
+    // 5. Run data retention cleanup daily at 2am EST (6:00 UTC) to keep database lean
+    cron.schedule("0 6 * * *", async () => {
+      console.log("[Scheduler] Running data retention cleanup...");
+      try {
+        const stats = await runDataRetentionCleanup();
+        console.log(`[Scheduler] Retention cleanup completed. Deleted ${
+          stats.newsArticles.deleted + stats.arkTrades.deleted + 
+          stats.alerts.deleted + stats.sectorMomentum.deleted + 
+          stats.stockCandles.deleted + stats.rallyEvents.deleted
+        } total records.`);
+      } catch (error) {
+        console.error("[Scheduler] Error during data retention cleanup:", error);
+      }
+    }, {
+      timezone: "UTC"
+    });
+    
     console.log("- User Alert Checks scheduled for every 5 minutes (8am-4pm EST, Mon-Fri).");
+    console.log("- Data Retention Cleanup scheduled for daily at 2am EST.");
   });
 }
 
