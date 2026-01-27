@@ -17,6 +17,12 @@ export interface RallyPrediction {
   reasoning: string;
   entryTiming: string;
   exitStrategy: string;
+  // Options trading specific
+  optionsStrategy?: string;
+  suggestedStrike?: string;
+  suggestedExpiration?: string;
+  entryStrategy?: string;
+  riskAssessment?: string;
 }
 
 export interface HistoricalPattern {
@@ -395,4 +401,104 @@ export function detectEarlySignals(
   }
 
   return signals;
+}
+
+/**
+ * Generate specific options trading recommendations for a prediction
+ * Includes strike prices, expiration dates, entry/exit strategy, and risk assessment
+ */
+export async function generateOptionsRecommendation(
+  prediction: RallyPrediction
+): Promise<{
+  optionsStrategy: string;
+  suggestedStrike: string;
+  suggestedExpiration: string;
+  entryStrategy: string;
+  exitStrategy: string;
+  riskAssessment: string;
+}> {
+  try {
+    const response = await invokeLLM({
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert options trader providing specific, actionable options trading recommendations.
+
+DISCLAIMER: This is for a personal trading system. All recommendations are educational and for personal use only.
+
+Your task: Given a market prediction, provide specific options trading recommendations including:
+1. Strike price selection (ATM, OTM, ITM with rationale)
+2. Expiration date (with reasoning based on catalyst timing)
+3. Entry strategy (when to enter, what price points)
+4. Exit strategy (profit targets, stop losses, roll strategy)
+5. Risk assessment (position sizing, max loss, probability of profit)
+
+Key principles for options recommendations:
+- For high-confidence predictions (>75%): Suggest closer to ATM (at-the-money) with longer expiration
+- For moderate confidence (50-75%): Suggest OTM (out-of-the-money) with medium expiration
+- For lower confidence (<50%): Suggest further OTM with shorter expiration or spreads to limit risk
+- Always consider upcoming earnings dates, Fed meetings, economic data releases
+- Suggest specific expiration dates based on the predicted timeframe
+- Include position sizing as % of portfolio (conservative approach)
+- Always provide exit strategy with specific profit targets and stop losses`,
+        },
+        {
+          role: "user",
+          content: `Generate specific options trading recommendations for this prediction:
+
+**Prediction Details:**
+- Sector: ${prediction.sector}
+- Opportunity Type: ${prediction.opportunityType === 'call' ? 'CALL (Bullish/Upside)' : 'PUT (Bearish/Downside)'}
+- Direction: ${prediction.direction.toUpperCase()}
+- Confidence: ${prediction.confidence}%
+- Timeframe: ${prediction.timeframe}
+- Key Stocks: ${prediction.recommendedStocks.join(', ')}
+- Reasoning: ${prediction.reasoning}
+- Early Signals: ${prediction.earlySignals.join('; ')}
+- Entry Timing: ${prediction.entryTiming}
+
+Provide recommendations in this exact JSON format:
+{
+  "optionsStrategy": "BUY CALLS on [TICKER] - detailed strategy with strike/exp reasoning",
+  "suggestedStrike": "For [TICKER]: ATM ($XXX), OTM ($XXX), or Spread ($XXX/$XXX) with detailed rationale for each stock",
+  "suggestedExpiration": "Suggested expiration: [DATE] (e.g., Feb 21, 2026 or March monthlies). Explain timing based on catalyst timeline and theta decay",
+  "entryStrategy": "Enter when: [specific conditions]. If stock is at $XXX, enter. Wait for: [technical levels]. Position size: X% of portfolio. DCA strategy if applicable",
+  "exitStrategy": "Take profits at: [specific targets]. Stop loss at: [specific level]. Roll strategy if thesis intact but more time needed. Close by: [specific conditions]",
+  "riskAssessment": "Max loss: $XXX per contract or X% of position. Probability of profit: ~XX%. Key risks: [list]. Position sizing: X contracts or X% portfolio. Risk/reward: 1:X"
+}
+
+Be specific with dollar amounts, dates, and percentages. This is for personal trading only.`,
+        },
+      ],
+      response_format: {
+        type: "json_object"
+      },
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content || typeof content !== "string") {
+      throw new Error("No content in options recommendation response");
+    }
+
+    const result = JSON.parse(content);
+    
+    return {
+      optionsStrategy: result.optionsStrategy || "No strategy generated",
+      suggestedStrike: result.suggestedStrike || "Strike analysis pending",
+      suggestedExpiration: result.suggestedExpiration || "Expiration analysis pending",
+      entryStrategy: result.entryStrategy || "Entry timing analysis pending",
+      exitStrategy: result.exitStrategy || result.exitStrategy || prediction.exitStrategy,
+      riskAssessment: result.riskAssessment || "Risk analysis pending",
+    };
+  } catch (error) {
+    console.error("[Options Recommendation] ERROR:", error);
+    return {
+      optionsStrategy: `${prediction.opportunityType === 'call' ? 'CALL' : 'PUT'} options on ${prediction.recommendedStocks.join(', ')}`,
+      suggestedStrike: "Analysis pending - check back soon",
+      suggestedExpiration: `${prediction.timeframe} out`,
+      entryStrategy: prediction.entryTiming,
+      exitStrategy: prediction.exitStrategy,
+      riskAssessment: `Confidence: ${prediction.confidence}%. Risk level: ${prediction.confidence > 75 ? 'Low-Moderate' : prediction.confidence > 50 ? 'Moderate' : 'Moderate-High'}`,
+    };
+  }
 }

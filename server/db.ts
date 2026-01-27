@@ -447,6 +447,41 @@ export async function getPredictionPerformanceStats() {
   return result;
 }
 
+export async function getPredictionById(predictionId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(rallyEvents).where(eq(rallyEvents.id, predictionId)).limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function updateRallyPredictionWithOptions(
+  predictionId: number,
+  options: {
+    optionsStrategy: string;
+    suggestedStrike: string;
+    suggestedExpiration: string;
+    entryStrategy: string;
+    exitStrategy: string;
+    riskAssessment: string;
+  }
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.update(rallyEvents)
+    .set({
+      optionsStrategy: options.optionsStrategy,
+      suggestedStrike: options.suggestedStrike,
+      suggestedExpiration: options.suggestedExpiration,
+      entryStrategy: options.entryStrategy,
+      exitStrategy: options.exitStrategy,
+      riskAssessment: options.riskAssessment,
+    })
+    .where(eq(rallyEvents.id, predictionId));
+}
+
 // Stock Financials
 export async function getStockFinancials(ticker: string) {
   const db = await getDb();

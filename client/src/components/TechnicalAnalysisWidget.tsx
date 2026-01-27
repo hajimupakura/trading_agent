@@ -54,9 +54,9 @@ export function TechnicalAnalysisWidget({ ticker, name }: TechnicalAnalysisWidge
     );
   }
 
-  const latestSMA20 = sma20?.values?.[sma20.values.length - 1];
-  const latestSMA50 = sma50?.values?.[sma50.values.length - 1];
-  const latestRSI = rsi?.values?.[rsi.values.length - 1];
+  const latestSMA20 = sma20?.values ? Array.from(sma20.values()).pop()?.value : undefined;
+  const latestSMA50 = sma50?.values ? Array.from(sma50.values()).pop()?.value : undefined;
+  const latestRSI = rsi?.values ? Array.from(rsi.values()).pop()?.value : undefined;
 
   // Determine RSI signal
   let rsiSignal: "overbought" | "oversold" | "neutral" = "neutral";

@@ -8,6 +8,13 @@
       "when": 1769461196782,
       "tag": "0000_colossal_shriek",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1769551177357,
+      "tag": "0001_tearful_nekra",
+      "breakpoints": true
     }
   ]
 }

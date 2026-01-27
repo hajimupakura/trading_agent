@@ -37,15 +37,15 @@ export async function runAlertChecks() {
 
       switch (alert.type) {
         case "price_above":
-          if (quote.currentPrice >= targetValue) {
+          if (quote.price >= targetValue) {
             isTriggered = true;
-            message = `${alert.ticker} price has risen above your target of $${targetValue}. Current price: $${quote.currentPrice.toFixed(2)}.`;
+            message = `${alert.ticker} price has risen above your target of $${targetValue}. Current price: $${quote.price.toFixed(2)}.`;
           }
           break;
         case "price_below":
-          if (quote.currentPrice <= targetValue) {
+          if (quote.price <= targetValue) {
             isTriggered = true;
-            message = `${alert.ticker} price has fallen below your target of $${targetValue}. Current price: $${quote.currentPrice.toFixed(2)}.`;
+            message = `${alert.ticker} price has fallen below your target of $${targetValue}. Current price: $${quote.price.toFixed(2)}.`;
           }
           break;
         // Note: Volume increase check would require historical volume data to compare against.

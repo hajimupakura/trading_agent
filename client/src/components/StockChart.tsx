@@ -76,7 +76,7 @@ export const StockChart: React.FC<StockChartProps> = ({ symbol }) => {
   const chartData = useMemo(() => {
     if (!historicalData?.close || !historicalData?.timestamp) return [];
 
-    return historicalData.close.map((close, index) => {
+    return historicalData.close.map((close: number, index: number) => {
       const timestamp = historicalData.timestamp[index];
       const dataPoint: any = {
         time: format(new Date(timestamp * 1000), "yyyy-MM-dd"),

@@ -51,7 +51,7 @@ export function StockDeepDiveModal({ ticker, name, open, onClose }: StockDeepDiv
             </div>
           ) : quote && (
             <div className="flex items-baseline gap-4">
-              <div className="text-4xl font-bold">${quote.currentPrice.toFixed(2)}</div>
+              <div className="text-4xl font-bold">${quote.price.toFixed(2)}</div>
               {quote.change !== undefined && (
                 <div className={`flex items-center gap-1 text-lg ${quote.change >= 0 ? "text-green-600" : "text-red-600"}`}>
                   {quote.change >= 0 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
@@ -70,7 +70,7 @@ export function StockDeepDiveModal({ ticker, name, open, onClose }: StockDeepDiv
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               <div className="p-4 border rounded-lg">
                 <div className="text-xs text-muted-foreground mb-1">Market Cap</div>
-                <div className="text-xl font-bold">{formatMarketCap(financials.marketCap)}</div>
+                <div className="text-xl font-bold">{financials.marketCap ? formatMarketCap(financials.marketCap) : "N/A"}</div>
               </div>
               <div className="p-4 border rounded-lg">
                 <div className="text-xs text-muted-foreground mb-1">P/E Ratio</div>

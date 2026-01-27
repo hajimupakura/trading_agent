@@ -114,6 +114,13 @@ export const rallyEvents = pgTable("rally_events", {
   predictionOutcome: predictionOutcomeEnum("prediction_outcome"),
   backtestStatus: backtestStatusEnum("backtest_status").default("pending"),
   initialPrices: text("initial_prices"),
+  // Options trading recommendations
+  optionsStrategy: text("options_strategy"), // "CALL" or "PUT" with rationale
+  suggestedStrike: text("suggested_strike"), // Strike price recommendations
+  suggestedExpiration: text("suggested_expiration"), // Expiration date with rationale
+  entryStrategy: text("entry_strategy"), // When/how to enter
+  exitStrategy: text("exit_strategy"), // Profit targets and stop losses
+  riskAssessment: text("risk_assessment"), // Risk level and mitigation
 });
 
 export type RallyEvent = typeof rallyEvents.$inferSelect;

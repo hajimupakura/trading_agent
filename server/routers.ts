@@ -335,6 +335,45 @@ export const appRouter = router({
       const { getPredictionPerformanceStats } = await import("./db");
       return await getPredictionPerformanceStats();
     }),
+
+    generateOptions: protectedProcedure
+      .input(z.object({ predictionId: z.number() }))
+      .mutation(async ({ input }) => {
+        const { getPredictionById, updateRallyPredictionWithOptions } = await import("./db");
+        const { generateOptionsRecommendation } = await import("./services/rallyPrediction");
+
+        console.log(`[Options] Generating options for prediction ID: ${input.predictionId}`);
+
+        const prediction = await getPredictionById(input.predictionId);
+
+        if (!prediction) {
+          throw new Error("Prediction not found");
+        }
+
+        // Reconstruct the RallyPrediction object for the service
+        const catalysts = prediction.catalysts ? JSON.parse(prediction.catalysts) : {};
+        const rallyPredictionForService = {
+          sector: prediction.sector,
+          opportunityType: catalysts.opportunityType || (catalysts.direction === 'down' ? 'put' : 'call'),
+          direction: catalysts.direction || 'up',
+          confidence: prediction.predictionConfidence || 50,
+          timeframe: catalysts.timeframe || '2-3 weeks',
+          earlySignals: prediction.earlySignals ? JSON.parse(prediction.earlySignals) : [],
+          recommendedStocks: prediction.keyStocks ? JSON.parse(prediction.keyStocks) : [],
+          reasoning: prediction.description || '',
+          entryTiming: catalysts.entryTiming || 'As per analysis',
+          exitStrategy: catalysts.exitStrategy || 'As per analysis',
+        };
+
+        const recommendation = await generateOptionsRecommendation(rallyPredictionForService);
+
+        await updateRallyPredictionWithOptions(input.predictionId, recommendation);
+        console.log(`[Options] Successfully generated and saved options for prediction ID: ${input.predictionId}`);
+
+        // Return the updated prediction data
+        const updatedPrediction = await getPredictionById(input.predictionId);
+        return updatedPrediction;
+      }),
   }),
 
   // User-defined alerts

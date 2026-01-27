@@ -43,6 +43,9 @@ export default function DashboardEnhanced() {
   const [selectedStock, setSelectedStock] = useState<{ ticker: string; name?: string } | null>(null);
 
   // Fetch data
+  const [generatingOptionsFor, setGeneratingOptionsFor] = useState<number | null>(null);
+
+  // Fetch data
   const { data: news, isLoading: newsLoading, refetch: refetchNews } = trpc.news.recent.useQuery();
   const { data: watchlist, isLoading: watchlistLoading } = trpc.watchlist.list.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -72,6 +75,22 @@ export default function DashboardEnhanced() {
     },
     onError: () => {
       toast.error("Failed to generate predictions");
+    },
+  });
+
+  const generateOptions = trpc.predictions.generateOptions.useMutation({
+    onMutate: (variables) => {
+      setGeneratingOptionsFor(variables.predictionId);
+    },
+    onSuccess: (data) => {
+      toast.success(`Generated options strategy for "${data?.name}"!`);
+      refetchPredictions();
+    },
+    onError: (error) => {
+      toast.error(`Failed to generate options: ${error.message}`);
+    },
+    onSettled: () => {
+      setGeneratingOptionsFor(null);
     },
   });
 
@@ -473,6 +492,9 @@ export default function DashboardEnhanced() {
                            confidence >= 60 ? "border-l-rose-500" :
                            "border-l-pink-500");
 
+                      const hasOptionsStrategy = pred.optionsStrategy && pred.optionsStrategy !== 'No strategy generated';
+                      const isGenerating = generatingOptionsFor === pred.id;
+
                       return (
                         <div key={pred.id} className={`p-5 border-l-4 border rounded-lg bg-card hover:shadow-lg transition-all ${borderColor}`}>
                           <div className="flex items-start justify-between gap-4">
@@ -535,6 +557,62 @@ export default function DashboardEnhanced() {
                                   )}
                                 </div>
                               )}
+
+                              {/* Options Strategy Section */}
+                              <div className="mt-4">
+                                {!hasOptionsStrategy && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => generateOptions.mutate({ predictionId: pred.id })}
+                                    disabled={isGenerating || !isAuthenticated}
+                                  >
+                                    {isGenerating ? (
+                                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                    ) : (
+                                      <Sparkles className="h-4 w-4 mr-2" />
+                                    )}
+                                    {isGenerating ? "Generating..." : "Generate Options Strategy"}
+                                  </Button>
+                                )}
+
+                                {hasOptionsStrategy && (
+                                  <div className="mt-4 p-4 border rounded-lg bg-muted/30">
+                                    <h4 className="font-bold text-md mb-3 flex items-center gap-2">
+                                      <Sparkles className="h-4 w-4 text-primary" />
+                                      AI-Generated Options Strategy
+                                    </h4>
+                                    <div className="space-y-3 text-sm">
+                                      <div>
+                                        <div className="font-semibold text-muted-foreground">Strategy:</div>
+                                        <p className="font-mono text-xs p-2 bg-background rounded">{pred.optionsStrategy}</p>
+                                      </div>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                          <div className="font-semibold text-muted-foreground">Strike Price:</div>
+                                          <p className="font-mono text-xs p-2 bg-background rounded">{pred.suggestedStrike}</p>
+                                        </div>
+                                        <div>
+                                          <div className="font-semibold text-muted-foreground">Expiration:</div>
+                                          <p className="font-mono text-xs p-2 bg-background rounded">{pred.suggestedExpiration}</p>
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div className="font-semibold text-muted-foreground">Entry Plan:</div>
+                                        <p className="font-mono text-xs p-2 bg-background rounded">{pred.entryStrategy}</p>
+                                      </div>
+                                      <div>
+                                        <div className="font-semibold text-muted-foreground">Exit Plan:</div>
+                                        <p className="font-mono text-xs p-2 bg-background rounded">{pred.exitStrategy}</p>
+                                      </div>
+                                      <div>
+                                        <div className="font-semibold text-muted-foreground">Risk Assessment:</div>
+                                        <p className="font-mono text-xs p-2 bg-background rounded">{pred.riskAssessment}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -639,7 +717,7 @@ export default function DashboardEnhanced() {
                             <div className="font-semibold text-foreground">{stock.ticker}</div>
                             {stock.name && <div className="text-sm text-muted-foreground">{stock.name}</div>}
                           </div>
-                          {stock.isPriority === 1 && (
+                          {stock.isPriority && (
                             <Badge variant="default">Priority</Badge>
                           )}
                         </div>
@@ -919,6 +997,7 @@ export default function DashboardEnhanced() {
             {selectedPrediction?.earlySignals && (
               <div>
                 <h4 className="font-semibold mb-2">Early Signals</h4>
+.
                 <ul className="list-disc list-inside space-y-1">
                   {JSON.parse(selectedPrediction.earlySignals).map((signal: string, i: number) => (
                     <li key={i} className="text-sm text-muted-foreground">{signal}</li>
