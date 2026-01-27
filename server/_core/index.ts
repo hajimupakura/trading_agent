@@ -13,17 +13,39 @@ import { runAlertChecks } from "../services/alertingService";
 import cron from "node-cron";
 
 function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const server = net.createServer();
-    server.listen(port, () => {
+    
+    const timeout = setTimeout(() => {
+      server.close();
+      resolve(false);
+    }, 1000);
+    
+    server.once("error", (err: any) => {
+      clearTimeout(timeout);
+      if (err.code === "EADDRINUSE" || err.code === "EACCES") {
+        resolve(false);
+      } else {
+        // Other errors might be temporary, try again
+        resolve(false);
+      }
+    });
+    
+    server.listen(port, "0.0.0.0", () => {
+      clearTimeout(timeout);
       server.close(() => resolve(true));
     });
-    server.on("error", () => resolve(false));
   });
 }
 
 async function findAvailablePort(startPort: number = 3000): Promise<number> {
-  for (let port = startPort; port < startPort + 20; port++) {
+  // First, try the preferred port directly
+  if (await isPortAvailable(startPort)) {
+    return startPort;
+  }
+  
+  // If preferred port is busy, try nearby ports
+  for (let port = startPort + 1; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) {
       return port;
     }
@@ -55,14 +77,24 @@ async function startServer() {
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
-
-  if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+  
+  // If PORT is explicitly set, use it directly (skip port checking which can fail)
+  // Otherwise, try to find an available port
+  let port = preferredPort;
+  if (!process.env.PORT) {
+    // No PORT env var, find any available port
+    try {
+      port = await findAvailablePort(preferredPort);
+    } catch (error) {
+      console.warn(`Port finding failed, using default port ${preferredPort}`);
+      port = preferredPort;
+    }
   }
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  // Bind to all interfaces in production, localhost if BIND_LOCALHOST is set
+  const host = process.env.NODE_ENV === "production" && !process.env.BIND_LOCALHOST ? "0.0.0.0" : "127.0.0.1";
+  server.listen(port, host, () => {
+    console.log(`Server running on http://${host === "0.0.0.0" ? "localhost" : host}:${port}/`);
 
     // --- Automated Job Scheduler ---
     console.log("[Scheduler] Initializing background jobs...");

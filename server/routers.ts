@@ -66,41 +66,50 @@ export const appRouter = router({
         const { insertNewsArticle } = await import("./db");
 
         console.log("[News AI Scraper] Starting scrape for topics:", input.topics);
-        const articles = await scrapeFinancialNews(input.topics);
-        console.log("[News AI Scraper] Found", articles.length, "articles");
+        try {
+          const articles = await scrapeFinancialNews(input.topics);
+          console.log("[News AI Scraper] Found", articles.length, "articles");
 
-        let count = 0;
-
-        for (const article of articles) {
-          try {
-            // Normalize the data structure
-            const normalizedArticle = {
-              title: article.title,
-              description: article.description || article.summary || "",
-              url: article.url || article.link || "",
-              source: article.source || "AI Scraped",
-              publishedAt: article.date ? new Date(article.date) : (article.publishedAt ? new Date(article.publishedAt) : new Date()),
-            };
-
-            const analysis = await analyzeNewsArticle(normalizedArticle);
-
-            await insertNewsArticle({
-              ...normalizedArticle,
-              sentiment: analysis.sentiment,
-              potentialTerm: analysis.potentialTerm,
-              aiSummary: analysis.aiSummary,
-              mentionedStocks: JSON.stringify(analysis.mentionedStocks),
-              sectors: JSON.stringify(analysis.sectors),
-              rallyIndicator: analysis.rallyIndicator,
-            });
-            count++;
-            console.log(`[News AI Scraper] Analyzed and saved: ${normalizedArticle.title}`);
-          } catch (error) {
-            console.error("[News AI Scraper] Failed to process article:", error);
+          if (articles.length === 0) {
+            throw new Error("No articles found. The AI scraper may have failed to extract data from news sources.");
           }
-        }
 
-        return { success: true, count, articles };
+          let count = 0;
+
+          for (const article of articles) {
+            try {
+              // Normalize the data structure
+              const normalizedArticle = {
+                title: article.title,
+                description: article.description || article.summary || "",
+                url: article.url || article.link || "",
+                source: article.source || "AI Scraped",
+                publishedAt: article.date ? new Date(article.date) : (article.publishedAt ? new Date(article.publishedAt) : new Date()),
+              };
+
+              const analysis = await analyzeNewsArticle(normalizedArticle);
+
+              await insertNewsArticle({
+                ...normalizedArticle,
+                sentiment: analysis.sentiment,
+                potentialTerm: analysis.potentialTerm,
+                aiSummary: analysis.aiSummary,
+                mentionedStocks: JSON.stringify(analysis.mentionedStocks),
+                sectors: JSON.stringify(analysis.sectors),
+                rallyIndicator: analysis.rallyIndicator,
+              });
+              count++;
+              console.log(`[News AI Scraper] Analyzed and saved: ${normalizedArticle.title}`);
+            } catch (error) {
+              console.error("[News AI Scraper] Failed to process article:", error);
+            }
+          }
+
+          return { success: true, count, articles };
+        } catch (error: any) {
+          console.error("[News AI Scraper] Scraping failed:", error);
+          throw new Error(`Failed to scrape news: ${error.message}`);
+        }
       }),
   }),
   
@@ -165,32 +174,41 @@ export const appRouter = router({
       const { insertArkTrade } = await import("./db");
 
       console.log("[ARK AI Scraper] Starting scrape...");
-      const trades = await scrapeARKTrades();
-      console.log("[ARK AI Scraper] Found", trades.length, "trades");
+      try {
+        const trades = await scrapeARKTrades();
+        console.log("[ARK AI Scraper] Found", trades.length, "trades");
 
-      let count = 0;
-
-      for (const trade of trades) {
-        try {
-          // Normalize the data structure from AI Browser Agent
-          const normalizedTrade = {
-            ticker: trade.ticker || trade.symbol,
-            fund: trade.fund || "ARKK",
-            direction: trade.direction?.toLowerCase() || trade.type?.toLowerCase() || "buy",
-            shares: trade.shares || trade.quantity || 0,
-            date: trade.date ? new Date(trade.date) : new Date(),
-            percentOfEtf: trade.percentOfEtf || trade.weight || null,
-          };
-
-          await insertArkTrade(normalizedTrade);
-          count++;
-          console.log(`[ARK AI Scraper] Saved trade: ${normalizedTrade.ticker} - ${normalizedTrade.direction}`);
-        } catch (error) {
-          console.error("[ARK AI Scraper] Failed to process trade:", error);
+        if (trades.length === 0) {
+          throw new Error("No trades found. The AI scraper may have failed to extract data from ark-funds.com");
         }
-      }
 
-      return { success: true, count, trades };
+        let count = 0;
+
+        for (const trade of trades) {
+          try {
+            // Normalize the data structure from AI Browser Agent
+            const normalizedTrade = {
+              ticker: trade.ticker || trade.symbol,
+              fund: trade.fund || trade.fundName || "ARKK",
+              direction: trade.direction?.toLowerCase() || trade.type?.toLowerCase() || "buy",
+              shares: trade.shares || trade.quantity || 0,
+              date: trade.date ? new Date(trade.date) : new Date(),
+              percentOfEtf: trade.percentOfEtf || trade.weight || null,
+            };
+
+            await insertArkTrade(normalizedTrade);
+            count++;
+            console.log(`[ARK AI Scraper] Saved trade: ${normalizedTrade.ticker} - ${normalizedTrade.direction}`);
+          } catch (error) {
+            console.error("[ARK AI Scraper] Failed to process trade:", error);
+          }
+        }
+
+        return { success: true, count, trades };
+      } catch (error: any) {
+        console.error("[ARK AI Scraper] Scraping failed:", error);
+        throw new Error(`Failed to scrape ARK trades: ${error.message}`);
+      }
     }),
   }),
   
@@ -418,47 +436,56 @@ export const appRouter = router({
         const { insertYoutubeVideo } = await import("./db");
 
         console.log("[YouTube AI Scraper] Starting scrape for channels:", input.channelNames);
-        const videos = await scrapeYouTubeVideos(input.channelNames);
-        console.log("[YouTube AI Scraper] Found", videos.length, "videos");
+        try {
+          const videos = await scrapeYouTubeVideos(input.channelNames);
+          console.log("[YouTube AI Scraper] Found", videos.length, "videos");
 
-        let count = 0;
-
-        for (const video of videos) {
-          try {
-            // AI Browser Agent returns different field names, normalize them
-            const normalizedVideo = {
-              videoId: video.id || video.videoId || `yt-${Date.now()}-${count}`,
-              title: video.title,
-              description: video.description || "",
-              publishedAt: video.date ? new Date(video.date) : (video.publishedAt ? new Date(video.publishedAt) : new Date()),
-              thumbnailUrl: video.thumbnail || video.thumbnailUrl || "",
-              videoUrl: video.url || video.videoUrl || "",
-            };
-
-            const analysis = await analyzeYouTubeVideo(normalizedVideo);
-            await insertYoutubeVideo({
-              influencerId: 1, // Default influencer for demo
-              videoId: normalizedVideo.videoId,
-              title: normalizedVideo.title,
-              description: normalizedVideo.description,
-              publishedAt: normalizedVideo.publishedAt,
-              thumbnailUrl: normalizedVideo.thumbnailUrl,
-              videoUrl: normalizedVideo.videoUrl,
-              aiSummary: analysis.aiSummary,
-              keyTakeaways: JSON.stringify(analysis.keyTakeaways),
-              mentionedStocks: JSON.stringify(analysis.mentionedStocks),
-              sentiment: analysis.sentiment,
-              sectors: JSON.stringify(analysis.sectors),
-              tradingSignals: JSON.stringify(analysis.tradingSignals),
-            });
-            count++;
-            console.log(`[YouTube AI Scraper] Analyzed and saved: ${normalizedVideo.title}`);
-          } catch (error) {
-            console.error(`[YouTube AI Scraper] Failed to process video:`, error);
+          if (videos.length === 0) {
+            throw new Error("No videos found. The AI scraper may have failed to extract data from YouTube.");
           }
-        }
 
-        return { success: true, count, videos };
+          let count = 0;
+
+          for (const video of videos) {
+            try {
+              // AI Browser Agent returns different field names, normalize them
+              const normalizedVideo = {
+                videoId: video.id || video.videoId || `yt-${Date.now()}-${count}`,
+                title: video.title,
+                description: video.description || "",
+                publishedAt: video.date ? new Date(video.date) : (video.publishedAt ? new Date(video.publishedAt) : new Date()),
+                thumbnailUrl: video.thumbnail || video.thumbnailUrl || "",
+                videoUrl: video.url || video.videoUrl || "",
+              };
+
+              const analysis = await analyzeYouTubeVideo(normalizedVideo);
+              await insertYoutubeVideo({
+                influencerId: 1, // Default influencer for demo
+                videoId: normalizedVideo.videoId,
+                title: normalizedVideo.title,
+                description: normalizedVideo.description,
+                publishedAt: normalizedVideo.publishedAt,
+                thumbnailUrl: normalizedVideo.thumbnailUrl,
+                videoUrl: normalizedVideo.videoUrl,
+                aiSummary: analysis.aiSummary,
+                keyTakeaways: JSON.stringify(analysis.keyTakeaways),
+                mentionedStocks: JSON.stringify(analysis.mentionedStocks),
+                sentiment: analysis.sentiment,
+                sectors: JSON.stringify(analysis.sectors),
+                tradingSignals: JSON.stringify(analysis.tradingSignals),
+              });
+              count++;
+              console.log(`[YouTube AI Scraper] Analyzed and saved: ${normalizedVideo.title}`);
+            } catch (error) {
+              console.error(`[YouTube AI Scraper] Failed to process video:`, error);
+            }
+          }
+
+          return { success: true, count, videos };
+        } catch (error: any) {
+          console.error("[YouTube AI Scraper] Scraping failed:", error);
+          throw new Error(`Failed to scrape YouTube videos: ${error.message}`);
+        }
       }),
   }),
 
@@ -602,10 +629,19 @@ export const appRouter = router({
         const { getStockPrice } = await import("./services/aiBrowserAgent");
 
         console.log("[Stock Price AI Scraper] Scraping price for:", input.ticker);
-        const priceData = await getStockPrice(input.ticker);
-        console.log("[Stock Price AI Scraper] Result:", priceData);
+        try {
+          const priceData = await getStockPrice(input.ticker);
+          console.log("[Stock Price AI Scraper] Result:", priceData);
 
-        return { success: true, data: priceData };
+          if (!priceData || priceData === null) {
+            throw new Error("Failed to extract stock price data. The AI scraper may have failed to extract data from Yahoo Finance.");
+          }
+
+          return { success: true, data: priceData };
+        } catch (error: any) {
+          console.error("[Stock Price AI Scraper] Scraping failed:", error);
+          throw new Error(`Failed to scrape stock price: ${error.message}`);
+        }
       }),
   }),
 
