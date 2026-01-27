@@ -12,8 +12,8 @@ const Home = lazy(() => import("@/pages/Home"));
 const DashboardV2 = lazy(() => import("@/pages/DashboardV2"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const DashboardEnhanced = lazy(() => import("@/pages/DashboardEnhanced"));
-const Performance = lazy(() => import("@/pages/Performance"));
-const Screener = lazy(() => import("@/pages/Screener"));
+const Performance = lazy(() => import("@/pages/PerformanceAnalytics"));
+const Screener = lazy(() => import("@/pages/StockScreener"));
 
 // Loading fallback component
 const PageLoader = () => (
