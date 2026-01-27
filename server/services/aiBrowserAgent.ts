@@ -352,58 +352,69 @@ async function executeAction(page: Page, action: any): Promise<string> {
 export async function scrapeFinancialNews(topics: string[] = []): Promise<any[]> {
   const topicsStr = topics.length > 0 ? topics.join(", ") : "AI stocks, quantum computing, rare earth metals";
 
-  const task = `You are a financial news scraper. Your goal is to find recent news articles about: ${topicsStr}
+  console.log(`[News Scraper] Starting direct HTML scrape for topics: ${topicsStr}`);
 
-Step-by-step instructions:
-1. Navigate to Yahoo Finance: https://finance.yahoo.com/topic/stock-market-news/
-2. Wait for the page to load
-3. Look for article headlines, links, and summaries on the page
-4. For EACH article you find (get at least 5-10 articles):
-   - Extract the article title/headline
-   - Extract the article URL (full link)
-   - Extract any visible summary or description
-   - Extract the publication date (e.g., "2 hours ago", "Jan 27")
-   - Note the source as "Yahoo Finance"
-
-CRITICAL: Every article MUST have:
-- title: non-empty headline text
-- url: complete URL starting with https://
-- summary: at least a brief description (use first paragraph if no summary)
-- source: "Yahoo Finance"
-- date: publication date string
-
-Return a JSON array with this exact structure:
-[
-  {
-    "title": "Article headline here",
-    "summary": "Brief description of the article",
-    "url": "https://finance.yahoo.com/news/...",
-    "source": "Yahoo Finance",
-    "date": "2 hours ago"
-  }
-]
-
-If you cannot extract all required fields for an article, skip it. Only return articles with complete data.`;
-
-  console.log(`[News Scraper] Starting scrape for topics: ${topicsStr}`);
-  const result = await executeAIBrowserTask(task, { maxSteps: 15 });
-  
-  if (!result.success) {
-    console.error(`[News Scraper] Failed: ${result.error}`);
-    return [];
-  }
-  
-  if (!result.data || result.data === null) {
-    console.warn(`[News Scraper] Success but no data returned. Steps:`, result.steps);
-    return [];
-  }
-  
   try {
-    const articles = Array.isArray(result.data) ? result.data : [result.data];
-    console.log(`[News Scraper] Successfully extracted ${articles.length} articles`);
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    );
+
+    // Navigate to Yahoo Finance news
+    await page.goto("https://finance.yahoo.com/topic/stock-market-news/", {
+      waitUntil: "networkidle2",
+      timeout: 30000
+    });
+
+    // Wait for articles to load
+    await page.waitForSelector('li[data-test-locator="stream-item"]', { timeout: 10000 });
+
+    // Extract articles
+    const articles = await page.evaluate(() => {
+      const results: any[] = [];
+      const articleElements = document.querySelectorAll('li[data-test-locator="stream-item"]');
+
+      articleElements.forEach((article, index) => {
+        if (index >= 10) return; // Limit to 10 articles
+
+        try {
+          const titleEl = article.querySelector('h3 a') || article.querySelector('a h3');
+          const summaryEl = article.querySelector('p');
+          const timeEl = article.querySelector('time');
+
+          const title = titleEl?.textContent?.trim();
+          const url = titleEl?.getAttribute('href');
+          const summary = summaryEl?.textContent?.trim() || '';
+          const date = timeEl?.textContent?.trim() || '';
+
+          if (title && url) {
+            const fullUrl = url.startsWith('http') ? url : `https://finance.yahoo.com${url}`;
+            results.push({
+              title,
+              summary: summary || title,
+              url: fullUrl,
+              source: "Yahoo Finance",
+              date: date || "Recently"
+            });
+          }
+        } catch (err) {
+          console.log('Error parsing article:', err);
+        }
+      });
+
+      return results;
+    });
+
+    await page.close();
+
+    console.log(`[News Scraper] Successfully extracted ${articles.length} articles via direct HTML`);
     return articles;
-  } catch (error) {
-    console.error(`[News Scraper] Error processing data:`, error);
+
+  } catch (error: any) {
+    console.error(`[News Scraper] Direct HTML scrape failed:`, error.message);
     return [];
   }
 }
@@ -445,68 +456,82 @@ Return as a JSON array of trade objects. Each object should have: {fundName, tic
 }
 
 export async function scrapeYouTubeVideos(channelNames: string[]): Promise<any[]> {
-  const channelsStr = channelNames.join(", ");
+  const channelName = channelNames[0]; // Only scrape first channel
 
-  const task = `You are a YouTube video scraper. Your goal is to find recent videos from specific trading channels.
+  console.log(`[YouTube Scraper] Starting direct HTML scrape for channel: ${channelName}`);
 
-IMPORTANT: For each channel name: ${channelsStr}
-
-Step-by-step instructions:
-1. Navigate to: https://www.youtube.com/results?search_query=[CHANNEL_NAME]&sp=CAI%253D (this sorts by upload date)
-2. Wait for the page to load completely
-3. Extract video data from the search results page
-4. For EACH video in the results (get at least 3 per channel):
-   - Find the video title (usually in an <a> tag with id containing "video-title")
-   - Find the video URL (href attribute, should be /watch?v=...)
-   - Find the channel name (verify it matches the search)
-   - Find the upload date (look for text like "1 day ago", "2 weeks ago")
-   - Find view count if available
-   - Find the video thumbnail URL
-   - Extract any visible description text
-
-CRITICAL: Make sure to capture:
-- title: exact video title text
-- url: complete YouTube URL (https://www.youtube.com/watch?v=...)
-- channel: channel name
-- date: relative date string (e.g., "1 day ago")
-- views: view count string (e.g., "10K views")
-- thumbnail: thumbnail image URL
-- description: short description if visible
-
-After extracting all videos from all channels, return a JSON array with this exact structure:
-[
-  {
-    "title": "video title here",
-    "channel": "channel name",
-    "url": "https://www.youtube.com/watch?v=...",
-    "date": "1 day ago",
-    "views": "10K views",
-    "thumbnail": "https://...",
-    "description": "video description"
-  }
-]
-
-Make sure EVERY video object has a non-empty title and url field. If you cannot find these, skip that video.`;
-
-  console.log(`[YouTube Scraper] Starting scrape for channels: ${channelsStr}`);
-  const result = await executeAIBrowserTask(task, { maxSteps: 25 });
-  
-  if (!result.success) {
-    console.error(`[YouTube Scraper] Failed: ${result.error}`);
-    return [];
-  }
-  
-  if (!result.data || result.data === null) {
-    console.warn(`[YouTube Scraper] Success but no data returned. Steps:`, result.steps);
-    return [];
-  }
-  
   try {
-    const videos = Array.isArray(result.data) ? result.data : [result.data];
-    console.log(`[YouTube Scraper] Successfully extracted ${videos.length} videos`);
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    );
+
+    // Search YouTube for channel and sort by upload date
+    const searchQuery = encodeURIComponent(channelName);
+    await page.goto(`https://www.youtube.com/results?search_query=${searchQuery}&sp=CAI%253D`, {
+      waitUntil: "networkidle2",
+      timeout: 30000
+    });
+
+    // Wait for video results
+    await page.waitForSelector('ytd-video-renderer', { timeout: 10000 });
+
+    // Extract the first (most recent) video
+    const videos = await page.evaluate(() => {
+      const results: any[] = [];
+      const videoElements = document.querySelectorAll('ytd-video-renderer');
+
+      // Only get the first video
+      const firstVideo = videoElements[0];
+      if (!firstVideo) return results;
+
+      try {
+        const titleEl = firstVideo.querySelector('#video-title');
+        const channelEl = firstVideo.querySelector('#channel-name a, #text.ytd-channel-name');
+        const thumbnailEl = firstVideo.querySelector('img');
+        const metadataLines = firstVideo.querySelectorAll('#metadata-line span');
+
+        const title = titleEl?.textContent?.trim() || titleEl?.getAttribute('aria-label');
+        const url = titleEl?.getAttribute('href');
+        const channel = channelEl?.textContent?.trim();
+        const thumbnail = thumbnailEl?.getAttribute('src');
+
+        let views = '';
+        let date = '';
+        if (metadataLines.length >= 2) {
+          views = metadataLines[0]?.textContent?.trim() || '';
+          date = metadataLines[1]?.textContent?.trim() || '';
+        }
+
+        if (title && url) {
+          const fullUrl = url.startsWith('http') ? url : `https://www.youtube.com${url}`;
+          results.push({
+            title,
+            channel: channel || 'Unknown',
+            url: fullUrl,
+            date: date || 'Recently',
+            views: views || '0 views',
+            thumbnail: thumbnail || '',
+            description: title // Use title as description for now
+          });
+        }
+      } catch (err) {
+        console.log('Error parsing video:', err);
+      }
+
+      return results;
+    });
+
+    await page.close();
+
+    console.log(`[YouTube Scraper] Successfully extracted ${videos.length} video(s) via direct HTML`);
     return videos;
-  } catch (error) {
-    console.error(`[YouTube Scraper] Error processing data:`, error);
+
+  } catch (error: any) {
+    console.error(`[YouTube Scraper] Direct HTML scrape failed:`, error.message);
     return [];
   }
 }

@@ -740,12 +740,12 @@ export default function DashboardEnhanced() {
                         onClick={() => scrapeYouTube.mutate({
                           channelNames: [
                             "Chris Sain",
-                            "Option Alpha",
-                            "InTheMoney",
-                            "tastylive",
-                            "BenzingaTV",
-                            "The Trading Channel",
-                            "SMB Capital"
+                            // "Option Alpha",
+                            // "InTheMoney",
+                            // "tastylive",
+                            // "BenzingaTV",
+                            // "The Trading Channel",
+                            // "SMB Capital"
                           ]
                         })}
                         disabled={scrapeYouTube.isPending}
@@ -758,7 +758,7 @@ export default function DashboardEnhanced() {
                         {scrapeYouTube.isPending ? "Scraping..." : "Scrape YouTube Videos"}
                       </Button>
                       <p className="text-xs text-muted-foreground mt-2">
-                        🎥 Options strategies from Chris Sain, Option Alpha, InTheMoney & more
+                        🎥 Latest video from Chris Sain
                       </p>
                     </CardContent>
                   </Card>
@@ -836,12 +836,12 @@ export default function DashboardEnhanced() {
                     onClick={() => scrapeYouTube.mutate({
                       channelNames: [
                         "Chris Sain",
-                        "Option Alpha",
-                        "InTheMoney",
-                        "tastylive",
-                        "BenzingaTV",
-                        "The Trading Channel",
-                        "SMB Capital"
+                        // "Option Alpha",
+                        // "InTheMoney",
+                        // "tastylive",
+                        // "BenzingaTV",
+                        // "The Trading Channel",
+                        // "SMB Capital"
                       ]
                     })}
                     disabled={scrapeYouTube.isPending}
@@ -851,7 +851,7 @@ export default function DashboardEnhanced() {
                     ) : (
                       <Youtube className="h-4 w-4 mr-2" />
                     )}
-                    Scrape YouTube Videos
+                    Scrape Latest Video
                   </Button>
                 </div>
               </CardHeader>
