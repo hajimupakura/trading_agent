@@ -4,7 +4,7 @@
  */
 
 import puppeteer, { Browser, Page } from "puppeteer";
-import { invokeGemini } from "../_core/llm-gemini";
+import { invokeLLM } from "../_core/llm";
 
 let browser: Browser | null = null;
 
@@ -199,7 +199,7 @@ Action types:
 - extract: Extract data from current page
 - complete: Task is finished (provide final extracted data)`;
 
-  const response = await invokeGemini({
+  const response = await invokeLLM({
     messages: [
       {
         role: "system",
@@ -210,11 +210,14 @@ Action types:
         content: prompt,
       },
     ],
-    temperature: 0.3,
   });
 
   try {
-    const content = response.choices[0]?.message?.content || "{}";
+    const messageContent = response.choices[0]?.message?.content || "{}";
+    // Handle both string and array content formats
+    const content = typeof messageContent === "string"
+      ? messageContent
+      : messageContent.map(c => c.type === "text" ? c.text : "").join("");
     return JSON.parse(content);
   } catch (error) {
     // Fallback if JSON parsing fails

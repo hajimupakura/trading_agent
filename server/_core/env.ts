@@ -7,4 +7,5 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.OPENAI_API_BASE_URL ?? "",
   forgeApiKey: process.env.OPENAI_API_KEY ?? "",
+  llmModel: process.env.LLM_MODEL ?? "gemini-2.0-flash-exp",
 };

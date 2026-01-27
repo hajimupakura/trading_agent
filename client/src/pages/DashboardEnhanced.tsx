@@ -84,6 +84,45 @@ export default function DashboardEnhanced() {
     },
   });
 
+  const scrapeYouTube = trpc.youtube.scrapeVideos.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Scraped and analyzed ${data.count} YouTube videos using AI Browser Agent!`);
+      window.location.reload(); // Refresh to show new videos
+    },
+    onError: (error) => {
+      toast.error(`Failed to scrape YouTube videos: ${error.message}`);
+    },
+  });
+
+  const scrapeARK = trpc.ark.scrapeTrades.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Scraped ${data.count} ARK trades using AI Browser Agent!`);
+      window.location.reload(); // Refresh to show new trades
+    },
+    onError: (error) => {
+      toast.error(`Failed to scrape ARK trades: ${error.message}`);
+    },
+  });
+
+  const scrapeNews = trpc.news.scrapeNews.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Scraped and analyzed ${data.count} news articles using AI Browser Agent!`);
+      refetchNews();
+    },
+    onError: (error) => {
+      toast.error(`Failed to scrape news: ${error.message}`);
+    },
+  });
+
+  const scrapeStockPrice = trpc.stocks.scrapePrice.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Scraped stock price: $${data.data?.price || 'N/A'}`);
+    },
+    onError: (error) => {
+      toast.error(`Failed to scrape stock price: ${error.message}`);
+    },
+  });
+
   const discoverSectors = trpc.sectors.discover.useMutation({
     onSuccess: (data) => {
       toast.success(`Discovered ${data.count} sectors!`);
@@ -642,14 +681,15 @@ export default function DashboardEnhanced() {
                     <CardContent>
                       <Button
                         className="w-full"
-                        onClick={() => {
-                          toast.info("AI Agent launched! Scraping ARK trades...");
-                          // TODO: Implement backend endpoint for AI browser agent
-                          toast.error("Feature coming soon - backend integration needed");
-                        }}
+                        onClick={() => scrapeARK.mutate()}
+                        disabled={scrapeARK.isPending}
                       >
-                        <Sparkles className="h-4 w-4 mr-2" />
-                        Scrape ARK Trades Now
+                        {scrapeARK.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : (
+                          <Sparkles className="h-4 w-4 mr-2" />
+                        )}
+                        {scrapeARK.isPending ? "Scraping..." : "Scrape ARK Trades Now"}
                       </Button>
                       <p className="text-xs text-muted-foreground mt-2">
                         ⚡ Get Cathie Wood's latest moves instantly
@@ -668,13 +708,17 @@ export default function DashboardEnhanced() {
                     <CardContent>
                       <Button
                         className="w-full"
-                        onClick={() => {
-                          toast.info("AI Agent launched! Scraping financial news...");
-                          toast.error("Feature coming soon - backend integration needed");
-                        }}
+                        onClick={() => scrapeNews.mutate({
+                          topics: ["AI stocks", "semiconductor news", "EV market", "tech earnings", "fed interest rates"]
+                        })}
+                        disabled={scrapeNews.isPending}
                       >
-                        <Sparkles className="h-4 w-4 mr-2" />
-                        Scrape Breaking News
+                        {scrapeNews.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : (
+                          <Sparkles className="h-4 w-4 mr-2" />
+                        )}
+                        {scrapeNews.isPending ? "Scraping..." : "Scrape Breaking News"}
                       </Button>
                       <p className="text-xs text-muted-foreground mt-2">
                         📰 Get news 1-24 hours before RSS feeds
@@ -685,24 +729,36 @@ export default function DashboardEnhanced() {
                   {/* YouTube Scraper */}
                   <Card className="border-2 border-primary/20">
                     <CardHeader>
-                      <CardTitle className="text-base">YouTube Influencer Scraper</CardTitle>
+                      <CardTitle className="text-base">YouTube Options Trading Scraper</CardTitle>
                       <CardDescription className="text-xs">
-                        Scrape latest videos from top financial YouTubers
+                        Scrape latest videos from top options trading experts
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <Button
                         className="w-full"
-                        onClick={() => {
-                          toast.info("AI Agent launched! Scraping YouTube videos...");
-                          toast.error("Feature coming soon - backend integration needed");
-                        }}
+                        onClick={() => scrapeYouTube.mutate({
+                          channelNames: [
+                            "Chris Sain",
+                            "Option Alpha",
+                            "InTheMoney",
+                            "tastylive",
+                            "BenzingaTV",
+                            "The Trading Channel",
+                            "SMB Capital"
+                          ]
+                        })}
+                        disabled={scrapeYouTube.isPending}
                       >
-                        <Youtube className="h-4 w-4 mr-2" />
-                        Scrape YouTube Videos
+                        {scrapeYouTube.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : (
+                          <Youtube className="h-4 w-4 mr-2" />
+                        )}
+                        {scrapeYouTube.isPending ? "Scraping..." : "Scrape YouTube Videos"}
                       </Button>
                       <p className="text-xs text-muted-foreground mt-2">
-                        🎥 Catch trading signals from influencers
+                        🎥 Options strategies from Chris Sain, Option Alpha, InTheMoney & more
                       </p>
                     </CardContent>
                   </Card>
@@ -719,12 +775,19 @@ export default function DashboardEnhanced() {
                       <Button
                         className="w-full"
                         onClick={() => {
-                          toast.info("AI Agent launched! Scraping stock prices...");
-                          toast.error("Feature coming soon - backend integration needed");
+                          const ticker = prompt("Enter ticker symbol (e.g., AAPL, TSLA):");
+                          if (ticker) {
+                            scrapeStockPrice.mutate({ ticker: ticker.toUpperCase() });
+                          }
                         }}
+                        disabled={scrapeStockPrice.isPending}
                       >
-                        <TrendingUp className="h-4 w-4 mr-2" />
-                        Scrape Stock Prices
+                        {scrapeStockPrice.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : (
+                          <TrendingUp className="h-4 w-4 mr-2" />
+                        )}
+                        {scrapeStockPrice.isPending ? "Scraping..." : "Scrape Stock Price"}
                       </Button>
                       <p className="text-xs text-muted-foreground mt-2">
                         💹 Bypass API rate limits with direct scraping
@@ -734,20 +797,19 @@ export default function DashboardEnhanced() {
                 </div>
 
                 {/* Info Box */}
-                <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-900">
+                <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-900">
                   <div className="flex items-start gap-3">
-                    <Sparkles className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <Sparkles className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
                     <div className="space-y-2">
-                      <div className="font-semibold text-blue-900 dark:text-blue-100">
-                        Your Secret Weapon: AI Browser Agents
+                      <div className="font-semibold text-green-900 dark:text-green-100">
+                        ✅ Your Secret Weapon: AI Browser Agents (FULLY ACTIVE)
                       </div>
-                      <p className="text-sm text-blue-800 dark:text-blue-200">
+                      <p className="text-sm text-green-800 dark:text-green-200">
                         These AI agents use Puppeteer + Google Gemini to automate web browsing and data extraction.
                         Get data competitors can't access and beat the market with fresher information!
                       </p>
-                      <div className="text-xs text-blue-700 dark:text-blue-300">
-                        <strong>Backend Implementation:</strong> All agents are fully coded in <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">server/services/aiBrowserAgent.ts</code>.
-                        Just need to create tRPC endpoints to trigger them.
+                      <div className="text-xs text-green-700 dark:text-green-300">
+                        <strong>Status:</strong> All agents are now fully integrated and ready to use. Click any button above to launch!
                       </div>
                     </div>
                   </div>
@@ -771,15 +833,25 @@ export default function DashboardEnhanced() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => syncYouTube.mutate()}
-                    disabled={syncYouTube.isPending}
+                    onClick={() => scrapeYouTube.mutate({
+                      channelNames: [
+                        "Chris Sain",
+                        "Option Alpha",
+                        "InTheMoney",
+                        "tastylive",
+                        "BenzingaTV",
+                        "The Trading Channel",
+                        "SMB Capital"
+                      ]
+                    })}
+                    disabled={scrapeYouTube.isPending}
                   >
-                    {syncYouTube.isPending ? (
+                    {scrapeYouTube.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     ) : (
-                      <RefreshCw className="h-4 w-4 mr-2" />
+                      <Youtube className="h-4 w-4 mr-2" />
                     )}
-                    Sync Videos
+                    Scrape YouTube Videos
                   </Button>
                 </div>
               </CardHeader>

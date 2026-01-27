@@ -31,10 +31,10 @@ export const appRouter = router({
       const { getRecentNews, insertNewsArticle } = await import("./db");
       const { getMockNewsArticles, convertToNewsArticle } = await import("./services/newsScraper");
       const { analyzeNewsArticle } = await import("./services/sentimentAnalysis");
-      
+
       const mockArticles = getMockNewsArticles();
       const results = [];
-      
+
       for (const article of mockArticles) {
         const analysis = await analyzeNewsArticle(article);
         const newsArticle = {
@@ -46,7 +46,7 @@ export const appRouter = router({
           sectors: JSON.stringify(analysis.sectors),
           rallyIndicator: analysis.rallyIndicator,
         };
-        
+
         try {
           await insertNewsArticle(newsArticle);
           results.push(newsArticle);
@@ -54,9 +54,54 @@ export const appRouter = router({
           console.error("Error inserting news article:", error);
         }
       }
-      
+
       return { success: true, count: results.length };
     }),
+
+    scrapeNews: publicProcedure
+      .input(z.object({ topics: z.array(z.string()) }))
+      .mutation(async ({ input }) => {
+        const { scrapeFinancialNews } = await import("./services/aiBrowserAgent");
+        const { analyzeNewsArticle } = await import("./services/sentimentAnalysis");
+        const { insertNewsArticle } = await import("./db");
+
+        console.log("[News AI Scraper] Starting scrape for topics:", input.topics);
+        const articles = await scrapeFinancialNews(input.topics);
+        console.log("[News AI Scraper] Found", articles.length, "articles");
+
+        let count = 0;
+
+        for (const article of articles) {
+          try {
+            // Normalize the data structure
+            const normalizedArticle = {
+              title: article.title,
+              description: article.description || article.summary || "",
+              url: article.url || article.link || "",
+              source: article.source || "AI Scraped",
+              publishedAt: article.date ? new Date(article.date) : (article.publishedAt ? new Date(article.publishedAt) : new Date()),
+            };
+
+            const analysis = await analyzeNewsArticle(normalizedArticle);
+
+            await insertNewsArticle({
+              ...normalizedArticle,
+              sentiment: analysis.sentiment,
+              potentialTerm: analysis.potentialTerm,
+              aiSummary: analysis.aiSummary,
+              mentionedStocks: JSON.stringify(analysis.mentionedStocks),
+              sectors: JSON.stringify(analysis.sectors),
+              rallyIndicator: analysis.rallyIndicator,
+            });
+            count++;
+            console.log(`[News AI Scraper] Analyzed and saved: ${normalizedArticle.title}`);
+          } catch (error) {
+            console.error("[News AI Scraper] Failed to process article:", error);
+          }
+        }
+
+        return { success: true, count, articles };
+      }),
   }),
   
   // Watchlist management
@@ -99,10 +144,10 @@ export const appRouter = router({
     syncTrades: protectedProcedure.mutation(async () => {
       const { getMockArkTrades, convertToArkTrade } = await import("./services/arkTracker");
       const { insertArkTrade } = await import("./db");
-      
+
       const trades = getMockArkTrades();
       let count = 0;
-      
+
       for (const trade of trades) {
         try {
           await insertArkTrade(convertToArkTrade(trade));
@@ -111,8 +156,41 @@ export const appRouter = router({
           console.error("Error inserting ARK trade:", error);
         }
       }
-      
+
       return { success: true, count };
+    }),
+
+    scrapeTrades: publicProcedure.mutation(async () => {
+      const { scrapeARKTrades } = await import("./services/aiBrowserAgent");
+      const { insertArkTrade } = await import("./db");
+
+      console.log("[ARK AI Scraper] Starting scrape...");
+      const trades = await scrapeARKTrades();
+      console.log("[ARK AI Scraper] Found", trades.length, "trades");
+
+      let count = 0;
+
+      for (const trade of trades) {
+        try {
+          // Normalize the data structure from AI Browser Agent
+          const normalizedTrade = {
+            ticker: trade.ticker || trade.symbol,
+            fund: trade.fund || "ARKK",
+            direction: trade.direction?.toLowerCase() || trade.type?.toLowerCase() || "buy",
+            shares: trade.shares || trade.quantity || 0,
+            date: trade.date ? new Date(trade.date) : new Date(),
+            percentOfEtf: trade.percentOfEtf || trade.weight || null,
+          };
+
+          await insertArkTrade(normalizedTrade);
+          count++;
+          console.log(`[ARK AI Scraper] Saved trade: ${normalizedTrade.ticker} - ${normalizedTrade.direction}`);
+        } catch (error) {
+          console.error("[ARK AI Scraper] Failed to process trade:", error);
+        }
+      }
+
+      return { success: true, count, trades };
     }),
   }),
   
@@ -300,10 +378,10 @@ export const appRouter = router({
     syncVideos: protectedProcedure.mutation(async () => {
       const { getMockYouTubeVideos, analyzeYouTubeVideo } = await import("./services/youtubeTracker");
       const { insertYoutubeVideo } = await import("./db");
-      
+
       const videos = getMockYouTubeVideos();
       let count = 0;
-      
+
       for (const video of videos) {
         try {
           const analysis = await analyzeYouTubeVideo(video);
@@ -327,9 +405,61 @@ export const appRouter = router({
           console.error(`Failed to sync video ${video.videoId}:`, error);
         }
       }
-      
+
       return { success: true, count };
     }),
+
+    scrapeVideos: publicProcedure
+      .input(z.object({ channelNames: z.array(z.string()) }))
+      .mutation(async ({ input }) => {
+        console.log("[YouTube AI Scraper] RECEIVED INPUT:", JSON.stringify(input));
+        const { scrapeYouTubeVideos } = await import("./services/aiBrowserAgent");
+        const { analyzeYouTubeVideo } = await import("./services/youtubeTracker");
+        const { insertYoutubeVideo } = await import("./db");
+
+        console.log("[YouTube AI Scraper] Starting scrape for channels:", input.channelNames);
+        const videos = await scrapeYouTubeVideos(input.channelNames);
+        console.log("[YouTube AI Scraper] Found", videos.length, "videos");
+
+        let count = 0;
+
+        for (const video of videos) {
+          try {
+            // AI Browser Agent returns different field names, normalize them
+            const normalizedVideo = {
+              videoId: video.id || video.videoId || `yt-${Date.now()}-${count}`,
+              title: video.title,
+              description: video.description || "",
+              publishedAt: video.date ? new Date(video.date) : (video.publishedAt ? new Date(video.publishedAt) : new Date()),
+              thumbnailUrl: video.thumbnail || video.thumbnailUrl || "",
+              videoUrl: video.url || video.videoUrl || "",
+            };
+
+            const analysis = await analyzeYouTubeVideo(normalizedVideo);
+            await insertYoutubeVideo({
+              influencerId: 1, // Default influencer for demo
+              videoId: normalizedVideo.videoId,
+              title: normalizedVideo.title,
+              description: normalizedVideo.description,
+              publishedAt: normalizedVideo.publishedAt,
+              thumbnailUrl: normalizedVideo.thumbnailUrl,
+              videoUrl: normalizedVideo.videoUrl,
+              aiSummary: analysis.aiSummary,
+              keyTakeaways: JSON.stringify(analysis.keyTakeaways),
+              mentionedStocks: JSON.stringify(analysis.mentionedStocks),
+              sentiment: analysis.sentiment,
+              sectors: JSON.stringify(analysis.sectors),
+              tradingSignals: JSON.stringify(analysis.tradingSignals),
+            });
+            count++;
+            console.log(`[YouTube AI Scraper] Analyzed and saved: ${normalizedVideo.title}`);
+          } catch (error) {
+            console.error(`[YouTube AI Scraper] Failed to process video:`, error);
+          }
+        }
+
+        return { success: true, count, videos };
+      }),
   }),
 
   // Stock prices
@@ -464,6 +594,18 @@ export const appRouter = router({
       .query(async ({ input }) => {
         const { getScreenerResults } = await import("./db");
         return await getScreenerResults(input || {});
+      }),
+
+    scrapePrice: publicProcedure
+      .input(z.object({ ticker: z.string() }))
+      .mutation(async ({ input }) => {
+        const { getStockPrice } = await import("./services/aiBrowserAgent");
+
+        console.log("[Stock Price AI Scraper] Scraping price for:", input.ticker);
+        const priceData = await getStockPrice(input.ticker);
+        console.log("[Stock Price AI Scraper] Result:", priceData);
+
+        return { success: true, data: priceData };
       }),
   }),
 
