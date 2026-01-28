@@ -336,7 +336,7 @@ export const appRouter = router({
       return await getPredictionPerformanceStats();
     }),
 
-    generateOptions: protectedProcedure
+    generateOptions: publicProcedure
       .input(z.object({ predictionId: z.number() }))
       .mutation(async ({ input }) => {
         const { getPredictionById, updateRallyPredictionWithOptions } = await import("./db");

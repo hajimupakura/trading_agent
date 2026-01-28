@@ -565,7 +565,7 @@ export default function DashboardEnhanced() {
                                     size="sm"
                                     variant="outline"
                                     onClick={() => generateOptions.mutate({ predictionId: pred.id })}
-                                    disabled={isGenerating || !isAuthenticated}
+                                    disabled={isGenerating}
                                   >
                                     {isGenerating ? (
                                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
