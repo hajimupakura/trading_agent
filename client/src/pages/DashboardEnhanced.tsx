@@ -41,6 +41,7 @@ export default function DashboardEnhanced() {
   const { user, loading: authLoading, isAuthenticated } = useAuth();
   const [selectedPrediction, setSelectedPrediction] = useState<any | null>(null);
   const [selectedStock, setSelectedStock] = useState<{ ticker: string; name?: string } | null>(null);
+  const [activeTab, setActiveTab] = useState<string>("overview");
 
   // Fetch data
   const [generatingOptionsFor, setGeneratingOptionsFor] = useState<number | null>(null);
@@ -299,7 +300,7 @@ export default function DashboardEnhanced() {
 
       {/* Main Content */}
       <main className="container mx-auto py-6">
-        <Tabs defaultValue="overview" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="opportunities">Trade Opportunities</TabsTrigger>
@@ -328,7 +329,10 @@ export default function DashboardEnhanced() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card
+                className="cursor-pointer hover:border-primary/50 transition-colors"
+                onClick={() => setActiveTab("opportunities")}
+              >
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">Active Opportunities</CardTitle>
                 </CardHeader>
@@ -338,7 +342,10 @@ export default function DashboardEnhanced() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card
+                className="cursor-pointer hover:border-primary/50 transition-colors"
+                onClick={() => setActiveTab("news")}
+              >
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">News Analyzed</CardTitle>
                 </CardHeader>
@@ -348,7 +355,10 @@ export default function DashboardEnhanced() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card
+                className="cursor-pointer hover:border-primary/50 transition-colors"
+                onClick={() => setActiveTab("watchlist")}
+              >
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">ARK Activity</CardTitle>
                 </CardHeader>
