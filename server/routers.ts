@@ -258,9 +258,29 @@ export const appRouter = router({
     }),
     discover: publicProcedure.mutation(async () => {
       const { discoverEmergingSectors } = await import("./services/sectorDiscovery");
-      const { getRecentNews } = await import("./db");
+      const { getRecentNews, insertSectorMomentum } = await import("./db");
+      
+      console.log("[Sector Discovery] Starting sector analysis...");
       const recentNews = await getRecentNews(50);
       const sectors = await discoverEmergingSectors(recentNews);
+      
+      console.log(`[Sector Discovery] Found ${sectors.length} sectors`);
+      
+      // Save each sector to database
+      for (const sector of sectors) {
+        await insertSectorMomentum({
+          sector: sector.name,
+          date: new Date(),
+          momentum: sector.momentum,
+          newsCount: sector.newsCount,
+          topStocks: JSON.stringify(sector.relatedStocks),
+          rallyProbability: sector.confidence,
+          isEmerging: sector.confidence >= 70,
+          notes: sector.description,
+        });
+      }
+      
+      console.log(`[Sector Discovery] Saved ${sectors.length} sectors to database`);
       return { sectors, count: sectors.length };
     }),
   }),
