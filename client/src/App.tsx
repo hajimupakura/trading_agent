@@ -14,6 +14,7 @@ const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const DashboardEnhanced = lazy(() => import("@/pages/DashboardEnhanced"));
 const Performance = lazy(() => import("@/pages/PerformanceAnalytics"));
 const Screener = lazy(() => import("@/pages/StockScreener"));
+const StockAnalyzer = lazy(() => import("@/pages/StockAnalyzer"));
 
 // Loading fallback component
 const PageLoader = () => (
@@ -32,6 +33,7 @@ function Router() {
         <Route path={"/v1"} component={Dashboard} />
         <Route path={"/performance"} component={Performance} />
         <Route path={"/screener"} component={Screener} />
+        <Route path={"/analyzer"} component={StockAnalyzer} />
         <Route path={"/old"} component={Home} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}

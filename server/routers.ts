@@ -274,6 +274,7 @@ export const appRouter = router({
     generate: publicProcedure.mutation(async () => {
       const { predictUpcomingRallies, extractHistoricalPatterns } = await import("./services/rallyPrediction");
       const { getRecentNews, getHistoricalRallies, insertRallyPrediction } = await import("./db");
+      const { analyzeRelatedStocksForPrediction, getUniqueRelatedStocks } = await import("./services/relatedStocksService");
       
       console.log("[Rally Predictions] Starting generation...");
       
@@ -304,6 +305,12 @@ export const appRouter = router({
           }
         }
 
+        // Analyze related stocks for this prediction
+        console.log(`[Rally Predictions] Analyzing related stocks for ${pred.sector}...`);
+        const relatedStocksMap = await analyzeRelatedStocksForPrediction(pred.recommendedStocks || []);
+        const relatedStocks = getUniqueRelatedStocks(relatedStocksMap);
+        console.log(`[Rally Predictions] Found ${relatedStocks.length} related stocks`);
+
         await insertRallyPrediction({
           sector: pred.sector,
           name: `Predicted ${pred.sector} ${opportunityLabel}`,
@@ -314,7 +321,7 @@ export const appRouter = router({
           keyStocks: JSON.stringify(pred.recommendedStocks),
           initialPrices: JSON.stringify(initialPrices),
           backtestStatus: 'pending',
-          // Store additional fields in catalysts as JSON
+          // Store additional fields in catalysts as JSON (including related stocks)
           catalysts: JSON.stringify({
             opportunityType: pred.opportunityType || (isPut ? "put" : "call"),
             direction: pred.direction || (isPut ? "down" : "up"),
@@ -322,6 +329,7 @@ export const appRouter = router({
             entryTiming: pred.entryTiming,
             exitStrategy: pred.exitStrategy,
             reasoning: pred.reasoning, // Also store here for easy access
+            relatedStocks: relatedStocks.slice(0, 10), // Store top 10 related stocks
           }),
         });
       }
@@ -740,6 +748,49 @@ export const appRouter = router({
       .query(async ({ input }) => {
         const { getRSI } = await import("./services/technicalAnalysisService");
         return await getRSI(input.symbol, input.interval, input.period, input.from, input.to);
+      }),
+  }),
+
+  // Related Stocks Analysis
+  relatedStocks: router({
+    // Standalone mode: analyze any ticker
+    analyze: publicProcedure
+      .input(z.object({
+        ticker: z.string(),
+        forceRefresh: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { analyzeRelatedStocks } = await import("./services/relatedStocksService");
+        console.log(`[Related Stocks API] Analyzing relationships for ${input.ticker}`);
+        return await analyzeRelatedStocks(input.ticker, input.forceRefresh || false);
+      }),
+    
+    // Get cached relationships for a ticker
+    getRelationships: publicProcedure
+      .input(z.object({ ticker: z.string() }))
+      .query(async ({ input }) => {
+        const { analyzeRelatedStocks } = await import("./services/relatedStocksService");
+        return await analyzeRelatedStocks(input.ticker, false);
+      }),
+    
+    // Batch analyze for multiple tickers (used in predictions)
+    analyzeMultiple: publicProcedure
+      .input(z.object({
+        tickers: z.array(z.string()),
+        forceRefresh: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { analyzeRelatedStocksForPrediction } = await import("./services/relatedStocksService");
+        console.log(`[Related Stocks API] Batch analyzing: ${input.tickers.join(", ")}`);
+        const results = await analyzeRelatedStocksForPrediction(input.tickers);
+        
+        // Convert Map to plain object for JSON serialization
+        const resultsObj: Record<string, any[]> = {};
+        for (const [key, value] of results.entries()) {
+          resultsObj[key] = value;
+        }
+        
+        return resultsObj;
       }),
   }),
 });

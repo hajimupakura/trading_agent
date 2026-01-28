@@ -197,6 +197,11 @@ export default function DashboardEnhanced() {
                 🔍 Screener
               </Button>
             </Link>
+            <Link href="/analyzer">
+              <Button variant="ghost" size="sm">
+                🔗 Stock Analyzer
+              </Button>
+            </Link>
             <Link href="/performance">
               <Button variant="ghost" size="sm">
                 📊 Performance
@@ -537,6 +542,40 @@ export default function DashboardEnhanced() {
                                         </Badge>
                                       ))}
                                     </div>
+                                  </div>
+                                )}
+
+                                {/* Related Stocks Section */}
+                                {catalysts.relatedStocks && catalysts.relatedStocks.length > 0 && (
+                                  <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <svg className="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                      </svg>
+                                      <span className="text-xs font-semibold text-blue-900 dark:text-blue-100">Related Stocks (Ripple Effect)</span>
+                                    </div>
+                                    <div className="text-xs text-muted-foreground mb-2">
+                                      These stocks may also benefit from this opportunity:
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {catalysts.relatedStocks.slice(0, 8).map((relStock: any, i: number) => (
+                                        <Badge 
+                                          key={i} 
+                                          variant="secondary" 
+                                          className="text-xs font-mono bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 border-blue-300 dark:border-blue-700"
+                                        >
+                                          {relStock.ticker} 
+                                          <span className="ml-1 text-blue-600 dark:text-blue-300 font-bold">
+                                            {relStock.strengthScore}%
+                                          </span>
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                    {catalysts.relatedStocks.length > 8 && (
+                                      <div className="text-xs text-muted-foreground mt-2">
+                                        +{catalysts.relatedStocks.length - 8} more stocks affected
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>

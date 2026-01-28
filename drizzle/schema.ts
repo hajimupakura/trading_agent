@@ -13,6 +13,7 @@ export const alertThresholdEnum = pgEnum("alert_threshold", ["all", "medium_high
 export const momentumEnum = pgEnum("momentum", ["very_strong", "strong", "moderate", "weak", "declining"]);
 export const predictionOutcomeEnum = pgEnum("prediction_outcome", ["success", "failure", "neutral"]);
 export const backtestStatusEnum = pgEnum("backtest_status", ["pending", "processing", "completed"]);
+export const relationshipTypeEnum = pgEnum("relationship_type", ["competitor", "supplier", "customer", "supply_chain", "complementary", "sector_peer"]);
 
 /**
  * Core user table backing auth flow.
@@ -249,6 +250,26 @@ export const stockHistoricalCandles = pgTable("stock_historical_candles", {
 
 export type StockHistoricalCandle = typeof stockHistoricalCandles.$inferSelect;
 export type InsertStockHistoricalCandle = typeof stockHistoricalCandles.$inferInsert;
+
+/**
+ * Stock relationships - tracks how stocks affect each other
+ */
+export const stockRelationships = pgTable("stock_relationships", {
+  id: serial("id").primaryKey(),
+  primaryTicker: varchar("primary_ticker", { length: 32 }).notNull(), // The main stock (e.g., NVDA)
+  relatedTicker: varchar("related_ticker", { length: 32 }).notNull(), // The affected stock (e.g., ASML)
+  relationshipType: relationshipTypeEnum("relationship_type").notNull(),
+  strengthScore: integer("strength_score").notNull(), // 0-100, how strongly related
+  description: text("description"), // AI-generated explanation
+  analysisSource: varchar("analysis_source", { length: 64 }).default("ai_analysis").notNull(), // ai_analysis, news, manual
+  lastUpdated: timestamp("last_updated").defaultNow().notNull(),
+  newsBasedEvidence: text("news_based_evidence"), // Recent news that confirms relationship
+  historicalCorrelation: varchar("historical_correlation", { length: 16 }), // e.g., "0.85" for 85% correlation
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type StockRelationship = typeof stockRelationships.$inferSelect;
+export type InsertStockRelationship = typeof stockRelationships.$inferInsert;
 
 
 // Re-export YouTube tables
