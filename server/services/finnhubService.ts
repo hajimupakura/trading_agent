@@ -225,42 +225,40 @@ export interface FinnhubFinancials {
 }
 
 /**
- * Get basic financial data for a stock
+ * Get basic financial data for a stock using direct HTTP request
  */
 export async function getFinnhubBasicFinancials(symbol: string): Promise<FinnhubFinancials | null> {
-  const api = getApi();
-  if (!api) {
-    console.warn("[Finnhub] API not initialized, skipping financials request");
+  try {
+    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${symbol}&metric=all&token=${apiKey}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.error(`[Finnhub] HTTP error fetching financials for ${symbol}: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (!data || !data.metric || Object.keys(data.metric).length === 0) {
+      console.warn(`[Finnhub] No financials data found for ${symbol}`);
+      return null;
+    }
+
+    const metric = data.metric;
+    return {
+      symbol,
+      marketCap: metric.marketCapitalization || 0,
+      peRatio: metric.peNormalizedAnnual || 0,
+      eps: metric.epsTTM || 0,
+      dividendYield: metric.dividendYieldIndicatedAnnual || 0,
+      beta: metric.beta || 0,
+      high52Week: metric["52WeekHigh"] || 0,
+      low52Week: metric["52WeekLow"] || 0,
+    };
+  } catch (error) {
+    console.error(`[Finnhub] Error fetching financials for ${symbol}:`, error);
     return null;
   }
-  
-  return new Promise((resolve) => {
-    api.companyBasicFinancials(symbol, (error: any, data: any) => {
-      if (error) {
-        console.error(`[Finnhub] Error fetching financials for ${symbol}:`, error);
-        resolve(null);
-        return;
-      }
-
-      if (!data || Object.keys(data).length === 0) {
-        console.warn(`[Finnhub] No financials data found for ${symbol}`);
-        resolve(null);
-        return;
-      }
-
-      const metric = data.metric || {};
-      resolve({
-        symbol,
-        marketCap: metric.marketCapitalization || 0,
-        peRatio: metric["peNormalizedAnnual"] || 0,
-        eps: metric["epsGrowth5Y"] || 0, // Using 5Y growth as a proxy, you might want a different EPS field
-        dividendYield: metric.dividendYieldIndicatedAnnual || 0,
-        beta: metric.beta || 0,
-        high52Week: metric["52WeekHigh"] || 0,
-        low52Week: metric["52WeekLow"] || 0,
-      });
-    });
-  });
 }
 
 
