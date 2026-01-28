@@ -196,10 +196,20 @@ Return ONLY a valid JSON array with this exact structure:
 NO MARKDOWN. NO EXPLANATIONS. JUST THE JSON ARRAY.`;
 
   try {
-    const response = await invokeLLM(prompt);
+    const response = await invokeLLM({
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    });
+    
+    // Extract text from response
+    const responseText = response.choices?.[0]?.message?.content || "";
     
     // Clean response and parse JSON
-    let jsonText = response.trim();
+    let jsonText = responseText.trim();
     
     // Remove markdown code blocks if present
     jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
