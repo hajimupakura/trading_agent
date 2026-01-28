@@ -63,11 +63,14 @@ export async function analyzeRelatedStocks(
   // Store results in database
   await storeRelationships(ticker, aiAnalysis);
   
+  // Fetch back from database to ensure consistency
+  const storedRelationships = await getRelatedStocksFromDB(ticker, 24);
+  
   return {
     primaryTicker: ticker,
-    relatedStocks: aiAnalysis,
+    relatedStocks: storedRelationships,
     analysisTimestamp: new Date(),
-    totalRelationships: aiAnalysis.length,
+    totalRelationships: storedRelationships.length,
   };
 }
 
