@@ -256,7 +256,7 @@ export const appRouter = router({
       const { getLatestSectorMomentum } = await import("./db");
       return await getLatestSectorMomentum();
     }),
-    discover: protectedProcedure.mutation(async () => {
+    discover: publicProcedure.mutation(async () => {
       const { discoverEmergingSectors } = await import("./services/sectorDiscovery");
       const { getRecentNews } = await import("./db");
       const recentNews = await getRecentNews(50);
