@@ -352,8 +352,9 @@ async function executeAction(page: Page, action: any): Promise<string> {
 export async function scrapeFinancialNews(topics: string[] = []): Promise<any[]> {
   const topicsStr = topics.length > 0 ? topics.join(", ") : "AI stocks, quantum computing, rare earth metals";
 
-  console.log(`[News Scraper] Starting direct HTML scrape for topics: ${topicsStr}`);
+  console.log(`[News Scraper] Starting scrape for topics: ${topicsStr}`);
 
+  // Try Puppeteer first, fallback to fetch if Chrome is not available
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
@@ -410,12 +411,48 @@ export async function scrapeFinancialNews(topics: string[] = []): Promise<any[]>
 
     await page.close();
 
-    console.log(`[News Scraper] Successfully extracted ${articles.length} articles via direct HTML`);
+    console.log(`[News Scraper] Successfully extracted ${articles.length} articles via Puppeteer`);
     return articles;
 
   } catch (error: any) {
-    console.error(`[News Scraper] Direct HTML scrape failed:`, error.message);
-    return [];
+    console.warn(`[News Scraper] Puppeteer scrape failed (${error.message}), trying fetch fallback...`);
+
+    // Fallback: Use simple fetch to get Yahoo Finance RSS feed
+    try {
+      const response = await fetch('https://finance.yahoo.com/rss/topstories');
+      const xml = await response.text();
+
+      // Parse RSS XML manually (simple approach)
+      const articles: any[] = [];
+      const itemMatches = Array.from(xml.matchAll(/<item>(.*?)<\/item>/gs));
+
+      for (const match of itemMatches) {
+        const item = match[1];
+        const titleMatch = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/);
+        const linkMatch = item.match(/<link>(.*?)<\/link>/);
+        const descMatch = item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/);
+        const pubDateMatch = item.match(/<pubDate>(.*?)<\/pubDate>/);
+
+        if (titleMatch && linkMatch) {
+          articles.push({
+            title: titleMatch[1],
+            summary: descMatch ? descMatch[1].replace(/<[^>]*>/g, '') : titleMatch[1],
+            url: linkMatch[1],
+            source: "Yahoo Finance (RSS)",
+            date: pubDateMatch ? pubDateMatch[1] : "Recently"
+          });
+        }
+
+        if (articles.length >= 10) break; // Limit to 10
+      }
+
+      console.log(`[News Scraper] Successfully extracted ${articles.length} articles via RSS fallback`);
+      return articles;
+
+    } catch (fallbackError: any) {
+      console.error(`[News Scraper] Fallback also failed:`, fallbackError.message);
+      return [];
+    }
   }
 }
 
