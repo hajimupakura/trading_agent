@@ -465,6 +465,14 @@ export async function updateRallyPredictionWithOptions(
     entryStrategy: string;
     exitStrategy: string;
     riskAssessment: string;
+    // Live market data
+    optionPremium?: string;
+    optionGreeks?: string;
+    currentStockPrice?: string;
+    breakEvenPrice?: string;
+    probabilityOfProfit?: number;
+    openInterest?: number;
+    impliedVolatility?: string;
   }
 ) {
   const db = await getDb();
@@ -478,6 +486,15 @@ export async function updateRallyPredictionWithOptions(
       entryStrategy: options.entryStrategy,
       exitStrategy: options.exitStrategy,
       riskAssessment: options.riskAssessment,
+      // Live market data
+      optionPremium: options.optionPremium,
+      optionGreeks: options.optionGreeks,
+      currentStockPrice: options.currentStockPrice,
+      breakEvenPrice: options.breakEvenPrice,
+      probabilityOfProfit: options.probabilityOfProfit,
+      openInterest: options.openInterest,
+      impliedVolatility: options.impliedVolatility,
+      optionsDataFetchedAt: new Date(),
     })
     .where(eq(rallyEvents.id, predictionId));
 }

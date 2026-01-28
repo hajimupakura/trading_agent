@@ -405,6 +405,7 @@ export function detectEarlySignals(
 
 /**
  * Generate specific options trading recommendations for a prediction
+ * Uses real-time market data from Tradier API
  * Includes strike prices, expiration dates, entry/exit strategy, and risk assessment
  */
 export async function generateOptionsRecommendation(
@@ -416,58 +417,143 @@ export async function generateOptionsRecommendation(
   entryStrategy: string;
   exitStrategy: string;
   riskAssessment: string;
+  // Live market data
+  optionPremium?: string;
+  optionGreeks?: string;
+  currentStockPrice?: string;
+  breakEvenPrice?: string;
+  probabilityOfProfit?: number;
+  openInterest?: number;
+  impliedVolatility?: string;
 }> {
   try {
+    // Import Tradier service
+    const {
+      getTradierQuote,
+      recommendOption,
+      formatOptionDisplay,
+      calculateBreakEven,
+      calculateProbabilityOfProfit,
+    } = await import("./tradierService");
+
+    // Get the primary stock from recommendations
+    const primaryStock = prediction.recommendedStocks[0];
+    
+    if (!primaryStock) {
+      throw new Error("No stock ticker provided in prediction");
+    }
+
+    console.log(`[Options] Fetching live data for ${primaryStock}...`);
+
+    // Get current stock price
+    const quote = await getTradierQuote(primaryStock);
+    
+    if (!quote) {
+      console.warn(`[Options] Could not fetch live data for ${primaryStock}, falling back to AI-only recommendation`);
+      return generateFallbackRecommendation(prediction);
+    }
+
+    console.log(`[Options] Current price for ${primaryStock}: $${quote.last}`);
+
+    // Get recommended option contract based on confidence and timeframe
+    const optionType = prediction.opportunityType === "call" ? "call" : "put";
+    const recommendation = await recommendOption(
+      primaryStock,
+      optionType,
+      prediction.confidence,
+      prediction.timeframe
+    );
+
+    if (!recommendation || !recommendation.contract) {
+      console.warn(`[Options] No suitable options found for ${primaryStock}`);
+      return generateFallbackRecommendation(prediction);
+    }
+
+    const contract = recommendation.contract;
+    console.log(`[Options] Found contract: ${contract.symbol} Strike: $${contract.strike}`);
+
+    // Calculate key metrics
+    const premium = (contract.bid + contract.ask) / 2 || contract.last;
+    const breakEven = calculateBreakEven(contract);
+    const probability = calculateProbabilityOfProfit(contract, quote.last);
+    const cost = premium * 100; // Cost per contract
+
+    // Format Greeks for storage
+    const greeks = {
+      delta: contract.delta,
+      gamma: contract.gamma,
+      theta: contract.theta,
+      vega: contract.vega,
+      rho: contract.rho,
+    };
+
+    // Now use AI to generate detailed strategy with REAL market data
     const response = await invokeLLM({
       messages: [
         {
           role: "system",
-          content: `You are an expert options trader providing specific, actionable options trading recommendations.
+          content: `You are an expert options trader providing specific, actionable options trading recommendations based on REAL MARKET DATA.
 
 DISCLAIMER: This is for a personal trading system. All recommendations are educational and for personal use only.
 
-Your task: Given a market prediction, provide specific options trading recommendations including:
-1. Strike price selection (ATM, OTM, ITM with rationale)
-2. Expiration date (with reasoning based on catalyst timing)
-3. Entry strategy (when to enter, what price points)
-4. Exit strategy (profit targets, stop losses, roll strategy)
-5. Risk assessment (position sizing, max loss, probability of profit)
+Your task: Given a market prediction and LIVE OPTIONS DATA, provide a detailed trading strategy.
 
-Key principles for options recommendations:
-- For high-confidence predictions (>75%): Suggest closer to ATM (at-the-money) with longer expiration
-- For moderate confidence (50-75%): Suggest OTM (out-of-the-money) with medium expiration
-- For lower confidence (<50%): Suggest further OTM with shorter expiration or spreads to limit risk
-- Always consider upcoming earnings dates, Fed meetings, economic data releases
-- Suggest specific expiration dates based on the predicted timeframe
-- Include position sizing as % of portfolio (conservative approach)
-- Always provide exit strategy with specific profit targets and stop losses`,
+Key principles:
+- Use the REAL market data provided (current prices, strikes, premiums, Greeks)
+- Explain WHY this specific contract makes sense
+- Provide concrete entry/exit conditions
+- Calculate real risk/reward based on actual premiums
+- Consider the Greeks (Delta, Theta, etc.) in your analysis`,
         },
         {
           role: "user",
-          content: `Generate specific options trading recommendations for this prediction:
+          content: `Generate a detailed options trading strategy for this prediction:
 
-**Prediction Details:**
+**LIVE MARKET DATA (from Tradier API):**
+- Stock: ${primaryStock}
+- Current Price: $${quote.last.toFixed(2)}
+- Change Today: ${quote.changePercent.toFixed(2)}%
+- Volume: ${quote.volume.toLocaleString()}
+
+**RECOMMENDED OPTION CONTRACT:**
+- Type: ${contract.type.toUpperCase()}
+- Strike: $${contract.strike}
+- Expiration: ${contract.expiration}
+- Premium: $${premium.toFixed(2)} (${cost.toFixed(0)} per contract)
+- Break-even: $${breakEven.toFixed(2)}
+- Open Interest: ${contract.openInterest.toLocaleString()}
+- Volume Today: ${contract.volume}
+- Implied Volatility: ${contract.impliedVolatility ? (contract.impliedVolatility * 100).toFixed(1) + "%" : "N/A"}
+
+**GREEKS:**
+- Delta: ${contract.delta ? contract.delta.toFixed(3) : "N/A"} (sensitivity to price change)
+- Theta: ${contract.theta ? contract.theta.toFixed(3) : "N/A"} (daily time decay)
+- Vega: ${contract.vega ? contract.vega.toFixed(3) : "N/A"} (sensitivity to volatility)
+- Gamma: ${contract.gamma ? contract.gamma.toFixed(3) : "N/A"}
+
+**PREDICTION DETAILS:**
 - Sector: ${prediction.sector}
-- Opportunity Type: ${prediction.opportunityType === 'call' ? 'CALL (Bullish/Upside)' : 'PUT (Bearish/Downside)'}
 - Direction: ${prediction.direction.toUpperCase()}
 - Confidence: ${prediction.confidence}%
 - Timeframe: ${prediction.timeframe}
-- Key Stocks: ${prediction.recommendedStocks.join(', ')}
+- Key Signals: ${prediction.earlySignals.join('; ')}
 - Reasoning: ${prediction.reasoning}
-- Early Signals: ${prediction.earlySignals.join('; ')}
 - Entry Timing: ${prediction.entryTiming}
+
+**ALTERNATIVE STRIKES AVAILABLE:**
+${recommendation.alternativeContracts.slice(0, 3).map(alt => 
+  `- $${alt.strike} strike: $${((alt.bid + alt.ask) / 2 || alt.last).toFixed(2)} premium, OI: ${alt.openInterest}`
+).join('\n')}
 
 Provide recommendations in this exact JSON format:
 {
-  "optionsStrategy": "BUY CALLS on [TICKER] - detailed strategy with strike/exp reasoning",
-  "suggestedStrike": "For [TICKER]: ATM ($XXX), OTM ($XXX), or Spread ($XXX/$XXX) with detailed rationale for each stock",
-  "suggestedExpiration": "Suggested expiration: [DATE] (e.g., Feb 21, 2026 or March monthlies). Explain timing based on catalyst timeline and theta decay",
-  "entryStrategy": "Enter when: [specific conditions]. If stock is at $XXX, enter. Wait for: [technical levels]. Position size: X% of portfolio. DCA strategy if applicable",
-  "exitStrategy": "Take profits at: [specific targets]. Stop loss at: [specific level]. Roll strategy if thesis intact but more time needed. Close by: [specific conditions]",
-  "riskAssessment": "Max loss: $XXX per contract or X% of position. Probability of profit: ~XX%. Key risks: [list]. Position sizing: X contracts or X% portfolio. Risk/reward: 1:X"
-}
-
-Be specific with dollar amounts, dates, and percentages. This is for personal trading only.`,
+  "optionsStrategy": "Detailed strategy explaining why this specific contract (${contract.type.toUpperCase()} $${contract.strike} exp ${contract.expiration}) is recommended. Explain the logic based on confidence level, Greeks, and premium cost.",
+  "suggestedStrike": "Primary: $${contract.strike} (reasoning based on moneyness and confidence). Alternatives: [list 2-3 alternative strikes with brief rationale]",
+  "suggestedExpiration": "${contract.expiration} (${Math.ceil((new Date(contract.expiration).getTime() - Date.now()) / (1000 * 60 * 60 * 24))} days out). Explain why this timeframe aligns with the ${prediction.timeframe} prediction and theta decay considerations.",
+  "entryStrategy": "Based on current price of $${quote.last.toFixed(2)}: [Provide specific entry conditions]. Consider: current premium of $${premium.toFixed(2)}, break-even at $${breakEven.toFixed(2)}, and delta of ${contract.delta?.toFixed(3) || 'N/A'}. Position sizing: [specific % of portfolio or number of contracts]",
+  "exitStrategy": "Profit targets: [specific prices or % gains]. Stop loss: [specific conditions]. Given theta of ${contract.theta?.toFixed(3) || 'N/A'}, explain time-based exits. Roll strategy if needed.",
+  "riskAssessment": "Max loss per contract: $${cost.toFixed(0)}. Probability of profit: ~${probability}% (based on delta). Break-even requires stock to reach $${breakEven.toFixed(2)} (${((breakEven - quote.last) / quote.last * 100).toFixed(1)}% move). IV of ${contract.impliedVolatility ? (contract.impliedVolatility * 100).toFixed(1) + '%' : 'N/A'} indicates [high/medium/low] volatility. [Assess overall risk level and position sizing]"
+}`,
         },
       ],
       response_format: {
@@ -483,22 +569,46 @@ Be specific with dollar amounts, dates, and percentages. This is for personal tr
     const result = JSON.parse(content);
     
     return {
-      optionsStrategy: result.optionsStrategy || "No strategy generated",
-      suggestedStrike: result.suggestedStrike || "Strike analysis pending",
-      suggestedExpiration: result.suggestedExpiration || "Expiration analysis pending",
-      entryStrategy: result.entryStrategy || "Entry timing analysis pending",
-      exitStrategy: result.exitStrategy || result.exitStrategy || prediction.exitStrategy,
-      riskAssessment: result.riskAssessment || "Risk analysis pending",
+      optionsStrategy: result.optionsStrategy || "Strategy analysis pending",
+      suggestedStrike: result.suggestedStrike || `$${contract.strike}`,
+      suggestedExpiration: result.suggestedExpiration || contract.expiration,
+      entryStrategy: result.entryStrategy || prediction.entryTiming,
+      exitStrategy: result.exitStrategy || prediction.exitStrategy,
+      riskAssessment: result.riskAssessment || `Max loss: $${cost.toFixed(0)} per contract`,
+      // Live market data
+      optionPremium: `$${premium.toFixed(2)}`,
+      optionGreeks: JSON.stringify(greeks),
+      currentStockPrice: `$${quote.last.toFixed(2)}`,
+      breakEvenPrice: `$${breakEven.toFixed(2)}`,
+      probabilityOfProfit: probability,
+      openInterest: contract.openInterest,
+      impliedVolatility: contract.impliedVolatility ? `${(contract.impliedVolatility * 100).toFixed(1)}%` : undefined,
     };
   } catch (error) {
     console.error("[Options Recommendation] ERROR:", error);
-    return {
-      optionsStrategy: `${prediction.opportunityType === 'call' ? 'CALL' : 'PUT'} options on ${prediction.recommendedStocks.join(', ')}`,
-      suggestedStrike: "Analysis pending - check back soon",
-      suggestedExpiration: `${prediction.timeframe} out`,
-      entryStrategy: prediction.entryTiming,
-      exitStrategy: prediction.exitStrategy,
-      riskAssessment: `Confidence: ${prediction.confidence}%. Risk level: ${prediction.confidence > 75 ? 'Low-Moderate' : prediction.confidence > 50 ? 'Moderate' : 'Moderate-High'}`,
-    };
+    return generateFallbackRecommendation(prediction);
   }
+}
+
+/**
+ * Fallback recommendation when live data is unavailable
+ */
+function generateFallbackRecommendation(prediction: RallyPrediction): {
+  optionsStrategy: string;
+  suggestedStrike: string;
+  suggestedExpiration: string;
+  entryStrategy: string;
+  exitStrategy: string;
+  riskAssessment: string;
+} {
+  const optionType = prediction.opportunityType === "call" ? "CALL" : "PUT";
+  
+  return {
+    optionsStrategy: `${optionType} options on ${prediction.recommendedStocks.join(', ')}. Note: Live market data unavailable - verify all details with your broker before trading.`,
+    suggestedStrike: "Check current stock price and select strikes based on your risk tolerance: ATM for high confidence, OTM for lower confidence",
+    suggestedExpiration: `${prediction.timeframe} out. Suggest adding 2-week buffer to avoid theta decay. Use monthly expirations for better liquidity.`,
+    entryStrategy: prediction.entryTiming + ". Verify current option premiums and select liquid contracts (open interest >100).",
+    exitStrategy: prediction.exitStrategy + ". Set stop loss if underlying moves against you by 10-15%.",
+    riskAssessment: `Confidence: ${prediction.confidence}%. Risk level: ${prediction.confidence > 75 ? 'Low-Moderate' : prediction.confidence > 50 ? 'Moderate' : 'Moderate-High'}. Always verify live data before trading.`,
+  };
 }

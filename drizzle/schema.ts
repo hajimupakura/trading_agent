@@ -121,6 +121,15 @@ export const rallyEvents = pgTable("rally_events", {
   entryStrategy: text("entry_strategy"), // When/how to enter
   exitStrategy: text("exit_strategy"), // Profit targets and stop losses
   riskAssessment: text("risk_assessment"), // Risk level and mitigation
+  // Live market data from Tradier
+  optionPremium: text("option_premium"), // Current option cost
+  optionGreeks: text("option_greeks"), // Delta, Theta, Vega, Gamma as JSON
+  currentStockPrice: text("current_stock_price"), // Stock price at time of analysis
+  breakEvenPrice: text("break_even_price"), // Calculated break-even
+  probabilityOfProfit: integer("probability_of_profit"), // Percentage
+  openInterest: integer("open_interest"), // Liquidity indicator
+  impliedVolatility: text("implied_volatility"), // IV at time of analysis
+  optionsDataFetchedAt: timestamp("options_data_fetched_at"), // When live data was pulled
 });
 
 export type RallyEvent = typeof rallyEvents.$inferSelect;

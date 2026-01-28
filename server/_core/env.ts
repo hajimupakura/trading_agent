@@ -8,4 +8,7 @@ export const ENV = {
   forgeApiUrl: "https://generativelanguage.googleapis.com",
   forgeApiKey: process.env.GEMINI_API_KEY ?? "",
   llmModel: process.env.LLM_MODEL ?? "gemini-2.5-flash",
+  // Tradier API for real-time options data
+  tradierApiKey: process.env.TRADIER_API_KEY ?? "",
+  tradierApiUrl: process.env.TRADIER_API_URL ?? "https://api.tradier.com/v1/markets",
 };
