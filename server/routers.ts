@@ -690,6 +690,57 @@ export const appRouter = router({
         return await getScreenerResults(input || {});
       }),
 
+    populateScreener: publicProcedure.mutation(async () => {
+      const { insertStockFinancials } = await import("./db");
+      const { getFinnhubBasicFinancials } = await import("./services/finnhubService");
+
+      // Popular stocks to populate the screener
+      const popularStocks = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD", "INTC", "NFLX",
+        "DIS", "BA", "JPM", "V", "MA", "WMT", "JNJ", "PG", "KO", "PEP",
+        "CSCO", "ORCL", "IBM", "CRM", "ADBE", "PYPL", "SQ", "SHOP", "UBER", "ABNB",
+        "COIN", "PLTR", "SNOW", "CRWD", "ZS", "NET", "DDOG", "MDB", "TEAM", "NOW",
+        "XOM", "CVX", "COP", "SLB", "HAL", "MRO", "DVN", "OXY", "EOG", "PSX",
+        "LMT", "RTX", "NOC", "GD", "BA", "TDG", "HWM", "HEI", "AVAV", "KTOS",
+        "LLY", "UNH", "ABBV", "PFE", "MRK", "TMO", "ABT", "DHR", "BMY", "AMGN",
+        "TSMC", "ASML", "AVGO", "QCOM", "TXN", "AMAT", "LRCX", "KLAC", "MRVL", "MU"
+      ];
+
+      console.log(`[Stock Screener] Populating with ${popularStocks.length} stocks...`);
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const ticker of popularStocks) {
+        try {
+          const financials = await getFinnhubBasicFinancials(ticker);
+
+          if (financials && financials.marketCap) {
+            await insertStockFinancials({
+              ticker,
+              marketCap: String(financials.marketCap),
+              peRatio: String(financials.peRatio || ""),
+              eps: String(financials.eps || ""),
+              dividendYield: String(financials.dividendYield || ""),
+              beta: String(financials.beta || ""),
+              high52Week: String(financials.high52Week || ""),
+              low52Week: String(financials.low52Week || ""),
+              lastUpdated: new Date(),
+            });
+            successCount++;
+          }
+
+          // Rate limit: wait 200ms between requests
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (error) {
+          console.error(`[Stock Screener] Error fetching ${ticker}:`, error);
+          errorCount++;
+        }
+      }
+
+      console.log(`[Stock Screener] Population complete: ${successCount} success, ${errorCount} errors`);
+      return { success: successCount, errors: errorCount, total: popularStocks.length };
+    }),
+
     scrapePrice: publicProcedure
       .input(z.object({ ticker: z.string() }))
       .mutation(async ({ input }) => {
@@ -806,9 +857,9 @@ export const appRouter = router({
         
         // Convert Map to plain object for JSON serialization
         const resultsObj: Record<string, any[]> = {};
-        for (const [key, value] of results.entries()) {
+        Array.from(results.entries()).forEach(([key, value]) => {
           resultsObj[key] = value;
-        }
+        });
         
         return resultsObj;
       }),

@@ -386,6 +386,18 @@ export default function DashboardEnhanced() {
                                           momentum === "moderate" ? "Moderate" :
                                           momentum === "weak" ? "Weak" : "Declining";
 
+                      // Parse topStocks from JSON string
+                      let tickers: string[] = [];
+                      try {
+                        if (sector.topStocks) {
+                          tickers = typeof sector.topStocks === 'string'
+                            ? JSON.parse(sector.topStocks)
+                            : sector.topStocks;
+                        }
+                      } catch (e) {
+                        console.error('Failed to parse topStocks:', e);
+                      }
+
                       return (
                         <div key={sector.id || sector.sector} className="p-4 border border-border rounded-lg hover:border-primary/50 transition-colors">
                           <div className="text-sm font-medium text-muted-foreground mb-2 truncate" title={sector.sector}>{sector.sector}</div>
@@ -408,6 +420,26 @@ export default function DashboardEnhanced() {
                           {sector.newsCount > 0 && (
                             <div className="text-xs text-muted-foreground mt-1">
                               {sector.newsCount} articles
+                            </div>
+                          )}
+                          {tickers.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {tickers.slice(0, 4).map((ticker: string, idx: number) => (
+                                <span
+                                  key={idx}
+                                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary"
+                                >
+                                  {ticker}
+                                </span>
+                              ))}
+                              {tickers.length > 4 && (
+                                <span
+                                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground"
+                                  title={tickers.slice(4).join(', ')}
+                                >
+                                  +{tickers.length - 4}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>

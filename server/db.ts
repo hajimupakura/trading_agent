@@ -261,7 +261,10 @@ export async function getScreenerResults(filters: { minMarketCap?: number, maxPe
     marketCap: stockFinancials.marketCap,
     peRatio: stockFinancials.peRatio,
     eps: stockFinancials.eps,
-    // Add other fields you want to display in the screener results
+    dividendYield: stockFinancials.dividendYield,
+    beta: stockFinancials.beta,
+    high52Week: stockFinancials.high52Week,
+    low52Week: stockFinancials.low52Week,
   })
   .from(stockFinancials)
   .$dynamic();
@@ -345,7 +348,8 @@ export async function upsertUserPreferences(prefs: InsertUserPreference) {
   if (!db) throw new Error("Database not available");
   
   return await db.insert(userPreferences).values(prefs)
-    .onDuplicateKeyUpdate({
+    .onConflictDoUpdate({
+      target: userPreferences.userId,
       set: {
         refreshSchedule: prefs.refreshSchedule,
         alertThreshold: prefs.alertThreshold,

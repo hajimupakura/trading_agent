@@ -5,8 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Filter, X } from "lucide-react";
+import { Loader2, Filter, X, Database } from "lucide-react";
 import { StockDeepDiveModal } from "@/components/StockDeepDiveModal";
+import { toast } from "sonner";
 
 export default function StockScreener() {
   const [minMarketCap, setMinMarketCap] = useState<number>();
@@ -23,8 +24,22 @@ export default function StockScreener() {
     { enabled: false } // Don't auto-fetch, wait for user action
   );
 
+  const populateScreener = trpc.stocks.populateScreener.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Populated screener with ${data.success} stocks!`);
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed to populate screener: ${error.message}`);
+    },
+  });
+
   const handleSearch = () => {
     refetch();
+  };
+
+  const handlePopulate = () => {
+    populateScreener.mutate();
   };
 
   const handlePreset = (preset: "ai_chips" | "tech_value" | "energy_growth" | "high_yield") => {
@@ -228,12 +243,48 @@ export default function StockScreener() {
               ))}
             </div>
           ) : results && results.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <p>No stocks match your criteria. Try adjusting your filters.</p>
+            <div className="text-center py-12 space-y-4">
+              <p className="text-muted-foreground">No stocks match your criteria. Try adjusting your filters.</p>
+              <p className="text-sm text-muted-foreground">Or populate the screener database with popular stocks:</p>
+              <Button
+                onClick={handlePopulate}
+                disabled={populateScreener.isPending}
+                variant="outline"
+              >
+                {populateScreener.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Populating Database...
+                  </>
+                ) : (
+                  <>
+                    <Database className="h-4 w-4 mr-2" />
+                    Populate Screener Database
+                  </>
+                )}
+              </Button>
             </div>
           ) : (
-            <div className="text-center py-12 text-muted-foreground">
-              <p>Use the filters above to search for stocks</p>
+            <div className="text-center py-12 space-y-4">
+              <p className="text-muted-foreground">Use the filters above to search for stocks</p>
+              <p className="text-sm text-muted-foreground">First time? Populate the database with popular stocks:</p>
+              <Button
+                onClick={handlePopulate}
+                disabled={populateScreener.isPending}
+                variant="outline"
+              >
+                {populateScreener.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Populating Database...
+                  </>
+                ) : (
+                  <>
+                    <Database className="h-4 w-4 mr-2" />
+                    Populate Screener Database
+                  </>
+                )}
+              </Button>
             </div>
           )}
         </CardContent>
