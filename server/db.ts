@@ -125,10 +125,15 @@ export async function insertNewsArticle(article: InsertNewsArticle) {
 export async function getRecentNews(limit: number = 50, sector?: string) {
   const db = await getDb();
   if (!db) return [];
-  
-  let query = db.select().from(newsArticles).orderBy(desc(newsArticles.publishedAt)).$dynamic();
-  
-  return await query.limit(limit);
+
+  // Prioritize analyzed articles for prediction generation
+  // Get analyzed articles first, then fill with recent unanalyzed if needed
+  const analyzed = await db.select().from(newsArticles)
+    .where(eq(newsArticles.isAnalyzed, true))
+    .orderBy(desc(newsArticles.publishedAt))
+    .limit(limit);
+
+  return analyzed;
 }
 
 export async function getNewsByDateRange(startDate: Date, endDate: Date) {
