@@ -153,14 +153,17 @@ export default function DashboardEnhanced() {
     },
   });
 
-  // Sort predictions - newest first, then by confidence
+  // Sort predictions - newest created first, then by confidence
   const sortedPredictions = [...predictions].sort((a, b) => {
-    const dateA = new Date(a.startDate || a.createdAt).getTime();
-    const dateB = new Date(b.startDate || b.createdAt).getTime();
-    if (Math.abs(dateA - dateB) < 86400000) { // Within 1 day
-      return (b.predictionConfidence || 0) - (a.predictionConfidence || 0);
+    const dateA = new Date(a.createdAt).getTime();
+    const dateB = new Date(b.createdAt).getTime();
+
+    if (dateB !== dateA) {
+      return dateB - dateA; // Primary sort: newest first
     }
-    return dateB - dateA;
+
+    // Secondary sort: by confidence if creation date is the same
+    return (b.predictionConfidence || 0) - (a.predictionConfidence || 0);
   });
 
   // Filter out very old predictions (older than 30 days)

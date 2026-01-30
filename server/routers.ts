@@ -26,36 +26,11 @@ export const appRouter = router({
       const { getRecentNews } = await import("./db");
       return await getRecentNews(50);
     }),
-    analyze: protectedProcedure.mutation(async () => {
-      // Trigger news analysis for recent articles
-      const { getRecentNews, insertNewsArticle } = await import("./db");
-      const { getMockNewsArticles, convertToNewsArticle } = await import("./services/newsScraper");
-      const { analyzeNewsArticle } = await import("./services/sentimentAnalysis");
-
-      const mockArticles = getMockNewsArticles();
-      const results = [];
-
-      for (const article of mockArticles) {
-        const analysis = await analyzeNewsArticle(article);
-        const newsArticle = {
-          ...convertToNewsArticle(article),
-          sentiment: analysis.sentiment,
-          potentialTerm: analysis.potentialTerm,
-          aiSummary: analysis.aiSummary,
-          mentionedStocks: JSON.stringify(analysis.mentionedStocks),
-          sectors: JSON.stringify(analysis.sectors),
-          rallyIndicator: analysis.rallyIndicator,
-        };
-
-        try {
-          await insertNewsArticle(newsArticle);
-          results.push(newsArticle);
-        } catch (error) {
-          console.error("Error inserting news article:", error);
-        }
-      }
-
-      return { success: true, count: results.length };
+    analyze: publicProcedure.mutation(async () => {
+      // Analyze pending RSS articles that haven't been analyzed yet
+      const { analyzePendingNews } = await import("./services/rssNewsSync");
+      const result = await analyzePendingNews();
+      return { success: true, analyzedCount: result.analyzed, errorCount: result.failed };
     }),
 
     scrapeNews: publicProcedure

@@ -90,7 +90,7 @@ export async function analyzePendingNews(): Promise<{ analyzed: number; failed: 
     const pending = await db
       .select()
       .from(newsArticles)
-      .where(eq(newsArticles.isAnalyzed, 0))
+      .where(eq(newsArticles.isAnalyzed, false))
       .limit(50); // Process up to 50 articles per run
 
     if (pending.length === 0) {
@@ -116,7 +116,7 @@ export async function analyzePendingNews(): Promise<{ analyzed: number; failed: 
         await db
           .update(newsArticles)
           .set({
-            isAnalyzed: 1,
+            isAnalyzed: true,
             aiSummary: analysis.aiSummary,
             sentiment: analysis.sentiment,
             potentialTerm: analysis.potentialTerm,
