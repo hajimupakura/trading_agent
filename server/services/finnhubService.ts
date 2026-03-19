@@ -1,20 +1,25 @@
-// @ts-ignore - No type definitions available for finnhub
-import { DefaultApi } from "finnhub";
-
 /**
- * Finnhub API Service
- * Provides real-time stock quotes, company news, and financial data
- * Rate limit: 60 calls/minute (free tier)
+ * Finnhub API Service — direct REST calls (no SDK)
+ * Rate limit: 60 calls/minute on free tier
  */
 
-const apiKey = process.env.FINNHUB_API_KEY;
-if (!apiKey) {
-  console.error("[Finnhub] FINNHUB_API_KEY environment variable is required");
+const BASE = "https://finnhub.io/api/v1";
+
+function key(): string {
+  return process.env.FINNHUB_API_KEY || "";
 }
 
-const api = new DefaultApi({
-  token: apiKey || "",
-});
+function finnhubFetch(path: string, params: Record<string, string> = {}): Promise<any> {
+  const apiKey = key();
+  if (!apiKey) {
+    console.error("[Finnhub] FINNHUB_API_KEY not set");
+    return Promise.resolve(null);
+  }
+  const qs = new URLSearchParams({ ...params, token: apiKey }).toString();
+  return fetch(`${BASE}${path}?${qs}`, { signal: AbortSignal.timeout(8000) })
+    .then(r => r.ok ? r.json() : null)
+    .catch(err => { console.error(`[Finnhub] fetch error ${path}:`, err.message); return null; });
+}
 
 export interface FinnhubQuote {
   symbol: string;
@@ -40,161 +45,67 @@ export interface FinnhubNews {
   url: string;
 }
 
-/**
- * Get real-time quote for a stock
- */
 export async function getFinnhubQuote(symbol: string): Promise<FinnhubQuote | null> {
-  return new Promise((resolve) => {
-    api.quote(symbol, (error: any, data: any) => {
-      if (error) {
-        console.error(`[Finnhub] Error fetching quote for ${symbol}:`, error);
-        resolve(null);
-        return;
-      }
-
-      if (!data || data.c === 0) {
-        console.warn(`[Finnhub] No data found for ${symbol}`);
-        resolve(null);
-        return;
-      }
-
-      resolve({
-        symbol,
-        currentPrice: data.c, // Current price
-        change: data.d, // Change
-        percentChange: data.dp, // Percent change
-        high: data.h, // High price of the day
-        low: data.l, // Low price of the day
-        open: data.o, // Open price of the day
-        previousClose: data.pc, // Previous close price
-        timestamp: new Date(data.t * 1000), // Timestamp
-      });
-    });
-  });
+  const data = await finnhubFetch("/quote", { symbol });
+  if (!data || data.c == null || data.c === 0) return null;
+  return {
+    symbol,
+    currentPrice: data.c,
+    change: data.d,
+    percentChange: data.dp,
+    high: data.h,
+    low: data.l,
+    open: data.o,
+    previousClose: data.pc,
+    timestamp: new Date(data.t * 1000),
+  };
 }
 
-/**
- * Get company news for a specific stock
- */
-export async function getFinnhubCompanyNews(
-  symbol: string,
-  from: Date,
-  to: Date
-): Promise<FinnhubNews[]> {
-  return new Promise((resolve) => {
-    const fromStr = from.toISOString().split("T")[0];
-    const toStr = to.toISOString().split("T")[0];
-
-    api.companyNews(symbol, fromStr!, toStr!, (error: any, data: any) => {
-      if (error) {
-        console.error(`[Finnhub] Error fetching news for ${symbol}:`, error);
-        resolve([]);
-        return;
-      }
-
-      resolve(data || []);
-    });
+export async function getFinnhubCompanyNews(symbol: string, from: Date, to: Date): Promise<FinnhubNews[]> {
+  const data = await finnhubFetch("/company-news", {
+    symbol,
+    from: from.toISOString().split("T")[0]!,
+    to: to.toISOString().split("T")[0]!,
   });
+  return Array.isArray(data) ? data : [];
 }
 
-/**
- * Get market news (general financial news)
- */
-export async function getFinnhubMarketNews(category: string = "general"): Promise<FinnhubNews[]> {
-  return new Promise((resolve) => {
-    api.marketNews(category, {}, (error: any, data: any) => {
-      if (error) {
-        console.error(`[Finnhub] Error fetching market news:`, error);
-        resolve([]);
-        return;
-      }
-
-      resolve(data || []);
-    });
-  });
+export async function getFinnhubMarketNews(category = "general"): Promise<FinnhubNews[]> {
+  const data = await finnhubFetch("/news", { category });
+  return Array.isArray(data) ? data : [];
 }
 
-/**
- * Get company profile
- */
 export async function getFinnhubCompanyProfile(symbol: string): Promise<any> {
-  return new Promise((resolve) => {
-    api.companyProfile2({ symbol }, (error: any, data: any) => {
-      if (error) {
-        console.error(`[Finnhub] Error fetching company profile for ${symbol}:`, error);
-        resolve(null);
-        return;
-      }
-
-      resolve(data);
-    });
-  });
+  return finnhubFetch("/stock/profile2", { symbol });
 }
 
-/**
- * Search for stocks by query
- */
 export async function searchFinnhubStocks(query: string): Promise<Array<{ symbol: string; description: string }>> {
-  return new Promise((resolve) => {
-    api.symbolSearch(query, (error: any, data: any) => {
-      if (error) {
-        console.error(`[Finnhub] Error searching for "${query}":`, error);
-        resolve([]);
-        return;
-      }
-
-      if (!data || !data.result) {
-        resolve([]);
-        return;
-      }
-
-      resolve(
-        data.result.slice(0, 10).map((item: any) => ({
-          symbol: item.symbol,
-          description: item.description,
-        }))
-      );
-    });
-  });
+  const data = await finnhubFetch("/search", { q: query });
+  if (!data?.result) return [];
+  return data.result.slice(0, 10).map((item: any) => ({
+    symbol: item.symbol,
+    description: item.description,
+  }));
 }
 
-/**
- * Get multiple quotes in batch (with rate limiting)
- */
 export async function getFinnhubMultipleQuotes(symbols: string[]): Promise<Map<string, FinnhubQuote>> {
   const quotes = new Map<string, FinnhubQuote>();
-  
-  // Rate limit: 60 calls/minute = 1 call per second
   for (const symbol of symbols) {
     const quote = await getFinnhubQuote(symbol);
-    if (quote) {
-      quotes.set(symbol, quote);
-    }
-    
-    // Wait 1 second between calls to respect rate limit
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (quote) quotes.set(symbol, quote);
+    await new Promise(r => setTimeout(r, 200)); // ~5 req/s, well within 60/min
   }
-  
   return quotes;
 }
 
-/**
- * Get news for watchlist stocks (last 7 days)
- */
 export async function getWatchlistNews(symbols: string[]): Promise<Map<string, FinnhubNews[]>> {
   const newsMap = new Map<string, FinnhubNews[]>();
   const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
-  
+  const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
   for (const symbol of symbols) {
     const news = await getFinnhubCompanyNews(symbol, from, to);
-    if (news.length > 0) {
-      newsMap.set(symbol, news);
-    }
-    
-    // Wait 1 second between calls
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (news.length > 0) newsMap.set(symbol, news);
+    await new Promise(r => setTimeout(r, 200));
   }
-  
   return newsMap;
 }
