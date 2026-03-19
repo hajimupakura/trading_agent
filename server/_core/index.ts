@@ -38,6 +38,9 @@ async function startServer() {
   registerOAuthRoutes(app);
   // Self-hosted email/password auth
   registerLocalAuthRoutes(app);
+  // Finnhub real-time webhook
+  const { registerFinnhubWebhook } = await import("../services/finnhubWebhook");
+  registerFinnhubWebhook(app);
 
   // Dev-only: auto-login route to bypass external OAuth server
   if (process.env.NODE_ENV === "development") {
