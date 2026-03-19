@@ -83,37 +83,42 @@ export async function predictUpcomingRallies(
           role: "system",
           content: `You are an expert market analyst specializing in predicting MONEY-MAKING OPPORTUNITIES 2-3 weeks early.
 
-Your task: Analyze current news patterns and historical data to predict upcoming opportunities for BOTH calls (upside) and puts (downside).
+Your task: Analyze current news patterns and historical data to predict upcoming opportunities for BOTH calls (upside) AND puts (downside).
+
+MANDATORY OUTPUT REQUIREMENT:
+- You MUST include AT LEAST 2-3 PUT (bearish/downside) predictions in your output
+- You MUST include AT LEAST 2-3 CALL (bullish/upside) predictions in your output
+- Failure to include both types makes the analysis useless. Markets move in BOTH directions.
 
 CRITICAL RULES FOR PREDICTIONS:
 1. Focus on EARLY SIGNALS - indicators that appear 2-3 weeks BEFORE major moves
-2. Detect BOTH upward rallies (call opportunities) AND downward moves (put opportunities)
+2. Actively hunt for BEARISH signals — do not default to bullish
 3. DO NOT limit to specific sectors - look for movement ANYWHERE in the market
-4. Identify NEW emerging sectors automatically
-5. Prioritize short-term opportunities (2-3 weeks to 2 months)
-6. Be specific about entry timing and exit strategy
+4. Prioritize short-term opportunities (2-3 weeks to 2 months)
+5. Be specific about entry timing and exit strategy
 
-EARLY WARNING SIGNALS FOR UPSIDE (CALLS):
-- Sudden increase in positive news coverage
-- Positive sentiment shift in a sector/stock
-- Multiple stocks in same sector showing strength
-- Institutional buying (ARK trades, insider buying)
+BEARISH SIGNALS TO LOOK FOR (PUT opportunities):
+- Regulatory crackdowns, lawsuits, or investigations announced
+- Earnings warnings, guidance cuts, or revenue misses
+- Insider selling clusters or institutional exits
+- Sector-wide headwinds (rate sensitivity, commodity cost spikes)
+- Overbought technicals (RSI > 70) after a prolonged rally
+- Tariff or trade war impacts hitting specific sectors
+- Credit downgrades or debt concerns
+- Leadership departures or accounting irregularities
+- Macro deterioration: rising unemployment, CPI beats, Fed hawkishness
+
+BULLISH SIGNALS TO LOOK FOR (CALL opportunities):
+- Positive news accumulation, sentiment shift
+- Institutional buying, insider cluster buying
 - Breakthrough announcements or regulatory approvals
-- Volume surge with price breakout
+- Oversold technicals (RSI < 30) with positive catalyst
+- Sector rotation into defensive or growth themes
 
-EARLY WARNING SIGNALS FOR DOWNSIDE (PUTS):
-- Negative news accumulation
-- Bearish sentiment shift
-- Regulatory threats or investigations
-- Insider selling or institutional exits
-- Earnings warnings or guidance cuts
-- Technical breakdown with volume
-- Recession indicators or macro headwinds
-
-HISTORICAL RALLY PATTERNS:
+HISTORICAL PATTERNS (upside rallies — apply the INVERSE logic for puts):
 ${JSON.stringify(historicalPatterns, null, 2)}
 
-These patterns show what early signals preceded major rallies. Use them to identify similar patterns in current news.
+NOTE: These historical patterns show upside moves. The same logic reversed (negative catalysts, breakdowns, sentiment shifts downward) identifies PUT opportunities.
 ${enrichment?.technicalContext ? `
 TECHNICAL ANALYSIS DATA:
 Use these to VALIDATE or REJECT your predictions. Predictions supported by BOTH news sentiment AND technical signals should have HIGHER confidence. Contradictions = LOWER confidence.
@@ -139,11 +144,11 @@ Social sentiment captures retail investor momentum. High Reddit mention count + 
 
 ${JSON.stringify(newsData, null, 2)}
 
-Identify BOTH:
-1. Upside opportunities (calls) - sectors/stocks showing early rally signals
-2. Downside opportunities (puts) - sectors/stocks showing early decline signals
+REQUIRED OUTPUT — you must provide ALL of the following:
+1. AT LEAST 2-3 PUT predictions (opportunityType: "put", direction: "down") — actively look for stocks/sectors showing weakness, overvaluation, regulatory risk, or bearish technical breakdowns
+2. AT LEAST 2-3 CALL predictions (opportunityType: "call", direction: "up") — sectors showing early rally signals
 
-Focus on what's MOVING in the market, regardless of sector. Discover new emerging sectors automatically.`,
+Do NOT return only calls. If you cannot find bearish signals in the news, look for: overbought sectors after a long run-up, tariff-impacted industries, high-debt companies in rising rate environments, or companies with recent insider selling. There are ALWAYS put opportunities in any market.`,
         },
       ],
       response_format: {
