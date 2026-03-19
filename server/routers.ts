@@ -674,7 +674,7 @@ export const appRouter = router({
       const envPortfolioId = process.env.AGENT_PORTFOLIO_ID ? parseInt(process.env.AGENT_PORTFOLIO_ID) : null;
       const portfolioId = envPortfolioId ?? portfolios[0]!.id;
 
-      return await runAgentCycle(portfolioId, userId);
+      return await runAgentCycle(portfolioId, userId, true); // force=true bypasses market hours check
     }),
   }),
 

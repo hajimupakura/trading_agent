@@ -94,12 +94,12 @@ export function getAgentStatus(): AgentStatus {
 
 // ── Main Agent Cycle ─────────────────────────────────────────────────────────
 
-export async function runAgentCycle(portfolioId: number, userId: number): Promise<CycleSummary> {
+export async function runAgentCycle(portfolioId: number, userId: number, force = false): Promise<CycleSummary> {
   if (state.isPaused) {
     console.log("[Agent] Paused — skipping cycle");
     return emptySummary(0);
   }
-  if (!isMarketHours()) {
+  if (!force && !isMarketHours()) {
     console.log("[Agent] Outside market hours — skipping cycle");
     return emptySummary(0);
   }
