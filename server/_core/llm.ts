@@ -209,16 +209,42 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://forge.manus.im/v1/chat/completions";
+/**
+ * Resolve which LLM backend to use:
+ * 1. Forge API (if BUILT_IN_FORGE_API_URL + KEY are set)
+ * 2. OpenRouter (if OPENROUTER_API_KEY is set) — fallback
+ * 3. Error if neither is configured
+ */
+type LLMBackend = { url: string; apiKey: string; model: string };
 
-const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
+function resolveBackend(): LLMBackend {
+  // Priority 1: Forge API
+  if (ENV.forgeApiKey && ENV.forgeApiKey.trim().length > 0) {
+    const baseUrl = ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
+      ? ENV.forgeApiUrl.replace(/\/$/, "")
+      : "https://forge.manus.im";
+    return {
+      url: `${baseUrl}/v1/chat/completions`,
+      apiKey: ENV.forgeApiKey,
+      model: "gemini-2.5-flash",
+    };
   }
-};
+
+  // Priority 2: OpenRouter
+  const openrouterKey = process.env.OPENROUTER_API_KEY;
+  if (openrouterKey && openrouterKey.trim().length > 0) {
+    const baseUrl = process.env.OPENROUTER_API_URL || "https://openrouter.ai/api/v1";
+    return {
+      url: `${baseUrl}/chat/completions`,
+      apiKey: openrouterKey,
+      model: process.env.LLM_MODEL || "google/gemini-2.0-flash-exp:free",
+    };
+  }
+
+  throw new Error(
+    "No LLM backend configured. Set either BUILT_IN_FORGE_API_KEY (Forge) or OPENROUTER_API_KEY (OpenRouter) in your .env file."
+  );
+}
 
 const normalizeResponseFormat = ({
   responseFormat,
@@ -266,7 +292,7 @@ const normalizeResponseFormat = ({
 };
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+  const backend = resolveBackend();
 
   const {
     messages,
@@ -280,7 +306,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   } = params;
 
   const payload: Record<string, unknown> = {
-    model: "gemini-2.5-flash",
+    model: backend.model,
     messages: messages.map(normalizeMessage),
   };
 
@@ -296,10 +322,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = 32768
-  payload.thinking = {
-    "budget_tokens": 128
-  }
+  payload.max_tokens = params.maxTokens || params.max_tokens || 4096;
 
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
@@ -312,19 +335,27 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(resolveApiUrl(), {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${backend.apiKey}`,
+  };
+
+  // OpenRouter requires these extra headers
+  if (backend.url.includes("openrouter")) {
+    headers["HTTP-Referer"] = "https://github.com/trading-agent";
+    headers["X-Title"] = "AI Trading Agent";
+  }
+
+  const response = await fetch(backend.url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `LLM invoke failed (${backend.model}): ${response.status} ${response.statusText} – ${errorText}`
     );
   }
 
