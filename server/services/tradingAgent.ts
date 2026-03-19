@@ -1,6 +1,7 @@
 import { invokeLLM } from "../_core/llm";
 import { isMarketHours } from "./rssNewsSync";
-import { runAgenticDecisions } from "./agenticEngine";
+import { runMultiAgentDecisions } from "./agents/orchestrator";
+import type { AgentContext } from "./agents/types";
 import type { CycleSummary, TradeAlert, ClosedPosition, DailySummary } from "./telegramAlert";
 
 /**
@@ -179,19 +180,35 @@ export async function runAgentCycle(portfolioId: number, userId: number): Promis
       }
     }
 
-    // ── STEP 4: Agentic LLM Decisions (tool-calling loop) ──────────
-    console.log(`[Agent] Step 4: Agentic portfolio manager reasoning with tools...`);
+    // ── STEP 4: Multi-Agent Parallel Decisions ─────────────────────
+    console.log(`[Agent] Step 4: Running 6 specialist agents in parallel + master decision...`);
     const portfolio = await getPortfolioSummary(portfolioId, userId);
     const { checkTradeRisk } = await import("./riskManager");
+    const { getUserWatchlist } = await import("../db");
 
     let decisions: { trades_to_execute: any[]; positions_to_close: any[]; market_outlook: string; cash_reserve_recommendation: number } = {
       trades_to_execute: [], positions_to_close: [], market_outlook: "", cash_reserve_recommendation: 20,
     };
 
-    if (highConf.length > 0 && portfolio) {
-      const agenticResult = await runAgenticDecisions(highConf, portfolio, state.agentMemory);
-      decisions = agenticResult;
-      console.log(`[Agent] Agentic engine used ${agenticResult.toolCallsUsed} tool calls: ${agenticResult.toolsInvoked.join(", ")}`);
+    if (portfolio) {
+      const watchlist = await getUserWatchlist(userId);
+      const agentContext: AgentContext = {
+        predictions: highConf,
+        portfolio,
+        watchlistTickers: watchlist.map((w: any) => w.ticker),
+        recentNews,
+        agentMemory: state.agentMemory,
+      };
+
+      const multiResult = await runMultiAgentDecisions(agentContext);
+      decisions = multiResult;
+
+      const agentNames = multiResult.agentSummaries.filter(s => !s.error).map(s => s.agentName);
+      console.log(
+        `[Agent] Multi-agent complete: ${agentNames.length}/6 agents, ` +
+        `${multiResult.toolCallsUsed} total tool calls, ` +
+        `consensus: ${multiResult.consensus.agreementRate}%`,
+      );
     }
 
     // Execute trades the LLM decided on

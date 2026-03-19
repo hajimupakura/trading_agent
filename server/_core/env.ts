@@ -15,6 +15,8 @@ const envSchema = z.object({
   TELEGRAM_CHAT_ID: z.string().optional(),
   AGENT_PORTFOLIO_ID: z.string().optional(),
   AGENT_USER_ID: z.string().optional(),
+  FRED_API_KEY: z.string().optional(),
+  SECONDARY_LLM_MODEL: z.string().optional(),
 });
 
 // In test/dev, provide defaults for required vars so env parsing doesn't crash
