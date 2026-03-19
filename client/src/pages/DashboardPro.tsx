@@ -484,8 +484,8 @@ export default function DashboardPro() {
                 <div className="space-y-2">
                   <div className="grid grid-cols-3 gap-1.5 text-center">
                     {[
-                      { label: "Trades", val: lastCycle.tradesExecuted },
-                      { label: "Closed", val: lastCycle.positionsClosed },
+                      { label: "Trades", val: typeof lastCycle.tradesExecuted === "number" ? lastCycle.tradesExecuted : 0 },
+                      { label: "Closed", val: typeof lastCycle.positionsClosed === "number" ? lastCycle.positionsClosed : 0 },
                       { label: "Cycle", val: `#${lastCycle.cycleNumber}` },
                     ].map(({ label, val }) => (
                       <div key={label} className="bg-secondary/40 rounded-lg py-2">
@@ -494,9 +494,9 @@ export default function DashboardPro() {
                       </div>
                     ))}
                   </div>
-                  {lastCycle.portfolioEquity && (
+                  {lastCycle.portfolioEquity && parseFloat(lastCycle.portfolioEquity) > 0 && (
                     <div className="flex items-center justify-between text-xs border-t border-border pt-2">
-                      <span className="text-muted-foreground">Equity snapshot</span>
+                      <span className="text-muted-foreground">Equity</span>
                       <span className="font-mono font-semibold text-foreground">${parseFloat(lastCycle.portfolioEquity).toLocaleString("en-US", { maximumFractionDigits: 0 })}</span>
                     </div>
                   )}
@@ -505,12 +505,18 @@ export default function DashboardPro() {
                       {lastCycle.reflection}
                     </div>
                   )}
-                  {lastCycle.riskWarnings && (
-                    <div className="flex items-start gap-1.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-2">
-                      <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
-                      <span className="line-clamp-2">{lastCycle.riskWarnings}</span>
-                    </div>
-                  )}
+                  {(() => {
+                    if (!lastCycle.riskWarnings) return null;
+                    let warnings: string[] = [];
+                    try { warnings = JSON.parse(lastCycle.riskWarnings); } catch { warnings = [lastCycle.riskWarnings]; }
+                    if (!Array.isArray(warnings) || warnings.length === 0) return null;
+                    return (
+                      <div className="flex items-start gap-1.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-2">
+                        <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{warnings.join(" · ")}</span>
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="py-4 text-center text-xs text-muted-foreground">No cycle logs yet</div>
