@@ -7,7 +7,7 @@ import axios from "axios";
 
 const OPENROUTER_API_URL = process.env.OPENROUTER_API_URL || "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
-const LLM_MODEL = process.env.LLM_MODEL || "google/gemini-2.5-flash-preview";
+const LLM_MODEL = process.env.LLM_MODEL || "google/gemini-2.5-flash";
 
 export interface Message {
   role: "system" | "user" | "assistant";
