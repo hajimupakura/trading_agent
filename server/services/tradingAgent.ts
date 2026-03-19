@@ -1,5 +1,6 @@
 import { invokeLLM } from "../_core/llm";
 import { isMarketHours } from "./rssNewsSync";
+import { runAgenticDecisions } from "./agenticEngine";
 import type { CycleSummary, TradeAlert, ClosedPosition, DailySummary } from "./telegramAlert";
 
 /**
@@ -178,15 +179,19 @@ export async function runAgentCycle(portfolioId: number, userId: number): Promis
       }
     }
 
-    // ── STEP 4: LLM Trading Decisions ────────────────────────────────
-    console.log(`[Agent] Step 4: LLM portfolio manager deciding...`);
+    // ── STEP 4: Agentic LLM Decisions (tool-calling loop) ──────────
+    console.log(`[Agent] Step 4: Agentic portfolio manager reasoning with tools...`);
     const portfolio = await getPortfolioSummary(portfolioId, userId);
     const { checkTradeRisk } = await import("./riskManager");
 
-    let decisions = { trades_to_execute: [] as any[], positions_to_close: [] as any[], market_outlook: "", cash_reserve_recommendation: 20 };
+    let decisions: { trades_to_execute: any[]; positions_to_close: any[]; market_outlook: string; cash_reserve_recommendation: number } = {
+      trades_to_execute: [], positions_to_close: [], market_outlook: "", cash_reserve_recommendation: 20,
+    };
 
     if (highConf.length > 0 && portfolio) {
-      decisions = await getAgentDecisions(highConf, portfolio, state.agentMemory);
+      const agenticResult = await runAgenticDecisions(highConf, portfolio, state.agentMemory);
+      decisions = agenticResult;
+      console.log(`[Agent] Agentic engine used ${agenticResult.toolCallsUsed} tool calls: ${agenticResult.toolsInvoked.join(", ")}`);
     }
 
     // Execute trades the LLM decided on
@@ -433,129 +438,6 @@ export async function runDailyReflection(portfolioId: number, userId: number): P
   } catch (error: any) {
     console.error("[Agent] Daily reflection failed:", error);
     return "Reflection failed: " + error.message;
-  }
-}
-
-// ── LLM Decision Engine ──────────────────────────────────────────────────────
-
-const DECISION_FRAMEWORK_PROMPT = `You are an autonomous portfolio manager for a paper trading account.
-Your goal is to maximize risk-adjusted returns while preserving capital.
-
-You receive: predictions (with confidence scores), current positions, portfolio state, and your previous day's reflection.
-You decide: which trades to execute and which positions to close.
-
-RULES:
-1. ONLY trade on predictions with confidence >= 65
-2. NEVER allocate more than 10% of total equity to a single position
-3. PREFER consensus predictions (marked [CONSENSUS]) over single-model predictions
-4. CLOSE positions if: the original thesis has reversed, stop loss is near, or a better opportunity exists in the same capital
-5. KEEP cash reserve — never deploy more than 80% of equity
-6. DIVERSIFY — avoid concentrating in one sector
-7. For "put" predictions (downside), do NOT buy — instead, close any long positions in that sector
-8. If your previous reflection mentions a pattern you got wrong, AVOID that pattern today
-9. Maximum 3 new trades per cycle to avoid overtrading
-10. Do NOT trade if the market outlook is uncertain — cash is a valid position
-
-POSITION SIZING:
-- High confidence (80-100): Up to 8% of equity
-- Medium confidence (65-79): Up to 5% of equity
-- Calculate quantity as: floor(allocation / current_price_estimate)
-
-Think step by step about each prediction before deciding.`;
-
-const DECISION_SCHEMA = {
-  type: "object" as const,
-  properties: {
-    trades_to_execute: {
-      type: "array" as const,
-      items: {
-        type: "object" as const,
-        properties: {
-          symbol: { type: "string" as const },
-          side: { type: "string" as const, enum: ["buy", "sell"] },
-          quantity: { type: "number" as const },
-          reasoning: { type: "string" as const },
-          confidence: { type: "number" as const },
-        },
-        required: ["symbol", "side", "quantity", "reasoning", "confidence"] as const,
-        additionalProperties: false,
-      },
-    },
-    positions_to_close: {
-      type: "array" as const,
-      items: {
-        type: "object" as const,
-        properties: {
-          symbol: { type: "string" as const },
-          reasoning: { type: "string" as const },
-        },
-        required: ["symbol", "reasoning"] as const,
-        additionalProperties: false,
-      },
-    },
-    market_outlook: { type: "string" as const },
-    cash_reserve_recommendation: { type: "number" as const },
-  },
-  required: ["trades_to_execute", "positions_to_close", "market_outlook", "cash_reserve_recommendation"] as const,
-  additionalProperties: false,
-};
-
-async function getAgentDecisions(
-  predictions: any[],
-  portfolio: any,
-  agentMemory: string | null,
-): Promise<{ trades_to_execute: any[]; positions_to_close: any[]; market_outlook: string; cash_reserve_recommendation: number }> {
-  try {
-    const response = await invokeLLM({
-      messages: [
-        { role: "system", content: DECISION_FRAMEWORK_PROMPT },
-        {
-          role: "user",
-          content: JSON.stringify({
-            predictions: predictions.map(p => ({
-              sector: p.sector,
-              direction: p.direction,
-              opportunityType: p.opportunityType,
-              confidence: p.confidence,
-              timeframe: p.timeframe,
-              recommendedStocks: p.recommendedStocks,
-              reasoning: p.reasoning,
-              entryTiming: p.entryTiming,
-              exitStrategy: p.exitStrategy,
-            })),
-            currentPositions: portfolio.positions?.map((p: any) => ({
-              symbol: p.symbol,
-              quantity: p.quantity,
-              avgEntry: p.avgEntryPrice,
-              currentPrice: p.currentPrice,
-              unrealizedPnL: p.unrealizedPnL,
-              unrealizedPnLPercent: p.unrealizedPnLPercent,
-            })) || [],
-            cashBalance: portfolio.cashBalance,
-            totalEquity: portfolio.totalEquity,
-            previousReflection: agentMemory,
-          }),
-        },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "agent_decisions",
-          strict: true,
-          schema: DECISION_SCHEMA,
-        },
-      },
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content || typeof content !== "string") {
-      return { trades_to_execute: [], positions_to_close: [], market_outlook: "Unable to assess", cash_reserve_recommendation: 30 };
-    }
-
-    return JSON.parse(content);
-  } catch (error) {
-    console.error("[Agent] LLM decision failed:", error);
-    return { trades_to_execute: [], positions_to_close: [], market_outlook: "Decision engine error", cash_reserve_recommendation: 50 };
   }
 }
 
