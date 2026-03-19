@@ -242,6 +242,85 @@ function startScheduledJobs() {
       console.error("[Scheduler] Initial sync error:", error);
     }
   }, 10_000);
+
+  // ── Trading Agent Scheduler ──────────────────────────────────────────────
+
+  const AGENT_CYCLE_INTERVAL = 60 * 60 * 1000; // 1 hour
+  const SL_TP_CHECK_INTERVAL = 5 * 60 * 1000;  // 5 minutes
+  const REFLECTION_CHECK_INTERVAL = 5 * 60 * 1000; // Check every 5 min, guard to 4 PM
+  const AGENT_PORTFOLIO_ID = parseInt(process.env.AGENT_PORTFOLIO_ID || "1");
+  const AGENT_USER_ID = parseInt(process.env.AGENT_USER_ID || "1");
+
+  console.log("[Scheduler] Trading agent: every 60 min (market hours 9:30-4 PM EST)");
+  console.log("[Scheduler] SL/TP monitor: every 5 min (market hours)");
+
+  // Initialize agent state from DB
+  setTimeout(async () => {
+    try {
+      const { initAgent } = await import("../services/tradingAgent");
+      await initAgent();
+      const { sendAgentStartup, isTelegramConfigured } = await import("../services/telegramAlert");
+      if (isTelegramConfigured()) {
+        await sendAgentStartup();
+      }
+    } catch (error) {
+      console.error("[Scheduler] Agent init error:", error);
+    }
+  }, 15_000);
+
+  // Agent cycle — every hour during market hours (after 9:30 AM EST)
+  setInterval(async () => {
+    try {
+      const { isMarketHours } = await import("../services/rssNewsSync");
+      if (!isMarketHours()) return;
+
+      // Only run after 9:30 AM EST
+      const now = new Date();
+      const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+      if (est.getHours() === 9 && est.getMinutes() < 30) return;
+
+      const { runAgentCycle } = await import("../services/tradingAgent");
+      await runAgentCycle(AGENT_PORTFOLIO_ID, AGENT_USER_ID);
+    } catch (error) {
+      console.error("[Scheduler] Agent cycle error:", error);
+    }
+  }, AGENT_CYCLE_INTERVAL);
+
+  // Stop loss / take profit check — every 5 minutes
+  setInterval(async () => {
+    try {
+      const { isMarketHours } = await import("../services/rssNewsSync");
+      if (!isMarketHours()) return;
+
+      const { runStopLossCheck } = await import("../services/tradingAgent");
+      await runStopLossCheck(AGENT_PORTFOLIO_ID, AGENT_USER_ID);
+    } catch (error) {
+      console.error("[Scheduler] SL/TP check error:", error);
+    }
+  }, SL_TP_CHECK_INTERVAL);
+
+  // Daily reflection — at ~4:05 PM EST on weekdays
+  let reflectionRanToday = false;
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+
+      // Reset flag at midnight
+      if (est.getHours() === 0) reflectionRanToday = false;
+
+      // Only at 4 PM EST, weekdays, once per day
+      if (est.getHours() !== 16 || est.getMinutes() > 10) return;
+      if (est.getDay() === 0 || est.getDay() === 6) return;
+      if (reflectionRanToday) return;
+
+      reflectionRanToday = true;
+      const { runDailyReflection } = await import("../services/tradingAgent");
+      await runDailyReflection(AGENT_PORTFOLIO_ID, AGENT_USER_ID);
+    } catch (error) {
+      console.error("[Scheduler] Daily reflection error:", error);
+    }
+  }, REFLECTION_CHECK_INTERVAL);
 }
 
 startServer().catch(console.error);

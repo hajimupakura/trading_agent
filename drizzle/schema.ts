@@ -264,3 +264,36 @@ export const predictionOutcomes = mysqlTable("prediction_outcomes", {
 
 export type PredictionOutcome = typeof predictionOutcomes.$inferSelect;
 export type InsertPredictionOutcome = typeof predictionOutcomes.$inferInsert;
+
+/**
+ * Agent cycle logs — records every autonomous trading cycle.
+ */
+export const agentCycleLogs = mysqlTable("agent_cycle_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  cycleNumber: int("cycle_number").notNull(),
+  predictionsGenerated: int("predictions_generated").default(0).notNull(),
+  tradesExecuted: int("trades_executed").default(0).notNull(),
+  positionsClosed: int("positions_closed").default(0).notNull(),
+  portfolioEquity: varchar("portfolio_equity", { length: 32 }),
+  portfolioPnL: varchar("portfolio_pnl", { length: 32 }),
+  riskWarnings: text("risk_warnings"),
+  summary: text("summary"), // Full JSON of cycle summary
+  reflection: text("reflection"), // Daily reflection text
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type AgentCycleLog = typeof agentCycleLogs.$inferSelect;
+export type InsertAgentCycleLog = typeof agentCycleLogs.$inferInsert;
+
+/**
+ * Agent config — key-value store for persistent agent state.
+ */
+export const agentConfig = mysqlTable("agent_config", {
+  id: int("id").autoincrement().primaryKey(),
+  key: varchar("key", { length: 64 }).notNull().unique(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AgentConfig = typeof agentConfig.$inferSelect;
+export type InsertAgentConfig = typeof agentConfig.$inferInsert;

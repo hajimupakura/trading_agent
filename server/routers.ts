@@ -634,6 +634,40 @@ export const appRouter = router({
       }),
   }),
 
+  // Autonomous trading agent
+  agent: router({
+    status: publicProcedure.query(async () => {
+      const { getAgentStatus } = await import("./services/tradingAgent");
+      return getAgentStatus();
+    }),
+
+    pause: protectedProcedure.mutation(async () => {
+      const { pauseAgent } = await import("./services/tradingAgent");
+      await pauseAgent();
+      return { success: true, paused: true };
+    }),
+
+    resume: protectedProcedure.mutation(async () => {
+      const { resumeAgent } = await import("./services/tradingAgent");
+      await resumeAgent();
+      return { success: true, paused: false };
+    }),
+
+    cycleLogs: protectedProcedure
+      .input(z.object({ limit: z.number().min(1).max(100).optional() }).optional())
+      .query(async ({ input }) => {
+        const { getAgentCycleLogs } = await import("./db");
+        return await getAgentCycleLogs(input?.limit ?? 20);
+      }),
+
+    runNow: protectedProcedure.mutation(async () => {
+      const { runAgentCycle } = await import("./services/tradingAgent");
+      const portfolioId = parseInt(process.env.AGENT_PORTFOLIO_ID || "1");
+      const userId = parseInt(process.env.AGENT_USER_ID || "1");
+      return await runAgentCycle(portfolioId, userId);
+    }),
+  }),
+
   // Manual sync triggers
   sync: router({
     rssNews: protectedProcedure

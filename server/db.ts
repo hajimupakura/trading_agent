@@ -25,6 +25,9 @@ import {
   InsertPosition,
   tradesLog,
   InsertTradeLog,
+  agentCycleLogs,
+  InsertAgentCycleLog,
+  agentConfig,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -470,4 +473,48 @@ export async function getPortfolioTradeHistory(portfolioId: number, limit: numbe
     .where(eq(tradesLog.portfolioId, portfolioId))
     .orderBy(desc(tradesLog.executedAt))
     .limit(limit);
+}
+
+// ── Agent Cycle Logs ────────────────────────────────────────────────────────
+
+export async function insertAgentCycleLog(log: InsertAgentCycleLog) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(agentCycleLogs).values(log);
+}
+
+export async function getAgentCycleLogs(limit: number = 20) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(agentCycleLogs)
+    .orderBy(desc(agentCycleLogs.createdAt))
+    .limit(limit);
+}
+
+export async function getTodaysCycleLogs() {
+  const db = await getDb();
+  if (!db) return [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return await db.select().from(agentCycleLogs)
+    .where(sql`${agentCycleLogs.createdAt} >= ${today}`)
+    .orderBy(desc(agentCycleLogs.createdAt));
+}
+
+// ── Agent Config (key-value) ────────────────────────────────────────────────
+
+export async function getAgentConfigValue(key: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.select().from(agentConfig)
+    .where(eq(agentConfig.key, key))
+    .limit(1);
+  return result.length > 0 ? result[0]!.value : null;
+}
+
+export async function setAgentConfigValue(key: string, value: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(agentConfig).values({ key, value })
+    .onDuplicateKeyUpdate({ set: { value } });
 }

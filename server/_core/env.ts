@@ -11,6 +11,10 @@ const envSchema = z.object({
   BUILT_IN_FORGE_API_KEY: z.string().default(""),
   FINNHUB_API_KEY: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
+  AGENT_PORTFOLIO_ID: z.string().optional(),
+  AGENT_USER_ID: z.string().optional(),
 });
 
 // In test/dev, provide defaults for required vars so env parsing doesn't crash
@@ -48,4 +52,8 @@ export const ENV = {
   forgeApiKey: env.BUILT_IN_FORGE_API_KEY,
   finnhubApiKey: env.FINNHUB_API_KEY,
   openrouterApiKey: env.OPENROUTER_API_KEY,
+  telegramBotToken: env.TELEGRAM_BOT_TOKEN,
+  telegramChatId: env.TELEGRAM_CHAT_ID,
+  agentPortfolioId: env.AGENT_PORTFOLIO_ID,
+  agentUserId: env.AGENT_USER_ID,
 };
