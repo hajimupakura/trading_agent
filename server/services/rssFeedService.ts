@@ -14,27 +14,67 @@ export interface RSSFeedItem {
   source: string;
 }
 
-// Major financial news RSS feeds
+// 12 high-quality financial news RSS feeds, organized by category
 const RSS_FEEDS = [
+  // ── Breaking News & Markets (fastest, highest signal) ────────────────
   {
     name: "Reuters Business",
     url: "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best",
-  },
-  {
-    name: "Yahoo Finance",
-    url: "https://finance.yahoo.com/news/rssindex",
-  },
-  {
-    name: "MarketWatch",
-    url: "https://www.marketwatch.com/rss/topstories",
   },
   {
     name: "CNBC Markets",
     url: "https://www.cnbc.com/id/10000664/device/rss/rss.html",
   },
   {
-    name: "Seeking Alpha",
-    url: "https://seekingalpha.com/feed.xml",
+    name: "MarketWatch Top Stories",
+    url: "https://www.marketwatch.com/rss/topstories",
+  },
+  {
+    name: "MarketWatch Stocks",
+    url: "https://www.marketwatch.com/rss/stockstowatch",
+  },
+
+  // ── Institutional & Analysis ─────────────────────────────────────────
+  {
+    name: "Financial Times",
+    url: "https://www.ft.com/rss/home",
+  },
+  {
+    name: "Bloomberg Markets",
+    url: "https://feeds.bloomberg.com/markets/news.rss",
+  },
+  {
+    name: "Barrons",
+    url: "https://www.barrons.com/feed",
+  },
+
+  // ── Pre-market & Earnings (critical for the agent) ──────────────────
+  {
+    name: "Benzinga",
+    url: "https://www.benzinga.com/feed",
+  },
+  {
+    name: "Investing.com News",
+    url: "https://www.investing.com/rss/news.rss",
+  },
+
+  // ── Macro & Policy (rate decisions, FOMC, economic data) ────────────
+  {
+    name: "Federal Reserve",
+    url: "https://www.federalreserve.gov/feeds/press_all.xml",
+  },
+  {
+    name: "CNBC Economy",
+    url: "https://www.cnbc.com/id/20910258/device/rss/rss.html",
+  },
+
+  // ── Regulatory Filings (8-K, insider activity) ──────────────────────
+  {
+    name: "SEC EDGAR Filings",
+    url: "https://efts.sec.gov/LATEST/search-index?q=%22Form+8-K%22&dateRange=custom&startdt=" +
+      new Date(Date.now() - 86400000).toISOString().split("T")[0] +
+      "&enddt=" + new Date().toISOString().split("T")[0] +
+      "&forms=8-K",
   },
 ];
 
