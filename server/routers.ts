@@ -27,35 +27,9 @@ export const appRouter = router({
       return await getRecentNews(50);
     }),
     analyze: protectedProcedure.mutation(async () => {
-      // Trigger news analysis for recent articles
-      const { getRecentNews, insertNewsArticle } = await import("./db");
-      const { getMockNewsArticles, convertToNewsArticle } = await import("./services/newsScraper");
-      const { analyzeNewsArticle } = await import("./services/sentimentAnalysis");
-      
-      const mockArticles = getMockNewsArticles();
-      const results = [];
-      
-      for (const article of mockArticles) {
-        const analysis = await analyzeNewsArticle(article);
-        const newsArticle = {
-          ...convertToNewsArticle(article),
-          sentiment: analysis.sentiment,
-          potentialTerm: analysis.potentialTerm,
-          aiSummary: analysis.aiSummary,
-          mentionedStocks: JSON.stringify(analysis.mentionedStocks),
-          sectors: JSON.stringify(analysis.sectors),
-          rallyIndicator: analysis.rallyIndicator,
-        };
-        
-        try {
-          await insertNewsArticle(newsArticle);
-          results.push(newsArticle);
-        } catch (error) {
-          console.error("Error inserting news article:", error);
-        }
-      }
-      
-      return { success: true, count: results.length };
+      // Analyze pending RSS articles with AI (uses real data from RSS sync)
+      const result = await analyzePendingNews();
+      return { success: true, count: result.analyzed, failed: result.failed };
     }),
   }),
   
@@ -97,22 +71,8 @@ export const appRouter = router({
       return await getRecentArkTrades(100);
     }),
     syncTrades: protectedProcedure.mutation(async () => {
-      const { getMockArkTrades, convertToArkTrade } = await import("./services/arkTracker");
-      const { insertArkTrade } = await import("./db");
-      
-      const trades = getMockArkTrades();
-      let count = 0;
-      
-      for (const trade of trades) {
-        try {
-          await insertArkTrade(convertToArkTrade(trade));
-          count++;
-        } catch (error) {
-          console.error("Error inserting ARK trade:", error);
-        }
-      }
-      
-      return { success: true, count };
+      // TODO: Connect to real ARK Invest API (https://arkfunds.io/api) for live trade data
+      throw new Error("ARK trade sync not yet connected to live data source. Set up ARK API integration to enable this feature.");
     }),
   }),
   
@@ -176,14 +136,14 @@ export const appRouter = router({
       return await getPredictedRallies();
     }),
     generate: protectedProcedure.mutation(async () => {
-      const { predictUpcomingRallies, extractHistoricalPatterns } = await import("./services/rallyPrediction");
+      const { predictWithTechnicalValidation, extractHistoricalPatterns } = await import("./services/rallyPrediction");
       const { getRecentNews, getHistoricalRallies, insertRallyPrediction } = await import("./db");
-      
+
       const recentNews = await getRecentNews(100);
       const historicalRallies = await getHistoricalRallies();
       const patterns = extractHistoricalPatterns(historicalRallies);
-      
-      const predictions = await predictUpcomingRallies(recentNews, patterns);
+
+      const predictions = await predictWithTechnicalValidation(recentNews, patterns);
       
       // Save predictions to database
       for (const pred of predictions) {
@@ -200,8 +160,20 @@ export const appRouter = router({
       
       return { success: true, count: predictions.length, predictions };
     }),
+
+    // Prediction accuracy scorecard
+    scorecard: publicProcedure.query(async () => {
+      const { getPredictionScorecard } = await import("./services/backtester");
+      return await getPredictionScorecard();
+    }),
+
+    // Evaluate all pending predictions that are old enough
+    evaluate: protectedProcedure.mutation(async () => {
+      const { evaluateAllPendingPredictions } = await import("./services/backtester");
+      return await evaluateAllPendingPredictions();
+    }),
   }),
-  
+
   // YouTube influencers
   youtube: router({
     influencers: protectedProcedure
@@ -227,37 +199,8 @@ export const appRouter = router({
       return await getRecentYoutubeVideos(20);
     }),
     syncVideos: protectedProcedure.mutation(async () => {
-      const { getMockYouTubeVideos, analyzeYouTubeVideo } = await import("./services/youtubeTracker");
-      const { insertYoutubeVideo } = await import("./db");
-      
-      const videos = getMockYouTubeVideos();
-      let count = 0;
-      
-      for (const video of videos) {
-        try {
-          const analysis = await analyzeYouTubeVideo(video);
-          await insertYoutubeVideo({
-            influencerId: 1, // Default influencer for demo
-            videoId: video.videoId,
-            title: video.title,
-            description: video.description,
-            publishedAt: video.publishedAt,
-            thumbnailUrl: video.thumbnailUrl,
-            videoUrl: video.videoUrl,
-            aiSummary: analysis.aiSummary,
-            keyTakeaways: JSON.stringify(analysis.keyTakeaways),
-            mentionedStocks: JSON.stringify(analysis.mentionedStocks),
-            sentiment: analysis.sentiment,
-            sectors: JSON.stringify(analysis.sectors),
-            tradingSignals: JSON.stringify(analysis.tradingSignals),
-          });
-          count++;
-        } catch (error) {
-          console.error(`Failed to sync video ${video.videoId}:`, error);
-        }
-      }
-      
-      return { success: true, count };
+      // TODO: Connect to YouTube Data API v3 for live video fetching
+      throw new Error("YouTube video sync not yet connected to live data source. Set YOUTUBE_API_KEY and configure channel tracking to enable this feature.");
     }),
   }),
 
@@ -268,18 +211,246 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return await getStockQuote(input.symbol);
       }),
-    
+
     getMultipleQuotes: publicProcedure
       .input(z.object({ symbols: z.array(z.string()) }))
       .query(async ({ input }) => {
         const quotes = await getMultipleStockQuotes(input.symbols);
         return Object.fromEntries(quotes);
       }),
-    
+
     search: publicProcedure
       .input(z.object({ query: z.string() }))
       .query(async ({ input }) => {
         return await searchStocks(input.query);
+      }),
+
+    // Price history from snapshots (for charts and technical analysis)
+    history: publicProcedure
+      .input(z.object({
+        symbol: z.string(),
+        limit: z.number().min(1).max(2000).optional(),
+      }))
+      .query(async ({ input }) => {
+        const { getPriceHistory } = await import("./db");
+        return await getPriceHistory(input.symbol, input.limit ?? 288);
+      }),
+
+    // Real-time WebSocket status
+    wsStatus: publicProcedure.query(async () => {
+      const { priceWS } = await import("./services/priceWebSocket");
+      return {
+        connected: priceWS.connected,
+        subscribedSymbols: priceWS.getSubscribedSymbols(),
+        cachedPrices: Object.fromEntries(
+          Array.from(priceWS.getAllPrices()).map(([k, v]) => [k, { price: v.price, timestamp: v.timestamp }])
+        ),
+      };
+    }),
+
+    // Subscribe to symbols via WebSocket
+    subscribe: protectedProcedure
+      .input(z.object({ symbols: z.array(z.string()) }))
+      .mutation(async ({ input }) => {
+        const { priceWS } = await import("./services/priceWebSocket");
+        priceWS.subscribeMany(input.symbols);
+        return { subscribed: priceWS.getSubscribedSymbols() };
+      }),
+  }),
+
+  // Technical analysis
+  technicals: router({
+    indicators: publicProcedure
+      .input(z.object({ symbol: z.string() }))
+      .query(async ({ input }) => {
+        const { computeIndicators } = await import("./services/technicalAnalysis");
+        return await computeIndicators(input.symbol);
+      }),
+
+    multipleIndicators: publicProcedure
+      .input(z.object({ symbols: z.array(z.string()).max(20) }))
+      .query(async ({ input }) => {
+        const { computeMultipleIndicators } = await import("./services/technicalAnalysis");
+        const results = await computeMultipleIndicators(input.symbols);
+        return Object.fromEntries(results);
+      }),
+  }),
+
+  // Portfolio management
+  portfolio: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const { getUserPortfolios } = await import("./db");
+      return await getUserPortfolios(ctx.user.id);
+    }),
+
+    create: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1).max(128),
+        initialCash: z.number().min(1000).max(10_000_000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { createPortfolio } = await import("./db");
+        await createPortfolio({
+          userId: ctx.user.id,
+          name: input.name,
+          type: "paper",
+          cashBalance: (input.initialCash ?? 100_000).toFixed(2),
+        });
+        return { success: true };
+      }),
+
+    summary: protectedProcedure
+      .input(z.object({ portfolioId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const { getPortfolioSummary } = await import("./services/paperTrading");
+        return await getPortfolioSummary(input.portfolioId, ctx.user.id);
+      }),
+
+    tradeHistory: protectedProcedure
+      .input(z.object({ portfolioId: z.number(), limit: z.number().optional() }))
+      .query(async ({ input }) => {
+        const { getPortfolioTradeHistory } = await import("./db");
+        return await getPortfolioTradeHistory(input.portfolioId, input.limit ?? 100);
+      }),
+  }),
+
+  // Paper trading
+  trade: router({
+    // Pre-trade risk check — call before execute to show warnings to user
+    riskCheck: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number(),
+        symbol: z.string().min(1).max(10),
+        side: z.enum(["buy", "sell"]),
+        quantity: z.number().int().min(1),
+      }))
+      .query(async ({ ctx, input }) => {
+        const { checkTradeRisk } = await import("./services/riskManager");
+        const { getUserPreferences } = await import("./db");
+        const prefs = await getUserPreferences(ctx.user.id);
+        const riskSettings = prefs ? {
+          maxPositionPct: prefs.maxPositionPct,
+          maxSectorPct: prefs.maxSectorPct,
+          stopLossPct: prefs.stopLossPct,
+          takeProfitPct: prefs.takeProfitPct,
+          maxDrawdownPct: prefs.maxDrawdownPct,
+          maxOpenPositions: prefs.maxOpenPositions,
+        } : {};
+        return await checkTradeRisk(
+          input.portfolioId, ctx.user.id, input.symbol, input.side, input.quantity, riskSettings,
+        );
+      }),
+
+    execute: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number(),
+        symbol: z.string().min(1).max(10),
+        side: z.enum(["buy", "sell"]),
+        quantity: z.number().int().min(1),
+        orderType: z.enum(["market", "limit"]).optional(),
+        limitPrice: z.number().positive().optional(),
+        stopLoss: z.number().positive().optional(),
+        takeProfit: z.number().positive().optional(),
+        predictionId: z.number().optional(),
+        notes: z.string().optional(),
+        skipRiskCheck: z.boolean().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        // Run risk check unless explicitly skipped
+        if (!input.skipRiskCheck && input.side === "buy") {
+          const { checkTradeRisk } = await import("./services/riskManager");
+          const { getUserPreferences } = await import("./db");
+          const prefs = await getUserPreferences(ctx.user.id);
+          const riskSettings = prefs ? {
+            maxPositionPct: prefs.maxPositionPct,
+            maxSectorPct: prefs.maxSectorPct,
+            stopLossPct: prefs.stopLossPct,
+            takeProfitPct: prefs.takeProfitPct,
+            maxDrawdownPct: prefs.maxDrawdownPct,
+            maxOpenPositions: prefs.maxOpenPositions,
+          } : {};
+          const risk = await checkTradeRisk(
+            input.portfolioId, ctx.user.id, input.symbol, input.side, input.quantity, riskSettings,
+          );
+          if (!risk.allowed) {
+            return {
+              success: false,
+              message: `Trade blocked by risk manager: ${risk.blocked.join("; ")}`,
+            };
+          }
+        }
+
+        const { executePaperTrade } = await import("./services/paperTrading");
+        return await executePaperTrade({
+          portfolioId: input.portfolioId,
+          userId: ctx.user.id,
+          symbol: input.symbol,
+          side: input.side,
+          quantity: input.quantity,
+          orderType: input.orderType ?? "market",
+          limitPrice: input.limitPrice,
+          stopLoss: input.stopLoss,
+          takeProfit: input.takeProfit,
+          predictionId: input.predictionId,
+          notes: input.notes,
+        });
+      }),
+
+    // Check stop loss / take profit triggers across all positions
+    checkTriggers: protectedProcedure
+      .input(z.object({ portfolioId: z.number() }))
+      .query(async ({ input }) => {
+        const { checkStopLossTakeProfit } = await import("./services/riskManager");
+        return await checkStopLossTakeProfit(input.portfolioId);
+      }),
+  }),
+
+  // Risk settings
+  risk: router({
+    settings: protectedProcedure.query(async ({ ctx }) => {
+      const { getUserPreferences } = await import("./db");
+      const prefs = await getUserPreferences(ctx.user.id);
+      if (!prefs) {
+        const { DEFAULT_RISK_SETTINGS } = await import("./services/riskManager");
+        return DEFAULT_RISK_SETTINGS;
+      }
+      return {
+        maxPositionPct: prefs.maxPositionPct,
+        maxSectorPct: prefs.maxSectorPct,
+        stopLossPct: prefs.stopLossPct,
+        takeProfitPct: prefs.takeProfitPct,
+        maxDrawdownPct: prefs.maxDrawdownPct,
+        maxOpenPositions: prefs.maxOpenPositions,
+        initialEquity: 100_000,
+      };
+    }),
+
+    updateSettings: protectedProcedure
+      .input(z.object({
+        maxPositionPct: z.number().min(1).max(100).optional(),
+        maxSectorPct: z.number().min(1).max(100).optional(),
+        stopLossPct: z.number().min(1).max(50).optional(),
+        takeProfitPct: z.number().min(1).max(100).optional(),
+        maxDrawdownPct: z.number().min(1).max(50).optional(),
+        maxOpenPositions: z.number().min(1).max(50).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { upsertUserPreferences, getUserPreferences } = await import("./db");
+        const existing = await getUserPreferences(ctx.user.id);
+        await upsertUserPreferences({
+          userId: ctx.user.id,
+          refreshSchedule: existing?.refreshSchedule ?? "4h",
+          alertThreshold: existing?.alertThreshold ?? "medium_high",
+          enableEmailAlerts: existing?.enableEmailAlerts ?? 1,
+          watchedSectors: existing?.watchedSectors ?? null,
+          maxPositionPct: input.maxPositionPct ?? existing?.maxPositionPct ?? 10,
+          maxSectorPct: input.maxSectorPct ?? existing?.maxSectorPct ?? 25,
+          stopLossPct: input.stopLossPct ?? existing?.stopLossPct ?? 5,
+          takeProfitPct: input.takeProfitPct ?? existing?.takeProfitPct ?? 15,
+          maxDrawdownPct: input.maxDrawdownPct ?? existing?.maxDrawdownPct ?? 15,
+          maxOpenPositions: input.maxOpenPositions ?? existing?.maxOpenPositions ?? 10,
+        });
+        return { success: true };
       }),
   }),
 
@@ -290,7 +461,7 @@ export const appRouter = router({
         const result = await syncRSSNews();
         return result;
       }),
-    
+
     analyzeNews: protectedProcedure
       .mutation(async () => {
         const result = await analyzePendingNews();

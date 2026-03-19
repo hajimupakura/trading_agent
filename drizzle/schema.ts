@@ -132,10 +132,17 @@ export type InsertAlert = typeof alerts.$inferInsert;
 export const userPreferences = mysqlTable("user_preferences", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),
-  refreshSchedule: varchar("refresh_schedule", { length: 64 }).default("4h").notNull(), // e.g., "4h", "6h", "12h"
+  refreshSchedule: varchar("refresh_schedule", { length: 64 }).default("4h").notNull(),
   alertThreshold: mysqlEnum("alert_threshold", ["all", "medium_high", "high_only"]).default("medium_high").notNull(),
   enableEmailAlerts: int("enable_email_alerts").default(1).notNull(),
   watchedSectors: text("watched_sectors"), // JSON array of sectors to focus on
+  // Risk management settings
+  maxPositionPct: int("max_position_pct").default(10).notNull(),       // Max % of equity per position
+  maxSectorPct: int("max_sector_pct").default(25).notNull(),           // Max % of equity in one sector
+  stopLossPct: int("stop_loss_pct").default(5).notNull(),              // Default stop loss %
+  takeProfitPct: int("take_profit_pct").default(15).notNull(),         // Default take profit %
+  maxDrawdownPct: int("max_drawdown_pct").default(15).notNull(),       // Max portfolio drawdown %
+  maxOpenPositions: int("max_open_positions").default(10).notNull(),    // Max concurrent positions
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
 });
 
@@ -165,3 +172,95 @@ export const sectorMomentum = mysqlTable("sector_momentum", {
 
 export type SectorMomentum = typeof sectorMomentum.$inferSelect;
 export type InsertSectorMomentum = typeof sectorMomentum.$inferInsert;
+
+/**
+ * Price snapshots for historical tracking and technical analysis.
+ * Captured every 5 minutes during market hours from the WebSocket feed.
+ */
+export const priceSnapshots = mysqlTable("price_snapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  symbol: varchar("symbol", { length: 16 }).notNull(),
+  price: varchar("price", { length: 32 }).notNull(), // Stored as string for precision
+  volume: int("volume").default(0),
+  high: varchar("high", { length: 32 }),
+  low: varchar("low", { length: 32 }),
+  open: varchar("open", { length: 32 }),
+  capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
+
+export type PriceSnapshot = typeof priceSnapshots.$inferSelect;
+export type InsertPriceSnapshot = typeof priceSnapshots.$inferInsert;
+
+/**
+ * Portfolios — each user can have paper and (eventually) live portfolios.
+ */
+export const portfolios = mysqlTable("portfolios", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 128 }).notNull(),
+  type: mysqlEnum("type", ["paper", "live"]).default("paper").notNull(),
+  cashBalance: varchar("cash_balance", { length: 32 }).default("100000").notNull(), // String for precision
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type Portfolio = typeof portfolios.$inferSelect;
+export type InsertPortfolio = typeof portfolios.$inferInsert;
+
+/**
+ * Open positions within a portfolio.
+ */
+export const positions = mysqlTable("positions", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolio_id").notNull().references(() => portfolios.id, { onDelete: "cascade" }),
+  symbol: varchar("symbol", { length: 16 }).notNull(),
+  quantity: int("quantity").notNull(),
+  avgEntryPrice: varchar("avg_entry_price", { length: 32 }).notNull(),
+  side: mysqlEnum("side", ["long", "short"]).default("long").notNull(),
+  stopLoss: varchar("stop_loss", { length: 32 }),
+  takeProfit: varchar("take_profit", { length: 32 }),
+  openedAt: timestamp("opened_at").defaultNow().notNull(),
+});
+
+export type Position = typeof positions.$inferSelect;
+export type InsertPosition = typeof positions.$inferInsert;
+
+/**
+ * Trade log — every buy/sell action, linked back to predictions.
+ */
+export const tradesLog = mysqlTable("trades_log", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolio_id").notNull().references(() => portfolios.id, { onDelete: "cascade" }),
+  symbol: varchar("symbol", { length: 16 }).notNull(),
+  side: mysqlEnum("side", ["buy", "sell"]).notNull(),
+  quantity: int("quantity").notNull(),
+  price: varchar("price", { length: 32 }).notNull(),
+  total: varchar("total", { length: 32 }).notNull(), // quantity * price
+  orderType: mysqlEnum("order_type", ["market", "limit"]).default("market").notNull(),
+  status: mysqlEnum("status", ["filled", "cancelled"]).default("filled").notNull(),
+  predictionId: int("prediction_id"), // Links to the rally prediction that triggered this trade
+  notes: text("notes"),
+  executedAt: timestamp("executed_at").defaultNow().notNull(),
+});
+
+export type TradeLog = typeof tradesLog.$inferSelect;
+export type InsertTradeLog = typeof tradesLog.$inferInsert;
+
+/**
+ * Prediction outcomes — tracks whether predictions were accurate.
+ * Evaluated after the prediction's timeframe expires.
+ */
+export const predictionOutcomes = mysqlTable("prediction_outcomes", {
+  id: int("id").autoincrement().primaryKey(),
+  predictionId: int("prediction_id").notNull().references(() => rallyEvents.id, { onDelete: "cascade" }),
+  predictedDirection: mysqlEnum("predicted_direction", ["up", "down"]).notNull(),
+  predictedConfidence: int("predicted_confidence").notNull(),
+  predictedSector: varchar("predicted_sector", { length: 128 }).notNull(),
+  predictedStocks: text("predicted_stocks"), // JSON array of tickers
+  actualReturn: varchar("actual_return", { length: 32 }), // Average % return of predicted stocks
+  wasCorrect: int("was_correct"), // 1 = correct direction, 0 = wrong
+  evaluatedAt: timestamp("evaluated_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type PredictionOutcome = typeof predictionOutcomes.$inferSelect;
+export type InsertPredictionOutcome = typeof predictionOutcomes.$inferInsert;

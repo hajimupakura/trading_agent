@@ -1,7 +1,7 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { 
-  InsertUser, 
+import {
+  InsertUser,
   users,
   newsArticles,
   InsertNewsArticle,
@@ -16,7 +16,15 @@ import {
   sectorMomentum,
   InsertSectorMomentum,
   userPreferences,
-  InsertUserPreference
+  InsertUserPreference,
+  priceSnapshots,
+  InsertPriceSnapshot,
+  portfolios,
+  InsertPortfolio,
+  positions,
+  InsertPosition,
+  tradesLog,
+  InsertTradeLog,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -118,7 +126,7 @@ export async function getRecentNews(limit: number = 50, sector?: string) {
   const db = await getDb();
   if (!db) return [];
   
-  let query = db.select().from(newsArticles).orderBy(newsArticles.publishedAt).$dynamic();
+  let query = db.select().from(newsArticles).orderBy(desc(newsArticles.publishedAt)).$dynamic();
   
   return await query.limit(limit);
 }
@@ -129,7 +137,7 @@ export async function getNewsByDateRange(startDate: Date, endDate: Date) {
   
   return await db.select().from(newsArticles)
     .where(sql`${newsArticles.publishedAt} BETWEEN ${startDate} AND ${endDate}`)
-    .orderBy(newsArticles.publishedAt);
+    .orderBy(desc(newsArticles.publishedAt));
 }
 
 // Watchlist
@@ -170,17 +178,17 @@ export async function getRecentArkTrades(limit: number = 100) {
   if (!db) return [];
   
   return await db.select().from(arkTrades)
-    .orderBy(arkTrades.tradeDate)
+    .orderBy(desc(arkTrades.tradeDate))
     .limit(limit);
 }
 
 export async function getArkTradesByTicker(ticker: string, limit: number = 50) {
   const db = await getDb();
   if (!db) return [];
-  
+
   return await db.select().from(arkTrades)
     .where(eq(arkTrades.ticker, ticker))
-    .orderBy(arkTrades.tradeDate)
+    .orderBy(desc(arkTrades.tradeDate))
     .limit(limit);
 }
 
@@ -199,13 +207,13 @@ export async function getUserAlerts(userId: number, unreadOnly: boolean = false)
   if (unreadOnly) {
     return await db.select().from(alerts)
       .where(sql`${alerts.userId} = ${userId} AND ${alerts.isRead} = 0`)
-      .orderBy(alerts.createdAt)
+      .orderBy(desc(alerts.createdAt))
       .limit(100);
   }
-  
+
   return await db.select().from(alerts)
     .where(eq(alerts.userId, userId))
-    .orderBy(alerts.createdAt)
+    .orderBy(desc(alerts.createdAt))
     .limit(100);
 }
 
@@ -236,7 +244,7 @@ export async function getRallyEvents(status?: "ongoing" | "ended" | "potential")
     query = query.where(eq(rallyEvents.status, status));
   }
   
-  return await query.orderBy(rallyEvents.startDate);
+  return await query.orderBy(desc(rallyEvents.startDate));
 }
 
 // Sector Momentum
@@ -253,7 +261,7 @@ export async function getLatestSectorMomentum() {
   
   // Get the most recent momentum for each sector
   return await db.select().from(sectorMomentum)
-    .orderBy(sectorMomentum.date)
+    .orderBy(desc(sectorMomentum.date))
     .limit(50);
 }
 
@@ -280,6 +288,12 @@ export async function upsertUserPreferences(prefs: InsertUserPreference) {
         alertThreshold: prefs.alertThreshold,
         enableEmailAlerts: prefs.enableEmailAlerts,
         watchedSectors: prefs.watchedSectors,
+        maxPositionPct: prefs.maxPositionPct,
+        maxSectorPct: prefs.maxSectorPct,
+        stopLossPct: prefs.stopLossPct,
+        takeProfitPct: prefs.takeProfitPct,
+        maxDrawdownPct: prefs.maxDrawdownPct,
+        maxOpenPositions: prefs.maxOpenPositions,
       }
     });
 }
@@ -344,4 +358,116 @@ export async function insertRallyPrediction(prediction: any) {
     status: "predicted",
     isHistorical: 0,
   });
+}
+
+// Price Snapshots
+export async function insertPriceSnapshot(snapshot: InsertPriceSnapshot) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(priceSnapshots).values(snapshot);
+}
+
+export async function insertPriceSnapshots(snapshots: InsertPriceSnapshot[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (snapshots.length === 0) return;
+  return await db.insert(priceSnapshots).values(snapshots);
+}
+
+export async function getPriceHistory(symbol: string, limit: number = 288) {
+  // 288 = 24 hours at 5-min intervals
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db.select().from(priceSnapshots)
+    .where(eq(priceSnapshots.symbol, symbol.toUpperCase()))
+    .orderBy(desc(priceSnapshots.capturedAt))
+    .limit(limit);
+}
+
+// ── Portfolios ──────────────────────────────────────────────────────────────
+
+export async function createPortfolio(portfolio: InsertPortfolio) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(portfolios).values(portfolio);
+}
+
+export async function getUserPortfolios(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(portfolios)
+    .where(eq(portfolios.userId, userId))
+    .orderBy(desc(portfolios.createdAt));
+}
+
+export async function getPortfolioById(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(portfolios)
+    .where(sql`${portfolios.id} = ${id} AND ${portfolios.userId} = ${userId}`)
+    .limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function updatePortfolioCash(id: number, newBalance: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.update(portfolios)
+    .set({ cashBalance: newBalance })
+    .where(eq(portfolios.id, id));
+}
+
+// ── Positions ───────────────────────────────────────────────────────────────
+
+export async function getPortfolioPositions(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(positions)
+    .where(eq(positions.portfolioId, portfolioId))
+    .orderBy(desc(positions.openedAt));
+}
+
+export async function getPositionBySymbol(portfolioId: number, symbol: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(positions)
+    .where(sql`${positions.portfolioId} = ${portfolioId} AND ${positions.symbol} = ${symbol}`)
+    .limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function insertPosition(position: InsertPosition) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(positions).values(position);
+}
+
+export async function updatePosition(id: number, updates: { quantity?: number; avgEntryPrice?: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.update(positions).set(updates).where(eq(positions.id, id));
+}
+
+export async function deletePosition(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.delete(positions).where(eq(positions.id, id));
+}
+
+// ── Trade Log ───────────────────────────────────────────────────────────────
+
+export async function insertTradeLog(trade: InsertTradeLog) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(tradesLog).values(trade);
+}
+
+export async function getPortfolioTradeHistory(portfolioId: number, limit: number = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(tradesLog)
+    .where(eq(tradesLog.portfolioId, portfolioId))
+    .orderBy(desc(tradesLog.executedAt))
+    .limit(limit);
 }

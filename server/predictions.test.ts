@@ -74,17 +74,12 @@ describe("YouTube Tracking", () => {
     expect(Array.isArray(videos)).toBe(true);
   });
 
-  it("should sync YouTube videos", async () => {
+  it("should throw when syncing YouTube videos (not yet connected to live API)", async () => {
     const ctx = createTestContext();
     const caller = appRouter.createCaller(ctx);
 
-    const result = await caller.youtube.syncVideos();
-
-    expect(result).toHaveProperty("success");
-    expect(result.success).toBe(true);
-    expect(result).toHaveProperty("count");
-    expect(typeof result.count).toBe("number");
-  }, 60000); // 60 second timeout for AI video analysis
+    await expect(caller.youtube.syncVideos()).rejects.toThrow();
+  });
 });
 
 describe("YouTube Influencers", () => {

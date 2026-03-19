@@ -1,17 +1,20 @@
 // @ts-ignore - No type definitions available for finnhub
-import * as finnhub from "finnhub";
+import { DefaultApi } from "finnhub";
 
 /**
  * Finnhub API Service
  * Provides real-time stock quotes, company news, and financial data
- * API Key: d5ro8fhr01qj5oil5r6gd5ro8fhr01qj5oil5r70
  * Rate limit: 60 calls/minute (free tier)
  */
 
-const apiKey = process.env.FINNHUB_API_KEY || "d5ro8fhr01qj5oil5r6gd5ro8fhr01qj5oil5r70";
-const api_client = new (finnhub as any).ApiClient();
-api_client.authentications["api_key"].apiKey = apiKey;
-const api = new (finnhub as any).DefaultApi(api_client);
+const apiKey = process.env.FINNHUB_API_KEY;
+if (!apiKey) {
+  console.error("[Finnhub] FINNHUB_API_KEY environment variable is required");
+}
+
+const api = new DefaultApi({
+  token: apiKey || "",
+});
 
 export interface FinnhubQuote {
   symbol: string;

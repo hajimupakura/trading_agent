@@ -1,5 +1,6 @@
 import { invokeLLM } from "../_core/llm";
 import { NewsArticle, RallyEvent } from "../../drizzle/schema";
+import { computeMultipleIndicators, formatIndicatorsForPrompt } from "./technicalAnalysis";
 
 /**
  * Predictive rally detection engine
@@ -49,11 +50,15 @@ export function extractHistoricalPatterns(historicalRallies: RallyEvent[]): Hist
 }
 
 /**
- * Predict upcoming rallies based on current news and historical patterns
+ * Predict upcoming rallies based on current news, historical patterns,
+ * and optionally technical indicators for mentioned stocks.
+ *
+ * @param technicalContext - Pre-formatted technical indicator text to inject into the prompt.
  */
 export async function predictUpcomingRallies(
   recentNews: NewsArticle[],
-  historicalPatterns: HistoricalPattern[]
+  historicalPatterns: HistoricalPattern[],
+  technicalContext?: string,
 ): Promise<RallyPrediction[]> {
   try {
     // Prepare data for LLM analysis
@@ -103,7 +108,13 @@ EARLY WARNING SIGNALS FOR DOWNSIDE (PUTS):
 HISTORICAL RALLY PATTERNS:
 ${JSON.stringify(historicalPatterns, null, 2)}
 
-These patterns show what early signals preceded major rallies. Use them to identify similar patterns in current news.`,
+These patterns show what early signals preceded major rallies. Use them to identify similar patterns in current news.
+${technicalContext ? `
+TECHNICAL ANALYSIS DATA:
+The following technical indicators are available for stocks mentioned in recent news. Use them to VALIDATE or REJECT your predictions. A prediction supported by both news sentiment AND technical signals (e.g., RSI oversold + bullish news = strong call; MACD bearish crossover + negative news = strong put) should have HIGHER confidence. Predictions contradicted by technicals should have LOWER confidence.
+
+${technicalContext}
+` : ""}`,
         },
         {
           role: "user",
@@ -298,4 +309,56 @@ export function detectEarlySignals(
   }
 
   return signals;
+}
+
+/**
+ * Extract unique stock tickers mentioned across news articles.
+ * Used to fetch technical indicators before prediction.
+ */
+export function extractMentionedStocks(news: NewsArticle[]): string[] {
+  const stocks = new Set<string>();
+  for (const article of news) {
+    if (article.mentionedStocks) {
+      try {
+        const parsed = JSON.parse(article.mentionedStocks);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((s: string) => stocks.add(s.toUpperCase()));
+        }
+      } catch { /* ignore parse errors */ }
+    }
+  }
+  return Array.from(stocks).slice(0, 20); // Cap at 20 to limit API calls
+}
+
+/**
+ * Enhanced prediction: gathers technical indicators for mentioned stocks
+ * and feeds them into the prediction prompt for validation.
+ */
+export async function predictWithTechnicalValidation(
+  recentNews: NewsArticle[],
+  historicalPatterns: HistoricalPattern[],
+): Promise<RallyPrediction[]> {
+  // Step 1: Extract mentioned stocks from news
+  const mentionedStocks = extractMentionedStocks(recentNews);
+
+  // Step 2: Compute technical indicators (skip if no stocks found)
+  let technicalContext: string | undefined;
+  if (mentionedStocks.length > 0) {
+    try {
+      console.log(`[Prediction] Computing technicals for ${mentionedStocks.length} stocks...`);
+      const indicators = await computeMultipleIndicators(mentionedStocks);
+      if (indicators.size > 0) {
+        technicalContext = Array.from(indicators.values())
+          .map(formatIndicatorsForPrompt)
+          .join("\n\n");
+        console.log(`[Prediction] Got technicals for ${indicators.size} stocks`);
+      }
+    } catch (error) {
+      console.warn("[Prediction] Failed to compute technical indicators:", error);
+      // Continue without technicals — predictions still work with news alone
+    }
+  }
+
+  // Step 3: Run prediction with technical context
+  return predictUpcomingRallies(recentNews, historicalPatterns, technicalContext);
 }

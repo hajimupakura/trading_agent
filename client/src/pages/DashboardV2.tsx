@@ -41,11 +41,11 @@ export default function DashboardV2() {
   });
 
   const syncYouTube = trpc.youtube.syncVideos.useMutation({
-    onSuccess: (data) => {
-      toast.success(`Synced ${data.count} YouTube videos!`);
+    onSuccess: () => {
+      toast.success("YouTube videos synced!");
     },
-    onError: () => {
-      toast.error("Failed to sync YouTube videos");
+    onError: (error) => {
+      toast.error(error.message || "Failed to sync YouTube videos");
     },
   });
 
