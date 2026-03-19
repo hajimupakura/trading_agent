@@ -161,6 +161,113 @@ export const appRouter = router({
       return { success: true, count: predictions.length, predictions };
     }),
 
+    // Generate with multi-model consensus (requires OPENROUTER_API_KEY)
+    generateConsensus: protectedProcedure.mutation(async () => {
+      const { extractHistoricalPatterns, extractMentionedStocks } = await import("./services/rallyPrediction");
+      const { getRecentNews, getHistoricalRallies, insertRallyPrediction } = await import("./db");
+      const { validateWithConsensus, isMultiModelAvailable } = await import("./services/multiModelValidator");
+      const { computeMultipleIndicators, formatIndicatorsForPrompt } = await import("./services/technicalAnalysis");
+      const { getInsiderSummaryForPrompt, getMaterialEventsSummary } = await import("./services/secEdgar");
+      const { scanRedditSentiment, formatSentimentForPrompt } = await import("./services/socialSentiment");
+
+      const recentNews = await getRecentNews(100);
+      const historicalRallies = await getHistoricalRallies();
+      const patterns = extractHistoricalPatterns(historicalRallies);
+      const mentionedStocks = extractMentionedStocks(recentNews);
+
+      // Gather enrichment data
+      const newsData = recentNews.map(n => ({
+        title: n.title,
+        summary: n.aiSummary || n.summary,
+        sentiment: n.sentiment,
+        sectors: n.sectors ? JSON.parse(n.sectors) : [],
+        stocks: n.mentionedStocks ? JSON.parse(n.mentionedStocks) : [],
+        rallyIndicator: n.rallyIndicator,
+      }));
+
+      // Build the same prompt that predictUpcomingRallies uses, for multi-model
+      const systemPrompt = `You are an expert market analyst specializing in predicting MONEY-MAKING OPPORTUNITIES 2-3 weeks early. Analyze news patterns, technical data, insider trading, and social sentiment to predict both upside (calls) and downside (puts) opportunities. Be specific about entry timing and exit strategy. Historical patterns: ${JSON.stringify(patterns)}`;
+
+      const userPrompt = `Analyze these ${recentNews.length} recent news articles:\n${JSON.stringify(newsData.slice(0, 50))}\n\nIdentify BOTH upside (calls) and downside (puts) opportunities.`;
+
+      // Import the prediction schema from rallyPrediction
+      const predictionSchema = {
+        type: "json_schema" as const,
+        json_schema: {
+          name: "rally_predictions",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              predictions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    sector: { type: "string" },
+                    opportunityType: { type: "string", enum: ["call", "put"] },
+                    direction: { type: "string", enum: ["up", "down"] },
+                    confidence: { type: "number" },
+                    timeframe: { type: "string", enum: ["2-3 weeks", "1-2 months", "3-6 months"] },
+                    earlySignals: { type: "array", items: { type: "string" } },
+                    recommendedStocks: { type: "array", items: { type: "string" } },
+                    reasoning: { type: "string" },
+                    entryTiming: { type: "string" },
+                    exitStrategy: { type: "string" },
+                  },
+                  required: ["sector", "opportunityType", "direction", "confidence", "timeframe", "earlySignals", "recommendedStocks", "reasoning", "entryTiming", "exitStrategy"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["predictions"],
+            additionalProperties: false,
+          },
+        },
+      };
+
+      const consensus = await validateWithConsensus({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        response_format: predictionSchema,
+      });
+
+      // Save consensus predictions
+      for (const pred of consensus.consensusPredictions.filter(p => p.confidence >= 55)) {
+        await insertRallyPrediction({
+          sector: pred.sector,
+          name: `Predicted ${pred.sector} Rally`,
+          startDate: new Date(),
+          description: pred.reasoning,
+          predictionConfidence: pred.confidence,
+          earlySignals: JSON.stringify([]),
+          keyStocks: JSON.stringify(pred.recommendedStocks),
+        });
+      }
+
+      return {
+        success: true,
+        count: consensus.consensusPredictions.length,
+        agreement: consensus.agreement,
+        modelsUsed: consensus.modelsUsed,
+        multiModelEnabled: isMultiModelAvailable(),
+        predictions: consensus.consensusPredictions,
+      };
+    }),
+
+    // Model configuration status
+    modelConfig: publicProcedure.query(async () => {
+      const { isMultiModelAvailable } = await import("./services/multiModelValidator");
+      return {
+        primaryModel: "gemini-2.5-flash",
+        secondaryModel: process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o-mini",
+        multiModelEnabled: isMultiModelAvailable(),
+        openrouterConfigured: !!process.env.OPENROUTER_API_KEY,
+      };
+    }),
+
     // Prediction accuracy scorecard
     scorecard: publicProcedure.query(async () => {
       const { getPredictionScorecard } = await import("./services/backtester");
