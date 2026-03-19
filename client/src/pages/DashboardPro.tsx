@@ -108,7 +108,7 @@ export default function DashboardPro() {
   const { data: riskSettings } = trpc.risk.settings.useQuery(
     undefined, { enabled: isAuthenticated }
   );
-  const { data: portfolios = [] } = trpc.portfolio.list.useQuery(
+  const { data: portfolios = [], refetch: refetchPortfolios } = trpc.portfolio.list.useQuery(
     undefined, { enabled: isAuthenticated }
   );
   const { data: redditSentiment } = trpc.sentiment.reddit.useQuery(
@@ -160,6 +160,10 @@ export default function DashboardPro() {
   });
   const runNow = trpc.agent.runNow.useMutation({
     onSuccess: () => { toast.success("Agent cycle triggered"); refetchAgent(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const createPortfolio = trpc.portfolio.create.useMutation({
+    onSuccess: () => { toast.success("Portfolio created with $100,000"); refetchPortfolios(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -684,9 +688,20 @@ export default function DashboardPro() {
               </>
             ) : (
               <Card className="border-border">
-                <CardContent className="py-12 text-center text-sm text-muted-foreground">
-                  <Briefcase className="h-8 w-8 mx-auto mb-3 opacity-30" />
-                  No portfolio found. The agent will create one automatically on first cycle.
+                <CardContent className="py-12 text-center space-y-4">
+                  <Briefcase className="h-10 w-10 mx-auto opacity-25" />
+                  <div>
+                    <p className="font-semibold text-foreground mb-1">No portfolio yet</p>
+                    <p className="text-sm text-muted-foreground">Create a paper trading portfolio to start tracking the agent's performance.</p>
+                  </div>
+                  <Button
+                    onClick={() => createPortfolio.mutate({ name: "Agent Portfolio", initialCash: 100_000 })}
+                    disabled={createPortfolio.isPending}
+                    className="h-9 px-6"
+                  >
+                    {createPortfolio.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Create Portfolio ($100,000)
+                  </Button>
                 </CardContent>
               </Card>
             )}
@@ -903,9 +918,9 @@ export default function DashboardPro() {
                           </div>
                           <div className="grid grid-cols-3 gap-2 mb-3">
                             {[
-                              { label: "Predictions", val: log.predictionsGenerated, color: "text-primary" },
-                              { label: "Trades", val: log.tradesExecuted, color: "text-profit" },
-                              { label: "Closed", val: log.positionsClosed, color: "text-muted-foreground" },
+                              { label: "Predictions", val: typeof log.predictionsGenerated === "number" ? log.predictionsGenerated : 0, color: "text-primary" },
+                              { label: "Trades", val: typeof log.tradesExecuted === "number" ? log.tradesExecuted : 0, color: "text-profit" },
+                              { label: "Closed", val: typeof log.positionsClosed === "number" ? log.positionsClosed : Array.isArray(log.positionsClosed) ? (log.positionsClosed as any[]).length : 0, color: "text-muted-foreground" },
                             ].map(({ label, val, color }) => (
                               <div key={label} className="text-center bg-card rounded-lg py-2 border border-border/40">
                                 <div className={`text-lg font-mono font-bold ${color}`}>{val}</div>

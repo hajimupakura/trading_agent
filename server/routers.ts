@@ -662,8 +662,18 @@ export const appRouter = router({
 
     runNow: protectedProcedure.mutation(async () => {
       const { runAgentCycle } = await import("./services/tradingAgent");
-      const portfolioId = parseInt(process.env.AGENT_PORTFOLIO_ID || "1");
       const userId = parseInt(process.env.AGENT_USER_ID || "1");
+
+      // Resolve portfolio: use AGENT_PORTFOLIO_ID if set, otherwise first portfolio for the agent user
+      const { getUserPortfolios, createPortfolio } = await import("./db");
+      let portfolios = await getUserPortfolios(userId);
+      if (portfolios.length === 0) {
+        await createPortfolio({ userId, name: "Agent Portfolio", type: "paper", cashBalance: "100000.00" });
+        portfolios = await getUserPortfolios(userId);
+      }
+      const envPortfolioId = process.env.AGENT_PORTFOLIO_ID ? parseInt(process.env.AGENT_PORTFOLIO_ID) : null;
+      const portfolioId = envPortfolioId ?? portfolios[0]!.id;
+
       return await runAgentCycle(portfolioId, userId);
     }),
   }),
