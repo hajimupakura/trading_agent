@@ -86,7 +86,7 @@ async function invokeSecondary(systemPrompt: string, userMessage: string): Promi
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
 
-  const model = process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o-mini";
+  const model = process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o";
   try {
     const res = await axios.post(
       `${process.env.OPENROUTER_API_URL || "https://openrouter.ai/api/v1"}/chat/completions`,
@@ -221,7 +221,7 @@ export async function runMasterAgent(
   const { merged, agreed, agreementRate } = applyConsensus(primaryDecision, secondaryDecision);
 
   const modelsUsed = ["gemini-flash (primary)"];
-  if (secondaryDecision) modelsUsed.push(`${process.env.SECONDARY_LLM_MODEL || "gpt-4o-mini"} (secondary)`);
+  if (secondaryDecision) modelsUsed.push(`${process.env.SECONDARY_LLM_MODEL || "gpt-4o"} (secondary)`);
 
   return {
     ...merged,

@@ -237,7 +237,7 @@ function resolveBackend(): LLMBackend {
     return {
       url: `${baseUrl}/chat/completions`,
       apiKey: openrouterKey,
-      model: process.env.LLM_MODEL || "google/gemini-2.0-flash-exp:free",
+      model: process.env.LLM_MODEL || "google/gemini-2.5-flash-preview",
     };
   }
 

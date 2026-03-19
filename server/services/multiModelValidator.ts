@@ -48,7 +48,7 @@ async function invokeSecondaryModel(params: InvokeParams): Promise<InvokeResult 
     return null;
   }
 
-  const model = process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o-mini";
+  const model = process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o";
 
   try {
     const messages = params.messages.map(m => ({
@@ -151,7 +151,7 @@ export async function validateWithConsensus(
 
   const modelsUsed = ["primary (Gemini Flash)"];
   if (secondaryResult) {
-    modelsUsed.push(`secondary (${process.env.SECONDARY_LLM_MODEL || "gpt-4o-mini"})`);
+    modelsUsed.push(`secondary (${process.env.SECONDARY_LLM_MODEL || "gpt-4o"})`);
   }
 
   // If secondary model failed, return primary predictions with a note

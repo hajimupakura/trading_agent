@@ -261,8 +261,8 @@ export const appRouter = router({
     modelConfig: publicProcedure.query(async () => {
       const { isMultiModelAvailable } = await import("./services/multiModelValidator");
       return {
-        primaryModel: "gemini-2.5-flash",
-        secondaryModel: process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o-mini",
+        primaryModel: "gemini-2.5-flash-preview",
+        secondaryModel: process.env.SECONDARY_LLM_MODEL || "openai/gpt-4o",
         multiModelEnabled: isMultiModelAvailable(),
         openrouterConfigured: !!process.env.OPENROUTER_API_KEY,
       };
