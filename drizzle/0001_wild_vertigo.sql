@@ -30,7 +30,7 @@ CREATE TABLE `news_articles` (
 	`title` text NOT NULL,
 	`summary` text,
 	`content` text,
-	`url` varchar(1024) NOT NULL,
+	`url` varchar(768) NOT NULL,
 	`source` varchar(128) NOT NULL,
 	`published_at` timestamp NOT NULL,
 	`scraped_at` timestamp NOT NULL DEFAULT (now()),

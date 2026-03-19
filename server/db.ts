@@ -87,6 +87,18 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = 'admin';
       updateSet.role = 'admin';
     }
+    if (user.passwordHash !== undefined) {
+      values.passwordHash = user.passwordHash;
+      updateSet.passwordHash = user.passwordHash;
+    }
+    if (user.resetToken !== undefined) {
+      values.resetToken = user.resetToken;
+      updateSet.resetToken = user.resetToken;
+    }
+    if (user.resetTokenExpiresAt !== undefined) {
+      values.resetTokenExpiresAt = user.resetTokenExpiresAt;
+      updateSet.resetTokenExpiresAt = user.resetTokenExpiresAt;
+    }
 
     if (!values.lastSignedIn) {
       values.lastSignedIn = new Date();
@@ -114,6 +126,23 @@ export async function getUserByOpenId(openId: string) {
 
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function setResetToken(openId: string, token: string, expiresAt: Date): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users)
+    .set({ resetToken: token, resetTokenExpiresAt: expiresAt })
+    .where(eq(users.openId, openId));
+}
+
+export async function getUserByResetToken(token: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users)
+    .where(eq(users.resetToken, token))
+    .limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 

@@ -8,17 +8,21 @@ import Home from "./pages/Home";
 import DashboardV2 from "./pages/DashboardV2";
 import Dashboard from "./pages/Dashboard";
 import DashboardEnhanced from "./pages/DashboardEnhanced";
+import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
-      <Route path={"/"} component={DashboardEnhanced} />
-      <Route path={"/v2"} component={DashboardV2} />
-      <Route path={"/v1"} component={Dashboard} />
-      <Route path={"/old"} component={Home} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
+      <Route path="/" component={DashboardEnhanced} />
+      <Route path="/login" component={Login} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
+      <Route path="/v2" component={DashboardV2} />
+      <Route path="/v1" component={Dashboard} />
+      <Route path="/old" component={Home} />
+      <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
   );

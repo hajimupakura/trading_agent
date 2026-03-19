@@ -17,6 +17,9 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  passwordHash: varchar("passwordHash", { length: 256 }),
+  resetToken: varchar("resetToken", { length: 128 }),
+  resetTokenExpiresAt: timestamp("resetTokenExpiresAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -33,7 +36,7 @@ export const newsArticles = mysqlTable("news_articles", {
   title: text("title").notNull(),
   summary: text("summary"),
   content: text("content"),
-  url: varchar("url", { length: 1024 }).notNull().unique(),
+  url: varchar("url", { length: 768 }).notNull().unique(),
   source: varchar("source", { length: 128 }).notNull(), // Reuters, Bloomberg, Yahoo Finance, etc.
   publishedAt: timestamp("published_at").notNull(),
   scrapedAt: timestamp("scraped_at").defaultNow().notNull(),
