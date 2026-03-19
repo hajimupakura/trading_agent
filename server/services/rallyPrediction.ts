@@ -1,6 +1,8 @@
 import { invokeLLM } from "../_core/llm";
 import { NewsArticle, RallyEvent } from "../../drizzle/schema";
 import { computeMultipleIndicators, formatIndicatorsForPrompt } from "./technicalAnalysis";
+import { getInsiderSummaryForPrompt, getMaterialEventsSummary } from "./secEdgar";
+import { scanRedditSentiment, formatSentimentForPrompt } from "./socialSentiment";
 
 /**
  * Predictive rally detection engine
@@ -51,14 +53,17 @@ export function extractHistoricalPatterns(historicalRallies: RallyEvent[]): Hist
 
 /**
  * Predict upcoming rallies based on current news, historical patterns,
- * and optionally technical indicators for mentioned stocks.
- *
- * @param technicalContext - Pre-formatted technical indicator text to inject into the prompt.
+ * and optionally enriched data from multiple sources.
  */
 export async function predictUpcomingRallies(
   recentNews: NewsArticle[],
   historicalPatterns: HistoricalPattern[],
-  technicalContext?: string,
+  enrichment?: {
+    technicalContext?: string;
+    insiderContext?: string;
+    socialContext?: string;
+    materialEvents?: string;
+  },
 ): Promise<RallyPrediction[]> {
   try {
     // Prepare data for LLM analysis
@@ -109,11 +114,23 @@ HISTORICAL RALLY PATTERNS:
 ${JSON.stringify(historicalPatterns, null, 2)}
 
 These patterns show what early signals preceded major rallies. Use them to identify similar patterns in current news.
-${technicalContext ? `
+${enrichment?.technicalContext ? `
 TECHNICAL ANALYSIS DATA:
-The following technical indicators are available for stocks mentioned in recent news. Use them to VALIDATE or REJECT your predictions. A prediction supported by both news sentiment AND technical signals (e.g., RSI oversold + bullish news = strong call; MACD bearish crossover + negative news = strong put) should have HIGHER confidence. Predictions contradicted by technicals should have LOWER confidence.
+Use these to VALIDATE or REJECT your predictions. Predictions supported by BOTH news sentiment AND technical signals should have HIGHER confidence. Contradictions = LOWER confidence.
 
-${technicalContext}
+${enrichment.technicalContext}
+` : ""}${enrichment?.insiderContext ? `
+${enrichment.insiderContext}
+
+Insider BUYING is one of the strongest bullish signals. Cluster buying (multiple insiders) is especially significant. Heavy insider SELLING before news = bearish signal.
+` : ""}${enrichment?.materialEvents ? `
+${enrichment.materialEvents}
+
+8-K filings indicate material events: acquisitions, leadership changes, contract wins, earnings surprises. Weight these heavily.
+` : ""}${enrichment?.socialContext ? `
+${enrichment.socialContext}
+
+Social sentiment captures retail investor momentum. High Reddit mention count + bullish sentiment = potential short-term rally. BUT beware: extreme hype often precedes pullbacks.
 ` : ""}`,
         },
         {
@@ -331,34 +348,109 @@ export function extractMentionedStocks(news: NewsArticle[]): string[] {
 }
 
 /**
- * Enhanced prediction: gathers technical indicators for mentioned stocks
- * and feeds them into the prediction prompt for validation.
+ * Enhanced prediction: gathers data from 6 independent sources
+ * and feeds them into the prediction prompt for multi-source validation.
+ *
+ * Data sources:
+ * 1. RSS news articles (already provided)
+ * 2. Historical rally patterns (already provided)
+ * 3. Technical indicators (RSI, MACD, SMA, Bollinger)
+ * 4. SEC EDGAR insider trading (Form 4)
+ * 5. SEC EDGAR material events (8-K filings)
+ * 6. Social sentiment (Reddit financial subreddits)
  */
 export async function predictWithTechnicalValidation(
   recentNews: NewsArticle[],
   historicalPatterns: HistoricalPattern[],
 ): Promise<RallyPrediction[]> {
-  // Step 1: Extract mentioned stocks from news
   const mentionedStocks = extractMentionedStocks(recentNews);
 
-  // Step 2: Compute technical indicators (skip if no stocks found)
-  let technicalContext: string | undefined;
-  if (mentionedStocks.length > 0) {
-    try {
-      console.log(`[Prediction] Computing technicals for ${mentionedStocks.length} stocks...`);
-      const indicators = await computeMultipleIndicators(mentionedStocks);
-      if (indicators.size > 0) {
-        technicalContext = Array.from(indicators.values())
-          .map(formatIndicatorsForPrompt)
-          .join("\n\n");
-        console.log(`[Prediction] Got technicals for ${indicators.size} stocks`);
-      }
-    } catch (error) {
-      console.warn("[Prediction] Failed to compute technical indicators:", error);
-      // Continue without technicals — predictions still work with news alone
-    }
-  }
+  // Gather all enrichment data in parallel where possible
+  const [technicalContext, insiderContext, materialEvents, socialContext] = await Promise.all([
+    // Source 3: Technical indicators
+    gatherTechnicals(mentionedStocks),
+    // Source 4: SEC insider trading
+    gatherInsiderData(mentionedStocks),
+    // Source 5: SEC material events
+    gatherMaterialEvents(mentionedStocks),
+    // Source 6: Reddit social sentiment
+    gatherSocialSentiment(),
+  ]);
 
-  // Step 3: Run prediction with technical context
-  return predictUpcomingRallies(recentNews, historicalPatterns, technicalContext);
+  const sourcesUsed = [
+    "RSS news",
+    "historical patterns",
+    technicalContext ? "technical indicators" : null,
+    insiderContext ? "SEC insider trading" : null,
+    materialEvents ? "SEC 8-K filings" : null,
+    socialContext ? "Reddit sentiment" : null,
+  ].filter(Boolean);
+
+  console.log(`[Prediction] Running with ${sourcesUsed.length} data sources: ${sourcesUsed.join(", ")}`);
+
+  return predictUpcomingRallies(recentNews, historicalPatterns, {
+    technicalContext,
+    insiderContext,
+    materialEvents,
+    socialContext,
+  });
+}
+
+async function gatherTechnicals(stocks: string[]): Promise<string | undefined> {
+  if (stocks.length === 0) return undefined;
+  try {
+    console.log(`[Prediction] Computing technicals for ${stocks.length} stocks...`);
+    const indicators = await computeMultipleIndicators(stocks);
+    if (indicators.size > 0) {
+      console.log(`[Prediction] Got technicals for ${indicators.size} stocks`);
+      return Array.from(indicators.values()).map(formatIndicatorsForPrompt).join("\n\n");
+    }
+  } catch (error) {
+    console.warn("[Prediction] Technical indicators failed:", error);
+  }
+  return undefined;
+}
+
+async function gatherInsiderData(stocks: string[]): Promise<string | undefined> {
+  if (stocks.length === 0) return undefined;
+  try {
+    console.log(`[Prediction] Fetching SEC insider data for ${stocks.length} stocks...`);
+    const summary = await getInsiderSummaryForPrompt(stocks);
+    if (summary) {
+      console.log("[Prediction] Got SEC insider trading data");
+      return summary;
+    }
+  } catch (error) {
+    console.warn("[Prediction] SEC insider data failed:", error);
+  }
+  return undefined;
+}
+
+async function gatherMaterialEvents(stocks: string[]): Promise<string | undefined> {
+  if (stocks.length === 0) return undefined;
+  try {
+    console.log(`[Prediction] Fetching SEC 8-K filings for ${stocks.length} stocks...`);
+    const events = await getMaterialEventsSummary(stocks);
+    if (events) {
+      console.log("[Prediction] Got SEC material events");
+      return events;
+    }
+  } catch (error) {
+    console.warn("[Prediction] SEC 8-K data failed:", error);
+  }
+  return undefined;
+}
+
+async function gatherSocialSentiment(): Promise<string | undefined> {
+  try {
+    console.log("[Prediction] Scanning Reddit sentiment...");
+    const sentiment = await scanRedditSentiment();
+    if (sentiment.trendingStocks.length > 0) {
+      console.log(`[Prediction] Got Reddit sentiment: ${sentiment.trendingStocks.length} trending stocks`);
+      return formatSentimentForPrompt(sentiment);
+    }
+  } catch (error) {
+    console.warn("[Prediction] Reddit sentiment failed:", error);
+  }
+  return undefined;
 }

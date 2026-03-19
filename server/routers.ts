@@ -258,6 +258,79 @@ export const appRouter = router({
       }),
   }),
 
+  // SEC EDGAR data
+  sec: router({
+    insiderTransactions: publicProcedure
+      .input(z.object({ ticker: z.string(), limit: z.number().optional() }))
+      .query(async ({ input }) => {
+        const { getInsiderTransactions } = await import("./services/secEdgar");
+        return await getInsiderTransactions(input.ticker, input.limit ?? 20);
+      }),
+
+    recentFilings: publicProcedure
+      .input(z.object({ ticker: z.string(), forms: z.string().optional() }))
+      .query(async ({ input }) => {
+        const { getRecentFilings } = await import("./services/secEdgar");
+        return await getRecentFilings(input.ticker, input.forms ?? "10-K,10-Q,8-K");
+      }),
+  }),
+
+  // Social sentiment
+  sentiment: router({
+    reddit: publicProcedure.query(async () => {
+      const { scanRedditSentiment } = await import("./services/socialSentiment");
+      return await scanRedditSentiment();
+    }),
+
+    tickerSentiment: publicProcedure
+      .input(z.object({ tickers: z.array(z.string()).max(10) }))
+      .query(async ({ input }) => {
+        const { getTickerSentiment } = await import("./services/socialSentiment");
+        const result = await getTickerSentiment(input.tickers);
+        return Object.fromEntries(result);
+      }),
+  }),
+
+  // Alpaca broker integration
+  alpaca: router({
+    status: publicProcedure.query(async () => {
+      const { isAlpacaAvailable, getAccount } = await import("./services/alpacaService");
+      const available = await isAlpacaAvailable();
+      if (!available) return { connected: false, account: null };
+      const account = await getAccount();
+      return { connected: true, account };
+    }),
+
+    positions: protectedProcedure.query(async () => {
+      const { getPositions } = await import("./services/alpacaService");
+      return await getPositions();
+    }),
+
+    orders: protectedProcedure
+      .input(z.object({ status: z.enum(["open", "closed", "all"]).optional() }).optional())
+      .query(async ({ input }) => {
+        const { getOrders } = await import("./services/alpacaService");
+        return await getOrders(input?.status ?? "all");
+      }),
+
+    placeOrder: protectedProcedure
+      .input(z.object({
+        symbol: z.string(),
+        qty: z.number().int().min(1),
+        side: z.enum(["buy", "sell"]),
+        type: z.enum(["market", "limit", "stop", "stop_limit"]),
+        limitPrice: z.number().positive().optional(),
+        stopPrice: z.number().positive().optional(),
+        timeInForce: z.enum(["day", "gtc", "ioc"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { placeOrder } = await import("./services/alpacaService");
+        const order = await placeOrder(input);
+        if (!order) throw new Error("Failed to place order. Check Alpaca credentials.");
+        return order;
+      }),
+  }),
+
   // Technical analysis
   technicals: router({
     indicators: publicProcedure
