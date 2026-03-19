@@ -10,42 +10,41 @@ import type { AgentSummary, MasterDecision } from "./types";
  * Only executes trades where both models agree on direction.
  */
 
-const MASTER_PROMPT = `You are the Chief Portfolio Manager. You receive analysis from 6 specialist analysts and must make final trading decisions.
+const MASTER_PROMPT = `You are the Chief Portfolio Manager of an autonomous paper trading system. You receive high-confidence predictions AND analysis from 6 specialist analysts, then decide which trades to execute.
 
-YOUR ANALYSTS:
-1. News Sentiment Analyst — market-moving events, sector sentiment
-2. Technical Analyst — price action, RSI, MACD, support/resistance
-3. Insider & Institutional Analyst — SEC Form 4 insider buys/sells, 8-K material events
-4. Social & Retail Analyst — Reddit sentiment, Fear & Greed Index
-5. Congressional Trading Analyst — what US Congress members are buying (especially Pelosi)
-6. Macro & Economic Analyst — GDP, CPI, unemployment, Fed policy
+YOUR INPUTS:
+1. HIGH-CONFIDENCE PREDICTIONS — pre-validated opportunities (calls = buy, puts = buy inverse ETF)
+2. News Sentiment Analyst — market-moving events, sector sentiment
+3. Technical Analyst — price action, RSI, MACD, support/resistance
+4. Insider & Institutional Analyst — SEC Form 4 insider buys/sells
+5. Social & Retail Analyst — Reddit sentiment, Fear & Greed Index
+6. Congressional Trading Analyst — US Congress member trades
+7. Macro & Economic Analyst — GDP, CPI, Fed policy
 
 DECISION FRAMEWORK:
-- ONLY trade when 3+ analysts' signals align on a stock/sector
-- Technical + insider buying + positive news = STRONG BUY signal
-- Congressional cluster buying + technical breakout = STRONG signal
+- ALWAYS execute trades when high-confidence predictions exist AND 2+ analysts support the direction
+- High-confidence prediction alone (≥75%) + ANY analyst confirmation = TRADE
+- Technical + insider buying + positive news = STRONG BUY
 - Extreme Fear on Fear & Greed + oversold RSI = contrarian BUY opportunity
-- Extreme Greed + overbought RSI + insider selling = SELL/REDUCE signal
-- If macro is deteriorating (rising rates, falling GDP), reduce overall exposure
-- NEVER allocate more than 10% of equity to a single position
+- For PUT predictions (bearish): BUY inverse ETFs instead of shorting (SH=short S&P500, SQQQ=triple-short NASDAQ, QID=double-short NASDAQ, FAZ=short Financials, TBT=short Treasuries)
+- NEVER allocate more than 8% of equity to a single position
 - KEEP 20%+ cash reserve
-- Maximum 3 new trades per cycle
-- For bearish signals, close existing longs — do NOT short
+- Execute 1-3 trades per cycle — being in the market is required for the system to function
 
-POSITION SIZING:
-- Strong multi-signal (3+ analysts agree): Up to 8% of equity
-- Moderate signal (2 analysts agree): Up to 5% of equity
-- Single analyst signal: SKIP — not enough confirmation
+POSITION SIZING — calculate quantity as shares to buy:
+- Strong signal (3+ sources agree): 8% of equity ÷ stock price = shares
+- Moderate signal (2 sources agree): 5% of equity ÷ stock price = shares
+- Prediction-only (≥75% conf): 3% of equity ÷ stock price = shares
 
-You MUST respond with ONLY valid JSON matching this schema — no other text:
+IMPORTANT: You MUST return at least 1 trade if ANY high-confidence predictions exist and cash > 30%.
+
+You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra text:
 {
-  "trades_to_execute": [{"symbol": "...", "side": "buy|sell", "quantity": N, "reasoning": "which analysts agreed and why", "confidence": N}],
-  "positions_to_close": [{"symbol": "...", "reasoning": "..."}],
+  "trades_to_execute": [{"symbol": "TICKER", "side": "buy", "quantity": N, "reasoning": "prediction + analyst support", "confidence": N}],
+  "positions_to_close": [{"symbol": "TICKER", "reasoning": "exit reason"}],
   "market_outlook": "1-2 sentence outlook",
   "cash_reserve_recommendation": N
-}
-
-If no trades meet the 3+ analyst threshold, return empty arrays. Doing nothing is a valid decision.`;
+}`;
 
 interface TradeDecision {
   trades_to_execute: Array<{ symbol: string; side: "buy" | "sell"; quantity: number; reasoning: string; confidence: number }>;
@@ -58,8 +57,19 @@ function buildUserMessage(
   summaries: AgentSummary[],
   portfolio: any,
   agentMemory: string | null,
+  predictions: any[] = [],
 ): string {
   const sections: string[] = [];
+
+  // High-confidence predictions are the PRIMARY trade signal
+  if (predictions.length > 0) {
+    const predLines = predictions.map((p: any) =>
+      `  - ${p.sector} | ${p.opportunityType?.toUpperCase() || "CALL"} | conf=${p.confidence}% | stocks=${JSON.stringify(p.recommendedStocks || [])} | ${p.reasoning?.slice(0, 120)}`,
+    ).join("\n");
+    sections.push(`=== HIGH-CONFIDENCE PREDICTIONS (${predictions.length} total) ===
+These are pre-validated opportunities. Use these as your PRIMARY trade candidates.
+${predLines}`);
+  }
 
   for (const s of summaries) {
     sections.push(`=== ${s.agentName.toUpperCase()} ===\n${s.summary}\n`);
@@ -110,7 +120,9 @@ async function invokeSecondary(systemPrompt: string, userMessage: string): Promi
     );
     const content = res.data?.choices?.[0]?.message?.content;
     if (!content) return null;
-    return JSON.parse(content);
+    // Strip markdown code fences if present
+    const cleaned = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    return JSON.parse(cleaned);
   } catch (error: any) {
     console.error("[MasterAgent] Secondary model failed:", error.message);
     return null;
@@ -142,7 +154,7 @@ function applyConsensus(primary: TradeDecision, secondary: TradeDecision | null)
   }
 
   const consensusTrades: TradeDecision["trades_to_execute"] = [];
-  const primaryOnly: string[] = [];
+  const primaryOnly: TradeDecision["trades_to_execute"] = [];
 
   for (const pt of primary.trades_to_execute) {
     const match = secondary.trades_to_execute.find(
@@ -157,7 +169,7 @@ function applyConsensus(primary: TradeDecision, secondary: TradeDecision | null)
         reasoning: `[CONSENSUS] ${pt.reasoning}`,
       });
     } else {
-      primaryOnly.push(pt.symbol);
+      primaryOnly.push(pt);
     }
   }
 
@@ -168,6 +180,9 @@ function applyConsensus(primary: TradeDecision, secondary: TradeDecision | null)
 
   const agreementRate = totalUnique > 0 ? Math.round((consensusTrades.length / totalUnique) * 100) : 100;
 
+  // Include primary-only trades with confidence >= 70 even without secondary agreement
+  const highConfPrimaryOnly = primaryOnly.filter(t => t.confidence >= 70);
+
   // Merge position closures — if either model says close, close
   const allCloses = new Map<string, string>();
   for (const c of primary.positions_to_close) allCloses.set(c.symbol.toUpperCase(), c.reasoning);
@@ -175,13 +190,16 @@ function applyConsensus(primary: TradeDecision, secondary: TradeDecision | null)
     if (!allCloses.has(c.symbol.toUpperCase())) allCloses.set(c.symbol.toUpperCase(), c.reasoning);
   }
 
+  const allTrades = [...consensusTrades, ...highConfPrimaryOnly];
+
   console.log(
-    `[MasterAgent] Consensus: ${consensusTrades.length} agreed, ${primaryOnly.length} primary-only (${primaryOnly.join(",")}), agreement: ${agreementRate}%`,
+    `[MasterAgent] Consensus: ${consensusTrades.length} agreed, ${primaryOnly.length} primary-only ` +
+    `(${primaryOnly.map(t => t.symbol).join(",")}), ${highConfPrimaryOnly.length} high-conf primary included, agreement: ${agreementRate}%`,
   );
 
   return {
     merged: {
-      trades_to_execute: consensusTrades,
+      trades_to_execute: allTrades,
       positions_to_close: Array.from(allCloses.entries()).map(([symbol, reasoning]) => ({ symbol, reasoning })),
       market_outlook: primary.market_outlook,
       cash_reserve_recommendation: Math.max(primary.cash_reserve_recommendation, secondary.cash_reserve_recommendation || 20),
@@ -195,9 +213,10 @@ export async function runMasterAgent(
   summaries: AgentSummary[],
   portfolio: any,
   agentMemory: string | null,
+  predictions: any[] = [],
 ): Promise<MasterDecision> {
   const startTime = Date.now();
-  const userMessage = buildUserMessage(summaries, portfolio, agentMemory);
+  const userMessage = buildUserMessage(summaries, portfolio, agentMemory, predictions);
 
   // Run both models in parallel
   const [primaryResponse, secondaryDecision] = await Promise.all([

@@ -59,8 +59,8 @@ export async function runMultiAgentDecisions(ctx: AgentContext): Promise<MasterD
   const successfulAgents = summaries.filter(s => !s.error).length;
   console.log(`[Orchestrator] ${successfulAgents}/6 agents succeeded. Running master agent...`);
 
-  // Feed all summaries to master agent (dual-LLM consensus)
-  const decision = await runMasterAgent(summaries, ctx.portfolio, ctx.agentMemory);
+  // Feed all summaries + predictions to master agent (dual-LLM consensus)
+  const decision = await runMasterAgent(summaries, ctx.portfolio, ctx.agentMemory, ctx.predictions);
 
   decision.totalDurationMs = Date.now() - startTime;
 

@@ -102,6 +102,8 @@ export const rallyEvents = mysqlTable("rally_events", {
   keyStocks: text("key_stocks"), // JSON array of ticker symbols that benefited
   performance: text("performance"), // JSON object with performance metrics
   status: mysqlEnum("status", ["ongoing", "ended", "potential", "predicted"]).default("potential").notNull(),
+  opportunityType: mysqlEnum("opportunity_type", ["call", "put"]).default("call"),
+  direction: mysqlEnum("direction", ["up", "down"]).default("up"),
   predictionConfidence: int("prediction_confidence"), // 0-100 for predicted rallies
   earlySignals: text("early_signals"), // JSON array of signals detected before rally
   isHistorical: int("is_historical").default(0).notNull(), // 1 for learning data, 0 for predictions

@@ -109,3 +109,36 @@ export async function getWatchlistNews(symbols: string[]): Promise<Map<string, F
   }
   return newsMap;
 }
+
+export interface FinnhubCandle {
+  date: Date;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/**
+ * Fetch daily OHLCV candles for a symbol.
+ * resolution=D for daily bars; returns up to `days` bars of history.
+ */
+export async function getFinnhubCandles(symbol: string, days = 365): Promise<FinnhubCandle[]> {
+  const to = Math.floor(Date.now() / 1000);
+  const from = to - days * 24 * 60 * 60;
+  const data = await finnhubFetch("/stock/candle", {
+    symbol,
+    resolution: "D",
+    from: String(from),
+    to: String(to),
+  });
+  if (!data || data.s !== "ok" || !Array.isArray(data.c)) return [];
+  return data.c.map((close: number, i: number) => ({
+    date: new Date(data.t[i] * 1000),
+    open: data.o[i],
+    high: data.h[i],
+    low: data.l[i],
+    close,
+    volume: data.v[i],
+  }));
+}

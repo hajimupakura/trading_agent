@@ -1,5 +1,8 @@
-import yahooFinance from "yahoo-finance2";
+import YahooFinance from "yahoo-finance2";
 import { getFinnhubQuote, getFinnhubMultipleQuotes, searchFinnhubStocks } from "./finnhubService";
+
+// yahoo-finance2 v3: must instantiate the class, not use it as a singleton
+const yahooFinance = new YahooFinance();
 
 /**
  * Stock Price Service using Yahoo Finance API (unofficial, free)
@@ -105,34 +108,36 @@ export async function getMultipleStockQuotes(symbols: string[]): Promise<Map<str
 }
 
 /**
- * Get historical price data for a stock
+ * Get historical price data for a stock.
+ * Uses Yahoo Finance chart API (yahoo-finance2 v3 requires instantiation + chart module).
  */
 export async function getHistoricalPrices(
   symbol: string,
   period: "1d" | "5d" | "1mo" | "3mo" | "6mo" | "1y" = "1mo"
 ) {
   try {
-    const result = await yahooFinance.historical(symbol, {
+    const result = await (yahooFinance as any).chart(symbol, {
       period1: getPeriodStartDate(period),
       period2: new Date(),
-    }) as any;
-    
-    if (!result || !Array.isArray(result)) {
-      return [];
+      interval: "1d",
+    });
+    const quotes = result?.quotes;
+    if (quotes && Array.isArray(quotes)) {
+      return quotes
+        .filter((q: any) => q.close != null)
+        .map((q: any) => ({
+          date: new Date(q.date),
+          open: q.open ?? q.close,
+          high: q.high ?? q.close,
+          low: q.low ?? q.close,
+          close: q.close,
+          volume: q.volume ?? 0,
+        }));
     }
-    
-    return result.map((item: any) => ({
-      date: item.date,
-      open: item.open,
-      high: item.high,
-      low: item.low,
-      close: item.close,
-      volume: item.volume,
-    }));
   } catch (error) {
-    console.error(`[Stock Price] Error fetching historical data for ${symbol}:`, error);
-    return [];
+    console.error(`[Stock Price] Error fetching historical data for ${symbol}:`, (error as any)?.message);
   }
+  return [];
 }
 
 /**
@@ -159,27 +164,21 @@ export async function searchStocks(query: string): Promise<Array<{ symbol: strin
   }
 }
 
-/**
- * Helper function to get start date for historical data
- */
+function periodToDays(period: string): number {
+  switch (period) {
+    case "1d": return 2;
+    case "5d": return 7;
+    case "1mo": return 35;
+    case "3mo": return 95;
+    case "6mo": return 185;
+    case "1y": return 370;
+    default: return 35;
+  }
+}
+
 function getPeriodStartDate(period: string): Date {
   const now = new Date();
-  switch (period) {
-    case "1d":
-      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    case "5d":
-      return new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
-    case "1mo":
-      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    case "3mo":
-      return new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-    case "6mo":
-      return new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000);
-    case "1y":
-      return new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-    default:
-      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  }
+  return new Date(now.getTime() - periodToDays(period) * 24 * 60 * 60 * 1000);
 }
 
 /**

@@ -139,12 +139,14 @@ export async function runAgentCycle(portfolioId: number, userId: number, force =
     for (const pred of highConf) {
       await insertRallyPrediction({
         sector: pred.sector,
-        name: `Predicted ${pred.sector} Rally`,
+        name: `Predicted ${pred.sector} ${pred.opportunityType === "put" ? "Decline" : "Rally"}`,
         startDate: new Date(),
         description: pred.reasoning,
         predictionConfidence: pred.confidence,
         earlySignals: JSON.stringify(pred.earlySignals),
         keyStocks: JSON.stringify(pred.recommendedStocks),
+        opportunityType: pred.opportunityType === "put" ? "put" : "call",
+        direction: pred.direction === "down" ? "down" : "up",
       }).catch(err => console.warn("[Agent] Failed to save prediction:", err));
     }
 
