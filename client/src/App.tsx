@@ -8,6 +8,7 @@ import Home from "./pages/Home";
 import DashboardV2 from "./pages/DashboardV2";
 import Dashboard from "./pages/Dashboard";
 import DashboardEnhanced from "./pages/DashboardEnhanced";
+import DashboardPro from "./pages/DashboardPro";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
@@ -15,7 +16,7 @@ import ResetPassword from "./pages/ResetPassword";
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={DashboardEnhanced} />
+      <Route path="/" component={DashboardPro} />
       <Route path="/login" component={Login} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
@@ -37,7 +38,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider
-        defaultTheme="dark"
+        defaultTheme="light"
         // switchable
       >
         <TooltipProvider>
