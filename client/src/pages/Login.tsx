@@ -1,21 +1,18 @@
 import { useState } from "react";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TrendingUp, Loader2 } from "lucide-react";
-import { trpc } from "@/lib/trpc";
 
 export default function Login() {
-  const [, navigate] = useLocation();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const utils = trpc.useUtils();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,8 +36,7 @@ export default function Login() {
         setError(data.error || "Something went wrong");
         return;
       }
-      await utils.auth.me.invalidate();
-      navigate("/");
+      window.location.href = "/";
     } catch {
       setError("Network error — please try again");
     } finally {
