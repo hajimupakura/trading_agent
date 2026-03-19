@@ -447,6 +447,90 @@ export const appRouter = router({
         return await computeIndicators(input.symbol);
       }),
 
+    chartData: publicProcedure
+      .input(z.object({
+        symbol: z.string(),
+        interval: z.enum(["5m","15m","30m","1h","4h","1d"]).default("1d"),
+      }))
+      .query(async ({ input }) => {
+        const YahooFinance = (await import("yahoo-finance2")).default;
+        const yf = new (YahooFinance as any)();
+        const { RSI, MACD, SMA, BollingerBands } = await import("technicalindicators");
+
+        // Map interval → period1 lookback
+        const lookbackDays: Record<string, number> = {
+          "5m": 5, "15m": 7, "30m": 14, "1h": 30, "4h": 60, "1d": 365,
+        };
+        const days = lookbackDays[input.interval] ?? 365;
+        const period1 = new Date(Date.now() - days * 86_400_000);
+
+        // Yahoo Finance interval strings
+        const yfInterval: Record<string, string> = {
+          "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "1h", "1d": "1d",
+        };
+
+        let bars: any[] = [];
+        try {
+          const result = await yf.chart(input.symbol, {
+            period1,
+            period2: new Date(),
+            interval: yfInterval[input.interval] ?? "1d",
+          });
+          bars = (result?.quotes ?? []).filter((q: any) => q.close != null);
+        } catch {
+          return { bars: [], indicators: {} };
+        }
+
+        if (bars.length < 2) return { bars: [], indicators: {} };
+
+        const closes = bars.map((b: any) => b.close as number);
+        const highs  = bars.map((b: any) => (b.high  ?? b.close) as number);
+        const lows   = bars.map((b: any) => (b.low   ?? b.close) as number);
+
+        // RSI
+        const rsiVals = RSI.calculate({ values: closes, period: 14 });
+        const rsiPad  = Array(closes.length - rsiVals.length).fill(null).concat(rsiVals);
+
+        // MACD
+        const macdRaw = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
+        const macdPad    = Array(closes.length - macdRaw.length).fill(null).concat(macdRaw.map((m: any) => m.MACD ?? null));
+        const signalPad  = Array(closes.length - macdRaw.length).fill(null).concat(macdRaw.map((m: any) => m.signal ?? null));
+        const histPad    = Array(closes.length - macdRaw.length).fill(null).concat(macdRaw.map((m: any) => m.histogram ?? null));
+
+        // SMAs
+        const sma20Vals  = SMA.calculate({ values: closes, period: 20 });
+        const sma50Vals  = SMA.calculate({ values: closes, period: 50 });
+        const sma200Vals = SMA.calculate({ values: closes, period: 200 });
+        const sma20Pad   = Array(closes.length - sma20Vals.length).fill(null).concat(sma20Vals);
+        const sma50Pad   = Array(closes.length - sma50Vals.length).fill(null).concat(sma50Vals);
+        const sma200Pad  = Array(closes.length - sma200Vals.length).fill(null).concat(sma200Vals);
+
+        // Bollinger Bands
+        const bbRaw  = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
+        const bbPad  = Array(closes.length - bbRaw.length).fill(null).concat(bbRaw);
+
+        const result = bars.map((b: any, i: number) => ({
+          t:     new Date(b.date).getTime(),
+          open:  b.open  ?? b.close,
+          high:  b.high  ?? b.close,
+          low:   b.low   ?? b.close,
+          close: b.close,
+          volume: b.volume ?? 0,
+          rsi:   rsiPad[i] ?? null,
+          macd:  macdPad[i] ?? null,
+          macdSignal: signalPad[i] ?? null,
+          macdHist:   histPad[i] ?? null,
+          sma20:  sma20Pad[i] ?? null,
+          sma50:  sma50Pad[i] ?? null,
+          sma200: sma200Pad[i] ?? null,
+          bbUpper:  bbPad[i]?.upper ?? null,
+          bbMiddle: bbPad[i]?.middle ?? null,
+          bbLower:  bbPad[i]?.lower ?? null,
+        }));
+
+        return { bars: result, symbol: input.symbol, interval: input.interval };
+      }),
+
     multipleIndicators: publicProcedure
       .input(z.object({ symbols: z.array(z.string()).max(20) }))
       .query(async ({ input }) => {

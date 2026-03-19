@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { TechnicalChart } from "@/components/TechnicalChart";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -87,6 +88,7 @@ function UnauthScreen() {
 export default function DashboardPro() {
   const { user, loading: authLoading, isAuthenticated, logout } = useAuth();
   const [insiderTicker, setInsiderTicker] = useState("NVDA");
+  const [chartSymbol, setChartSymbol] = useState<string | null>(null);
 
   // ── Core data ────────────────────────────────────────────────────────────
   const { data: agentStatus, refetch: refetchAgent } = trpc.agent.status.useQuery(
@@ -798,7 +800,7 @@ export default function DashboardPro() {
                           const trendColor = trend === "ABOVE SMA50" ? "text-profit" : trend === "BELOW SMA50" ? "text-loss" : "text-muted-foreground";
                           return (
                             <tr key={stock.ticker} className="border-b border-border/40 last:border-0 hover:bg-secondary/20">
-                              <td className="px-3 py-2.5 font-mono font-bold">{stock.ticker}</td>
+                              <td className="px-3 py-2.5 font-mono font-bold cursor-pointer hover:text-primary transition-colors" onClick={() => setChartSymbol(stock.ticker)}>{stock.ticker}</td>
                               <td className="px-3 py-2.5 font-mono">{price != null ? `$${fmt(price)}` : "—"}</td>
                               <td className={`px-3 py-2.5 font-mono font-semibold ${rsiInfo.color}`}>{rsiInfo.label}</td>
                               <td className="px-3 py-2.5 font-mono">{t?.macd != null ? fmt(t.macd) : "—"}</td>
@@ -1115,6 +1117,7 @@ export default function DashboardPro() {
 
         </Tabs>
       </div>
+      {chartSymbol && <TechnicalChart symbol={chartSymbol} onClose={() => setChartSymbol(null)} />}
     </div>
   );
 }
