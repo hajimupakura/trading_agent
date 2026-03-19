@@ -452,7 +452,25 @@ export const appRouter = router({
       .query(async ({ input }) => {
         const { computeMultipleIndicators } = await import("./services/technicalAnalysis");
         const results = await computeMultipleIndicators(input.symbols);
-        return Object.fromEntries(results);
+        // Flatten nested objects to match dashboard field names
+        const flat: Record<string, any> = {};
+        for (const [symbol, ind] of results) {
+          flat[symbol] = {
+            price: ind.price,
+            rsi: ind.rsi14,
+            macd: ind.macd?.macd ?? null,
+            macdSignal: ind.macd?.signal ?? null,
+            macdHistogram: ind.macd?.histogram ?? null,
+            sma20: ind.sma20,
+            sma50: ind.sma50,
+            sma200: ind.sma200,
+            bollingerUpper: ind.bollingerBands?.upper ?? null,
+            bollingerMiddle: ind.bollingerBands?.middle ?? null,
+            bollingerLower: ind.bollingerBands?.lower ?? null,
+            signals: ind.signals,
+          };
+        }
+        return flat;
       }),
   }),
 
