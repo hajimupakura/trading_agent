@@ -146,6 +146,113 @@ function groupPredictions(predictions: any[]): Record<PredGroup, any[]> {
   return groups;
 }
 
+// ─── Risk Settings Card ────────────────────────────────────────────────────
+
+function RiskSettingsCard({ riskSettings }: { riskSettings: any }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<Record<string, number>>({});
+  const utils = trpc.useUtils();
+
+  const updateSettings = trpc.risk.updateSettings.useMutation({
+    onSuccess: () => {
+      utils.risk.settings.invalidate();
+      setEditing(false);
+      toast.success("Risk settings saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const fields = [
+    { key: "maxPositionPct", label: "Max Position Size", suffix: "% of equity", warn: (v: number) => v > 15 },
+    { key: "maxSectorPct", label: "Max Sector Exposure", suffix: "% of equity", warn: (v: number) => v > 35 },
+    { key: "stopLossPct", label: "Stop Loss", suffix: "% below entry", warn: () => false },
+    { key: "takeProfitPct", label: "Take Profit", suffix: "% above entry", warn: () => false },
+    { key: "maxDrawdownPct", label: "Max Portfolio Drawdown", suffix: "%", warn: () => false },
+    { key: "maxOpenPositions", label: "Max Open Positions", suffix: " positions", warn: () => false },
+  ];
+
+  function startEdit() {
+    if (!riskSettings) return;
+    setForm({
+      maxPositionPct: riskSettings.maxPositionPct,
+      maxSectorPct: riskSettings.maxSectorPct,
+      stopLossPct: riskSettings.stopLossPct,
+      takeProfitPct: riskSettings.takeProfitPct,
+      maxDrawdownPct: riskSettings.maxDrawdownPct,
+      maxOpenPositions: riskSettings.maxOpenPositions,
+    });
+    setEditing(true);
+  }
+
+  return (
+    <Card className="border-border">
+      <CardHeader className="pb-2 pt-4">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm">Risk Parameters</CardTitle>
+          {!editing ? (
+            <button
+              onClick={startEdit}
+              className="text-xs text-primary hover:underline flex items-center gap-1"
+            >
+              <Settings className="h-3 w-3" /> Edit
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setEditing(false)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => updateSettings.mutate(form)}
+                disabled={updateSettings.isPending}
+                className="text-xs bg-primary text-primary-foreground px-2.5 py-1 rounded-md hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1"
+              >
+                {updateSettings.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                Save
+              </button>
+            </div>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!riskSettings ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">Loading risk settings…</div>
+        ) : (
+          <div className="space-y-3">
+            {fields.map(({ key, label, suffix, warn }) => {
+              const val = editing ? form[key] : riskSettings[key];
+              const isWarn = warn(val);
+              return (
+                <div key={key} className="flex items-center justify-between py-2 border-b border-border/40 last:border-0">
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                  <div className="flex items-center gap-1.5">
+                    {isWarn && <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                    {editing ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          value={form[key] ?? ""}
+                          onChange={(e) => setForm(f => ({ ...f, [key]: parseFloat(e.target.value) || 0 }))}
+                          className="w-16 h-6 px-1.5 text-xs font-mono text-right bg-secondary border border-border rounded focus:ring-1 focus:ring-primary outline-none"
+                        />
+                        <span className="text-xs text-muted-foreground">{suffix}</span>
+                      </div>
+                    ) : (
+                      <span className={`text-xs font-mono font-semibold ${isWarn ? "text-amber-600" : "text-foreground"}`}>{val}{suffix}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Unauthenticated landing ───────────────────────────────────────────────
 
 function UnauthScreen() {
@@ -1276,35 +1383,7 @@ export default function DashboardPro() {
           <TabsContent value="risk" className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Risk limits */}
-              <Card className="border-border">
-                <CardHeader className="pb-2 pt-4">
-                  <CardTitle className="text-sm">Risk Parameters</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {!riskSettings ? (
-                    <div className="py-8 text-center text-sm text-muted-foreground">Loading risk settings…</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {[
-                        { label: "Max Position Size", val: riskSettings.maxPositionPct, suffix: "% of equity", warn: riskSettings.maxPositionPct > 15 },
-                        { label: "Max Sector Exposure", val: riskSettings.maxSectorPct, suffix: "% of equity", warn: riskSettings.maxSectorPct > 35 },
-                        { label: "Stop Loss", val: riskSettings.stopLossPct, suffix: "% below entry", warn: false },
-                        { label: "Take Profit", val: riskSettings.takeProfitPct, suffix: "% above entry", warn: false },
-                        { label: "Max Portfolio Drawdown", val: riskSettings.maxDrawdownPct, suffix: "%", warn: false },
-                        { label: "Max Open Positions", val: riskSettings.maxOpenPositions, suffix: " positions", warn: false },
-                      ].map(({ label, val, suffix, warn }) => (
-                        <div key={label} className="flex items-center justify-between py-2 border-b border-border/40 last:border-0">
-                          <span className="text-xs text-muted-foreground">{label}</span>
-                          <div className="flex items-center gap-1.5">
-                            {warn && <AlertTriangle className="h-3 w-3 text-amber-500" />}
-                            <span className={`text-xs font-mono font-semibold ${warn ? "text-amber-600" : "text-foreground"}`}>{val}{suffix}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <RiskSettingsCard riskSettings={riskSettings} />
 
               {/* Position concentrations */}
               <Card className="border-border">
