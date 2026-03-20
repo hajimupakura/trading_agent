@@ -252,4 +252,26 @@
     border-top: 2px solid transparent;
     border-image: linear-gradient(90deg, #60a5fa, #22d3ee, #a78bfa) 1;
   }
+
+  /* Sidebar active item — blue left accent */
+  .sidebar-active-item {
+    border-left: 2px solid var(--primary);
+    background: rgba(59, 130, 246, 0.08);
+    border-radius: 0 6px 6px 0;
+  }
+
+  /* Header blue wash — identity gradient */
+  .header-blue-wash {
+    background: linear-gradient(
+      135deg,
+      rgba(59, 130, 246, 0.08) 0%,
+      rgba(34, 211, 238, 0.04) 50%,
+      transparent 100%
+    );
+  }
+
+  /* Blue glow for primary elements */
+  .glow-primary {
+    box-shadow: 0 0 16px rgba(59, 130, 246, 0.2), 0 0 4px rgba(59, 130, 246, 0.12);
+  }
 }

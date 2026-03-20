@@ -1,4 +1,4 @@
-import { eq, sql, desc } from "drizzle-orm";
+import { eq, sql, desc, asc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -432,7 +432,7 @@ export async function getUserPortfolios(userId: number) {
   if (!db) return [];
   return await db.select().from(portfolios)
     .where(eq(portfolios.userId, userId))
-    .orderBy(desc(portfolios.createdAt));
+    .orderBy(asc(portfolios.createdAt));
 }
 
 export async function getPortfolioById(id: number, userId: number) {

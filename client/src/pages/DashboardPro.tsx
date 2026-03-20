@@ -310,7 +310,7 @@ export default function DashboardPro() {
     <div className="min-h-screen bg-background">
 
       {/* ═══ STATUS RIBBON ═══════════════════════════════════════════════════ */}
-      <div className="bg-card border-b border-border text-xs">
+      <div className="bg-card border-b border-border text-xs border-gradient-top">
         <div className="max-w-[1600px] mx-auto px-4 h-8 flex items-center justify-between gap-4">
           <div className="flex items-center gap-5 font-mono">
             <div className="flex items-center gap-1.5">
@@ -345,7 +345,7 @@ export default function DashboardPro() {
       </div>
 
       {/* ═══ HEADER ══════════════════════════════════════════════════════════ */}
-      <header className="bg-card border-b border-border sticky top-0 z-30">
+      <header className="bg-card border-b border-border sticky top-0 z-30 header-blue-wash">
         <div className="max-w-[1600px] mx-auto px-4 h-14 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
@@ -427,11 +427,11 @@ export default function DashboardPro() {
               ) : (
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-border bg-secondary/40">
-                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Ticker</th>
-                      <th className="text-right px-3 py-2 font-medium text-muted-foreground">Price</th>
-                      <th className="text-right px-3 py-2 font-medium text-muted-foreground">Chg%</th>
-                      <th className="text-right px-3 py-2 font-medium text-muted-foreground">RSI</th>
+                    <tr className="border-b border-primary/15 bg-primary/5">
+                      <th className="text-left px-3 py-2 font-medium text-primary/70">Ticker</th>
+                      <th className="text-right px-3 py-2 font-medium text-primary/70">Price</th>
+                      <th className="text-right px-3 py-2 font-medium text-primary/70">Chg%</th>
+                      <th className="text-right px-3 py-2 font-medium text-primary/70">RSI</th>
                       <th className="px-2 py-2" />
                     </tr>
                   </thead>
@@ -546,7 +546,7 @@ export default function DashboardPro() {
                 {/* Bullish signals */}
                 {bullishSignals.length > 0 && (
                   <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/20 overflow-hidden">
-                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-emerald-200/40 bg-emerald-50/30">
+                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-emerald-200/40 bg-emerald-50/30 border-l-2 border-l-emerald-500">
                       <TrendingUp className="h-3.5 w-3.5 text-emerald-600" />
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
                         Bullish — {bullishSignals.length}
@@ -580,7 +580,7 @@ export default function DashboardPro() {
                 {/* Bearish signals */}
                 {bearishSignals.length > 0 && (
                   <div className="rounded-xl border border-red-200/60 bg-red-50/20 overflow-hidden">
-                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-red-200/40 bg-red-50/30">
+                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-red-200/40 bg-red-50/30 border-l-2 border-l-red-500">
                       <TrendingDown className="h-3.5 w-3.5 text-red-600" />
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-red-700">
                         Bearish — {bearishSignals.length}
@@ -743,7 +743,7 @@ export default function DashboardPro() {
 
         {/* ═══ DETAILED TABS ══════════════════════════════════════════════════ */}
         <Tabs defaultValue="portfolio" className="space-y-4">
-          <TabsList className="bg-card border border-border p-1 flex flex-wrap gap-0.5 h-auto">
+          <TabsList className="bg-card border border-border border-t-primary/30 p-1 flex flex-wrap gap-0.5 h-auto">
             {[
               { value: "portfolio", label: "Portfolio", icon: Briefcase },
               { value: "news", label: "News", icon: BookOpen },
@@ -771,7 +771,7 @@ export default function DashboardPro() {
                     { label: "Unrealized P&L", val: fmtUSD(portfolioSummary.totalUnrealizedPnL), sub: portfolioSummary.totalUnrealizedPnL >= 0 ? "Gain" : "Loss", color: portfolioSummary.totalUnrealizedPnL >= 0 ? "text-profit" : "text-loss" },
                     { label: "Open Positions", val: portfolioSummary.positions.length, sub: "Paper trading", color: "text-foreground" },
                   ].map(({ label, val, sub, color }) => (
-                    <Card key={label} className="border-border">
+                    <Card key={label} className="border-border border-gradient-top card-hover">
                       <CardContent className="pt-4 pb-3">
                         <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">{label}</div>
                         <div className={`text-xl font-mono font-bold ${color}`}>{val}</div>
