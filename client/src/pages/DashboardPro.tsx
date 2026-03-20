@@ -1102,59 +1102,93 @@ export default function DashboardPro() {
 
           {/* ── Insider Tab ─────────────────────────────────────────────────── */}
           <TabsContent value="insider" className="space-y-4">
-            <Card className="border-border">
-              <CardHeader className="pb-3 pt-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm">SEC Form 4 — Insider Transactions</CardTitle>
-                  <div className="flex items-center gap-2">
-                    {["NVDA", "AAPL", "TSLA", "MSFT", "META", "AMZN"].map((t) => (
-                      <button
-                        key={t}
-                        onClick={() => setInsiderTicker(t)}
-                        className={`text-[10px] font-mono px-2 py-1 rounded border transition-colors ${insiderTicker === t ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-primary/50"}`}
-                      >
-                        {t}
-                      </button>
-                    ))}
+            {/* Ticker selector */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {[...new Set(["NVDA", "AAPL", "TSLA", "MSFT", "META", "AMZN", ...watchlist.map(w => w.ticker)])].map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setInsiderTicker(t)}
+                  className={`text-[10px] font-mono px-2.5 py-1 rounded border transition-colors ${insiderTicker === t ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-primary/50"}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            {/* Cluster buy alert */}
+            {(() => {
+              const buys = insiderData.filter((tx: any) => tx.transactionType === "purchase");
+              if (buys.length >= 3) return (
+                <div className="flex items-start gap-2.5 rounded-xl border border-profit/30 bg-profit/5 px-4 py-3">
+                  <TrendingUp className="h-4 w-4 text-profit shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-profit">Cluster Buy Signal — {buys.length} insiders purchased</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {buys.length}+ insiders buying {insiderTicker} in the last 90 days is one of the strongest bullish signals in the market. Institutional money tracks this closely.
+                    </p>
                   </div>
                 </div>
+              );
+              if (insiderData.filter((tx: any) => tx.transactionType === "sale").length >= 3) return (
+                <div className="flex items-start gap-2.5 rounded-xl border border-loss/30 bg-loss/5 px-4 py-3">
+                  <TrendingDown className="h-4 w-4 text-loss shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-loss">Cluster Sell Warning — multiple insiders selling</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Insiders selling before public news is a bearish signal. Monitor closely.</p>
+                  </div>
+                </div>
+              );
+              return null;
+            })()}
+
+            <Card className="border-border">
+              <CardHeader className="pb-2 pt-4">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  SEC Form 4 — {insiderTicker} Insider Transactions
+                  <span className="text-[10px] font-normal text-muted-foreground">(last 90 days)</span>
+                </CardTitle>
               </CardHeader>
               <CardContent className="pb-0">
                 {insiderData.length === 0 ? (
                   <div className="py-12 text-center text-sm text-muted-foreground">
                     <Eye className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                    No insider transactions found for {insiderTicker}
+                    No Form 4 filings found for {insiderTicker}
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-border">
+                        <tr className="border-b border-primary/15 bg-primary/5">
                           {["Insider", "Role", "Type", "Shares", "Price", "Value", "Date"].map(h => (
-                            <th key={h} className="text-left px-3 py-2 font-medium text-muted-foreground">{h}</th>
+                            <th key={h} className="text-left px-3 py-2 font-medium text-primary/70">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {insiderData.map((tx: any, i: number) => {
-                          const isBuy = (tx.transactionType ?? "").toLowerCase().includes("purchase") || (tx.transactionType ?? "").toLowerCase().includes("buy");
-                          const isSell = (tx.transactionType ?? "").toLowerCase().includes("sale") || (tx.transactionType ?? "").toLowerCase().includes("sell");
+                          const isBuy = tx.transactionType === "purchase";
+                          const isSell = tx.transactionType === "sale";
+                          const shares = tx.sharesTraded ?? tx.shares ?? 0;
+                          const date = tx.transactionDate ?? tx.date ?? "";
                           return (
-                            <tr key={i} className="border-b border-border/40 last:border-0 hover:bg-secondary/20">
-                              <td className="px-3 py-2.5 font-semibold text-foreground">{tx.ownerName ?? "—"}</td>
-                              <td className="px-3 py-2.5 text-muted-foreground text-[10px]">{tx.relationship ?? tx.role ?? "—"}</td>
-                              <td className={`px-3 py-2.5 font-mono font-semibold ${isBuy ? "text-profit" : isSell ? "text-loss" : "text-muted-foreground"}`}>
-                                {isBuy ? "▲ BUY" : isSell ? "▼ SELL" : tx.transactionType ?? "—"}
+                            <tr key={i} className={`border-b border-border/40 last:border-0 hover:bg-secondary/20 ${isBuy ? "bg-profit/5" : isSell ? "bg-loss/5" : ""}`}>
+                              <td className="px-3 py-2.5 font-semibold text-foreground max-w-[160px] truncate">{tx.ownerName ?? "—"}</td>
+                              <td className="px-3 py-2.5 text-muted-foreground text-[10px] max-w-[120px] truncate">{tx.ownerTitle || "—"}</td>
+                              <td className={`px-3 py-2.5 font-mono font-bold ${isBuy ? "text-profit" : isSell ? "text-loss" : "text-muted-foreground"}`}>
+                                {isBuy ? "▲ BUY" : isSell ? "▼ SELL" : (tx.transactionType ?? "other").toUpperCase()}
                               </td>
-                              <td className="px-3 py-2.5 font-mono">{tx.shares != null ? Number(tx.shares).toLocaleString() : "—"}</td>
+                              <td className="px-3 py-2.5 font-mono">{shares > 0 ? shares.toLocaleString() : "—"}</td>
                               <td className="px-3 py-2.5 font-mono">{tx.pricePerShare != null ? `$${fmt(tx.pricePerShare)}` : "—"}</td>
-                              <td className="px-3 py-2.5 font-mono">{tx.totalValue != null ? fmtUSD(tx.totalValue) : "—"}</td>
-                              <td className="px-3 py-2.5 font-mono text-muted-foreground">{tx.date ? new Date(tx.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</td>
+                              <td className="px-3 py-2.5 font-mono font-semibold">{tx.totalValue != null ? fmtUSD(tx.totalValue) : "—"}</td>
+                              <td className="px-3 py-2.5 font-mono text-muted-foreground">{date ? new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
+                    <div className="px-3 py-2 border-t border-border/40 text-[10px] text-muted-foreground">
+                      Source: SEC EDGAR Form 4 filings · Rows highlighted green = purchases, red = sales
+                    </div>
                   </div>
                 )}
               </CardContent>

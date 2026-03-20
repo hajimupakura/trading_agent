@@ -9,8 +9,8 @@ import axios from "axios";
  * Rate limit: 10 requests/second.
  */
 
-const SEC_BASE = "https://efts.sec.gov/LATEST";
 const EDGAR_DATA = "https://data.sec.gov";
+const EDGAR_ARCHIVES = "https://www.sec.gov/Archives/edgar/data";
 const USER_AGENT = "TradingAgent/1.0 (trading-agent@example.com)";
 
 const secClient = axios.create({
@@ -21,18 +21,27 @@ const secClient = axios.create({
   timeout: 15_000,
 });
 
-// Rate limiter: max 10 req/sec
+const xmlClient = axios.create({
+  headers: {
+    "User-Agent": USER_AGENT,
+    Accept: "text/html,application/xhtml+xml,application/xml,*/*",
+  },
+  timeout: 15_000,
+});
+
+// Rate limiter: max 8 req/sec (conservative)
 let lastRequestTime = 0;
-async function rateLimitedGet<T>(url: string): Promise<T | null> {
+async function rateLimitedGet<T>(url: string, useXmlClient = false): Promise<T | null> {
   const now = Date.now();
   const elapsed = now - lastRequestTime;
-  if (elapsed < 100) { // 100ms = 10/sec
-    await new Promise(r => setTimeout(r, 100 - elapsed));
+  if (elapsed < 125) {
+    await new Promise(r => setTimeout(r, 125 - elapsed));
   }
   lastRequestTime = Date.now();
 
   try {
-    const res = await secClient.get<T>(url);
+    const client = useXmlClient ? xmlClient : secClient;
+    const res = await client.get<T>(url);
     return res.data;
   } catch (error: any) {
     console.error(`[SEC EDGAR] Error fetching ${url}:`, error.message);
@@ -56,7 +65,7 @@ export interface InsiderTransaction {
 }
 
 export interface RecentFiling {
-  type: string; // "10-K", "10-Q", "8-K", "4", etc.
+  type: string;
   filingDate: string;
   description: string;
   url: string;
@@ -73,75 +82,189 @@ export interface CompanyInfo {
 
 // ── CIK Lookup ───────────────────────────────────────────────────────────────
 
-// Cache ticker → CIK mappings
 const cikCache = new Map<string, string>();
+let tickerToCikMap: Record<string, string> | null = null;
 
-/**
- * Look up SEC CIK number for a ticker symbol.
- */
+async function loadTickerMap(): Promise<Record<string, string>> {
+  if (tickerToCikMap) return tickerToCikMap;
+  try {
+    const data = await rateLimitedGet<Record<string, { cik_str: string; ticker: string; title: string }>>(
+      "https://www.sec.gov/files/company_tickers.json"
+    );
+    if (!data) return {};
+    const map: Record<string, string> = {};
+    for (const entry of Object.values(data)) {
+      map[entry.ticker.toUpperCase()] = entry.cik_str.toString().padStart(10, "0");
+    }
+    tickerToCikMap = map;
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 export async function getCIK(ticker: string): Promise<string | null> {
   const upper = ticker.toUpperCase();
   if (cikCache.has(upper)) return cikCache.get(upper)!;
 
-  const data = await rateLimitedGet<Record<string, any>>(
-    `${EDGAR_DATA}/submissions/CIK${upper}.json`
-  );
+  const map = await loadTickerMap();
+  const cik = map[upper];
+  if (cik) {
+    cikCache.set(upper, cik);
+    return cik;
+  }
+  return null;
+}
 
-  // Fallback: search by company ticker
-  if (!data) {
-    const search = await rateLimitedGet<any>(
-      `${SEC_BASE}/search-index?q=%22${upper}%22&dateRange=custom&startdt=2024-01-01&forms=4,10-K,10-Q`
-    );
-    if (search?.hits?.hits?.[0]?._source?.entity_id) {
-      const cik = search.hits.hits[0]._source.entity_id;
-      cikCache.set(upper, cik);
-      return cik;
+// ── Form 4 XML Parser ─────────────────────────────────────────────────────────
+
+function extractXmlValue(xml: string, tag: string): string | null {
+  const re = new RegExp(`<${tag}[^>]*>\\s*([^<]*)\\s*</${tag}>`, "i");
+  const m = xml.match(re);
+  return m?.[1]?.trim() || null;
+}
+
+function extractXmlBlock(xml: string, tag: string): string | null {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
+  const m = xml.match(re);
+  return m?.[1] || null;
+}
+
+function extractAllXmlBlocks(xml: string, tag: string): string[] {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "gi");
+  const results: string[] = [];
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    results.push(m[1]);
+  }
+  return results;
+}
+
+function parseTransactionCode(code: string | null): "purchase" | "sale" | "other" {
+  if (!code) return "other";
+  const c = code.trim().toUpperCase();
+  if (c === "P") return "purchase";
+  if (c === "S" || c === "D") return "sale";
+  if (c === "A") return "other"; // award/grant
+  return "other";
+}
+
+async function parseForm4Xml(
+  xmlText: string,
+  ticker: string,
+  filingDate: string,
+): Promise<InsiderTransaction[]> {
+  const transactions: InsiderTransaction[] = [];
+
+  // Owner info
+  const ownerBlock = extractXmlBlock(xmlText, "reportingOwner");
+  const ownerName = extractXmlValue(ownerBlock || xmlText, "rptOwnerName") || "Unknown";
+  const ownerTitle =
+    extractXmlValue(ownerBlock || xmlText, "officerTitle") ||
+    extractXmlValue(ownerBlock || xmlText, "relationship") ||
+    "";
+
+  // Non-derivative transactions (actual stock buys/sells)
+  const ndTable = extractXmlBlock(xmlText, "nonDerivativeTable");
+  if (ndTable) {
+    const txBlocks = extractAllXmlBlocks(ndTable, "nonDerivativeTransaction");
+    for (const txBlock of txBlocks) {
+      const txDate = extractXmlValue(txBlock, "transactionDate") || filingDate;
+      const txCode = extractXmlValue(txBlock, "transactionCode");
+      const shares = parseFloat(extractXmlValue(txBlock, "transactionShares") || "0") || 0;
+      const priceRaw = extractXmlValue(txBlock, "transactionPricePerShare");
+      const price = priceRaw ? parseFloat(priceRaw) || null : null;
+      const sharesAfterRaw = extractXmlValue(txBlock, "sharesOwnedFollowingTransaction");
+      const sharesAfter = sharesAfterRaw ? parseFloat(sharesAfterRaw) || null : null;
+
+      transactions.push({
+        ownerName,
+        ownerTitle,
+        transactionDate: txDate,
+        transactionType: parseTransactionCode(txCode),
+        sharesTraded: shares,
+        pricePerShare: price,
+        totalValue: price && shares ? Math.round(price * shares) : null,
+        sharesOwnedAfter: sharesAfter,
+        filingDate,
+        ticker: ticker.toUpperCase(),
+      });
     }
-    return null;
   }
 
-  const cik = data.cik?.toString().padStart(10, "0");
-  if (cik) cikCache.set(upper, cik);
-  return cik || null;
+  // If no non-derivative transactions, create one entry from metadata
+  if (transactions.length === 0) {
+    transactions.push({
+      ownerName,
+      ownerTitle,
+      transactionDate: filingDate,
+      transactionType: "other",
+      sharesTraded: 0,
+      pricePerShare: null,
+      totalValue: null,
+      sharesOwnedAfter: null,
+      filingDate,
+      ticker: ticker.toUpperCase(),
+    });
+  }
+
+  return transactions;
 }
 
 // ── Insider Trading (Form 4) ─────────────────────────────────────────────────
 
-/**
- * Get recent insider transactions for a stock via EDGAR full-text search.
- */
 export async function getInsiderTransactions(
   ticker: string,
   limit: number = 20,
 ): Promise<InsiderTransaction[]> {
   try {
-    const data = await rateLimitedGet<any>(
-      `${SEC_BASE}/search-index?q=%22${ticker.toUpperCase()}%22&forms=4&dateRange=custom&startdt=${getDateNDaysAgo(90)}&enddt=${getToday()}`
-    );
-
-    if (!data?.hits?.hits) return [];
-
-    const transactions: InsiderTransaction[] = [];
-
-    for (const hit of data.hits.hits.slice(0, limit)) {
-      const source = hit._source;
-      if (!source) continue;
-
-      transactions.push({
-        ownerName: source.display_names?.[0] || "Unknown",
-        ownerTitle: source.display_description || "",
-        transactionDate: source.file_date || "",
-        transactionType: inferTransactionType(source.display_description || ""),
-        sharesTraded: 0, // Would need to parse the actual XML filing for exact shares
-        pricePerShare: null,
-        totalValue: null,
-        sharesOwnedAfter: null,
-        filingDate: source.file_date || "",
-        ticker: ticker.toUpperCase(),
-      });
+    const cik = await getCIK(ticker);
+    if (!cik) {
+      console.warn(`[SEC EDGAR] CIK not found for ${ticker}`);
+      return [];
     }
 
-    return transactions;
+    // Fetch the company's submission history
+    const submissions = await rateLimitedGet<any>(
+      `${EDGAR_DATA}/submissions/CIK${cik}.json`
+    );
+    if (!submissions?.filings?.recent) return [];
+
+    const { form, filingDate, accessionNumber, primaryDocument } = submissions.filings.recent;
+
+    // Find Form 4 indices (most recent first)
+    const form4Indices: number[] = [];
+    for (let i = 0; i < form.length; i++) {
+      if (form[i] === "4" || form[i] === "4/A") {
+        form4Indices.push(i);
+        if (form4Indices.length >= limit) break;
+      }
+    }
+
+    if (form4Indices.length === 0) return [];
+
+    const cikNum = parseInt(cik, 10).toString(); // numeric CIK without leading zeros
+    const allTransactions: InsiderTransaction[] = [];
+
+    // Fetch each Form 4 XML (limit to 12 to avoid too many requests)
+    for (const idx of form4Indices.slice(0, 12)) {
+      const accNum = accessionNumber[idx]?.replace(/-/g, "");
+      const primaryDoc = primaryDocument[idx];
+      const fDate = filingDate[idx] || "";
+
+      if (!accNum || !primaryDoc) continue;
+
+      const xmlUrl = `${EDGAR_ARCHIVES}/${cikNum}/${accNum}/${primaryDoc}`;
+      const xmlText = await rateLimitedGet<string>(xmlUrl, true);
+      if (!xmlText || typeof xmlText !== "string") continue;
+
+      const txs = await parseForm4Xml(xmlText, ticker, fDate);
+      allTransactions.push(...txs);
+
+      if (allTransactions.length >= limit) break;
+    }
+
+    return allTransactions.slice(0, limit);
   } catch (error) {
     console.error(`[SEC EDGAR] Error fetching insider transactions for ${ticker}:`, error);
     return [];
@@ -157,23 +280,34 @@ export async function getRecentFilings(
   limit: number = 10,
 ): Promise<RecentFiling[]> {
   try {
-    const data = await rateLimitedGet<any>(
-      `${SEC_BASE}/search-index?q=%22${ticker.toUpperCase()}%22&forms=${forms}&dateRange=custom&startdt=${getDateNDaysAgo(365)}&enddt=${getToday()}`
+    const cik = await getCIK(ticker);
+    if (!cik) return [];
+
+    const submissions = await rateLimitedGet<any>(
+      `${EDGAR_DATA}/submissions/CIK${cik}.json`
     );
+    if (!submissions?.filings?.recent) return [];
 
-    if (!data?.hits?.hits) return [];
+    const { form, filingDate, accessionNumber, primaryDocument } = submissions.filings.recent;
+    const formSet = new Set(forms.split(",").map(f => f.trim().toUpperCase()));
 
-    return data.hits.hits.slice(0, limit).map((hit: any) => {
-      const source = hit._source;
-      return {
-        type: source.form_type || "Unknown",
-        filingDate: source.file_date || "",
-        description: source.display_description || source.form_type || "",
-        url: source.file_url
-          ? `https://www.sec.gov/Archives/edgar/data/${source.entity_id}/${source.file_url}`
+    const results: RecentFiling[] = [];
+    const cikNum = parseInt(cik, 10).toString();
+
+    for (let i = 0; i < form.length && results.length < limit; i++) {
+      if (!formSet.has(form[i]?.toUpperCase())) continue;
+      const accNum = accessionNumber[i]?.replace(/-/g, "");
+      results.push({
+        type: form[i],
+        filingDate: filingDate[i] || "",
+        description: `${form[i]} filed ${filingDate[i] || ""}`,
+        url: accNum
+          ? `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNum}/${primaryDocument[i]}`
           : "",
-      };
-    });
+      });
+    }
+
+    return results;
   } catch (error) {
     console.error(`[SEC EDGAR] Error fetching filings for ${ticker}:`, error);
     return [];
@@ -181,8 +315,7 @@ export async function getRecentFilings(
 }
 
 /**
- * Get insider trading summary for multiple stocks.
- * Returns a concise text suitable for LLM prompt injection.
+ * Get insider trading summary for multiple stocks (for LLM prompt injection).
  */
 export async function getInsiderSummaryForPrompt(tickers: string[]): Promise<string> {
   const summaries: string[] = [];
@@ -191,22 +324,22 @@ export async function getInsiderSummaryForPrompt(tickers: string[]): Promise<str
     const transactions = await getInsiderTransactions(ticker, 5);
     if (transactions.length === 0) continue;
 
-    const buys = transactions.filter(t => t.transactionType === "purchase").length;
-    const sells = transactions.filter(t => t.transactionType === "sale").length;
+    const buys = transactions.filter(t => t.transactionType === "purchase");
+    const sells = transactions.filter(t => t.transactionType === "sale");
 
     summaries.push(
-      `${ticker}: ${transactions.length} insider filings (last 90d) — ${buys} purchases, ${sells} sales`
+      `${ticker}: ${transactions.length} insider filings (90d) — ${buys.length} purchases, ${sells.length} sales`
     );
 
-    // Include notable names
-    const names = transactions.slice(0, 3).map(t =>
-      `  ${t.ownerName} (${t.transactionType}) on ${t.transactionDate}`
+    const notable = buys.slice(0, 3).map(t =>
+      `  ${t.ownerName} (${t.ownerTitle || "Insider"}) bought ${t.sharesTraded.toLocaleString()} shares` +
+      (t.pricePerShare ? ` @ $${t.pricePerShare.toFixed(2)}` : "") +
+      ` on ${t.transactionDate}`
     );
-    summaries.push(names.join("\n"));
+    if (notable.length > 0) summaries.push(notable.join("\n"));
   }
 
   if (summaries.length === 0) return "";
-
   return "INSIDER TRADING ACTIVITY (SEC Form 4):\n" + summaries.join("\n");
 }
 
@@ -227,22 +360,10 @@ export async function getMaterialEventsSummary(tickers: string[]): Promise<strin
   }
 
   if (events.length === 0) return "";
-
   return "MATERIAL EVENTS (SEC 8-K Filings):\n" + events.join("\n");
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function inferTransactionType(description: string): "purchase" | "sale" | "other" {
-  const lower = description.toLowerCase();
-  if (lower.includes("purchase") || lower.includes("acquisition") || lower.includes("buy")) {
-    return "purchase";
-  }
-  if (lower.includes("sale") || lower.includes("disposition") || lower.includes("sell")) {
-    return "sale";
-  }
-  return "other";
-}
 
 function getToday(): string {
   return new Date().toISOString().split("T")[0]!;
