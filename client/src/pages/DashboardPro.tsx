@@ -13,7 +13,7 @@ import {
   Activity, Shield, Zap, BarChart3, Bot, Pause, Play,
   ChevronUp, ChevronDown, Eye,
   Briefcase, Radio, AlertTriangle, BookOpen,
-  Settings, LogOut, RotateCcw,
+  Settings, LogOut, RotateCcw, Plus, X,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -89,6 +89,7 @@ export default function DashboardPro() {
   const { user, loading: authLoading, isAuthenticated, logout } = useAuth();
   const [insiderTicker, setInsiderTicker] = useState("NVDA");
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
+  const [newTicker, setNewTicker] = useState("");
 
   // ── Core data ────────────────────────────────────────────────────────────
   const { data: agentStatus, refetch: refetchAgent } = trpc.agent.status.useQuery(
@@ -98,9 +99,17 @@ export default function DashboardPro() {
     { limit: 8 }, { enabled: isAuthenticated }
   );
   const { data: news = [], isLoading: newsLoading, refetch: refetchNews } = trpc.news.recent.useQuery();
-  const { data: watchlist = [] } = trpc.watchlist.list.useQuery(
+  const { data: watchlist = [], refetch: refetchWatchlist } = trpc.watchlist.list.useQuery(
     undefined, { enabled: isAuthenticated }
   );
+  const addToWatchlist = trpc.watchlist.add.useMutation({
+    onSuccess: () => { setNewTicker(""); refetchWatchlist(); toast.success("Added to watchlist"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const removeFromWatchlist = trpc.watchlist.remove.useMutation({
+    onSuccess: () => { refetchWatchlist(); toast.success("Removed from watchlist"); },
+    onError: (e) => toast.error(e.message),
+  });
   const { data: alerts = [] } = trpc.alerts.list.useQuery(
     { unreadOnly: true }, { enabled: isAuthenticated }
   );
@@ -282,6 +291,29 @@ export default function DashboardPro() {
               <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Watchlist</h2>
               <Badge variant="outline" className="text-[10px] font-mono">{watchlist.length} stocks</Badge>
             </div>
+            {/* Add ticker input */}
+            <form
+              className="flex gap-1.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const t = newTicker.trim().toUpperCase();
+                if (t) addToWatchlist.mutate({ ticker: t });
+              }}
+            >
+              <input
+                value={newTicker}
+                onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
+                placeholder="Add ticker…"
+                className="flex-1 h-8 px-2.5 text-xs font-mono bg-secondary border border-border rounded-lg outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground"
+              />
+              <button
+                type="submit"
+                disabled={!newTicker.trim() || addToWatchlist.isPending}
+                className="h-8 w-8 flex items-center justify-center rounded-lg bg-primary text-primary-foreground disabled:opacity-40 hover:bg-primary/90 transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </form>
             <div className="rounded-xl border border-border bg-card overflow-hidden">
               {watchlist.length === 0 ? (
                 <div className="py-10 text-center text-sm text-muted-foreground">
@@ -296,6 +328,7 @@ export default function DashboardPro() {
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground">Price</th>
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground">Chg%</th>
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground">RSI</th>
+                      <th className="px-2 py-2" />
                     </tr>
                   </thead>
                   <tbody>
@@ -327,6 +360,14 @@ export default function DashboardPro() {
                           </td>
                           <td className={`px-3 py-2.5 text-right font-mono font-semibold ${rsi.color}`}>
                             {rsi.label}
+                          </td>
+                          <td className="px-2 py-2.5">
+                            <button
+                              onClick={() => removeFromWatchlist.mutate({ id: stock.id })}
+                              className="p-1 rounded text-muted-foreground hover:text-loss hover:bg-loss/10 transition-colors"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
                           </td>
                         </tr>
                       );
