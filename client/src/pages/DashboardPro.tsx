@@ -14,6 +14,7 @@ import {
   ChevronUp, ChevronDown, Eye,
   Briefcase, Radio, AlertTriangle, BookOpen,
   Settings, LogOut, RotateCcw, Plus, X,
+  TrendingUp, TrendingDown,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -48,6 +49,101 @@ function timeAgo(date: string | Date) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+// ─── Signal Derivation ────────────────────────────────────────────────────────
+
+interface DerivedSignal {
+  ticker: string;
+  price: number | null;
+  bias: "bullish" | "bearish";
+  type: string;
+  detail: string;
+  rsi: number | null;
+}
+
+const SIGNAL_PRIORITY: Record<string, number> = {
+  "RSI Oversold": 0, "RSI Overbought": 0,
+  "MACD Crossover": 1,
+  "BB Lower Touch": 2, "BB Upper Touch": 2,
+  "BB Squeeze": 3,
+};
+
+function deriveSignals(
+  watchlist: Array<{ ticker: string }>,
+  technicals: Record<string, any> | undefined,
+  stockQuotes: Record<string, any> | undefined,
+): DerivedSignal[] {
+  if (!technicals) return [];
+  const all: DerivedSignal[] = [];
+
+  for (const stock of watchlist) {
+    const t = technicals[stock.ticker];
+    const quote = stockQuotes?.[stock.ticker];
+    if (!t) continue;
+
+    const price: number | null = t.price ?? quote?.price ?? null;
+    const rsi: number | null = t.rsi ?? null;
+    const macd: number | null = t.macd ?? null;
+    const macdSignal: number | null = t.macdSignal ?? null;
+    const macdHistogram: number | null = t.macdHistogram ?? null;
+    const bbUpper: number | null = t.bollingerUpper ?? null;
+    const bbLower: number | null = t.bollingerLower ?? null;
+    const bbMiddle: number | null = t.bollingerMiddle ?? null;
+
+    if (rsi != null && rsi <= 30)
+      all.push({ ticker: stock.ticker, price, bias: "bullish", type: "RSI Oversold", detail: `RSI ${rsi.toFixed(1)} — deeply oversold, reversal candidate`, rsi });
+    if (rsi != null && rsi >= 70)
+      all.push({ ticker: stock.ticker, price, bias: "bearish", type: "RSI Overbought", detail: `RSI ${rsi.toFixed(1)} — overbought, potential pullback`, rsi });
+    if (macd != null && macdSignal != null && macdHistogram != null && macdHistogram > 0 && macd > macdSignal)
+      all.push({ ticker: stock.ticker, price, bias: "bullish", type: "MACD Crossover", detail: `MACD ${macd.toFixed(3)} crossed above signal — bullish momentum`, rsi });
+    if (macd != null && macdSignal != null && macdHistogram != null && macdHistogram < 0 && macd < macdSignal)
+      all.push({ ticker: stock.ticker, price, bias: "bearish", type: "MACD Crossover", detail: `MACD ${macd.toFixed(3)} crossed below signal — bearish momentum`, rsi });
+    if (price != null && bbLower != null && price <= bbLower * 1.002)
+      all.push({ ticker: stock.ticker, price, bias: "bullish", type: "BB Lower Touch", detail: `Price touching lower band $${bbLower.toFixed(2)} — bounce zone`, rsi });
+    if (price != null && bbUpper != null && price >= bbUpper * 0.998)
+      all.push({ ticker: stock.ticker, price, bias: "bearish", type: "BB Upper Touch", detail: `Price touching upper band $${bbUpper.toFixed(2)} — resistance zone`, rsi });
+    if (bbUpper != null && bbLower != null && bbMiddle != null) {
+      const bw = (bbUpper - bbLower) / bbMiddle;
+      if (bw < 0.04)
+        all.push({ ticker: stock.ticker, price, bias: "bullish", type: "BB Squeeze", detail: `Bands narrowing (${(bw * 100).toFixed(1)}% width) — breakout imminent`, rsi });
+    }
+  }
+
+  // One signal per ticker — keep highest priority
+  const best = new Map<string, DerivedSignal>();
+  for (const sig of all) {
+    const existing = best.get(sig.ticker);
+    if (!existing || (SIGNAL_PRIORITY[sig.type] ?? 99) < (SIGNAL_PRIORITY[existing.type] ?? 99))
+      best.set(sig.ticker, sig);
+  }
+  return Array.from(best.values());
+}
+
+// ─── Prediction Grouping ──────────────────────────────────────────────────────
+
+type PredGroup = "Today" | "Yesterday" | "This Week" | "Older";
+
+function groupPredictions(predictions: any[]): Record<PredGroup, any[]> {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(todayStart.getDate() - 1);
+  const weekStart = new Date(todayStart); weekStart.setDate(todayStart.getDate() - 7);
+
+  const groups: Record<PredGroup, any[]> = { "Today": [], "Yesterday": [], "This Week": [], "Older": [] };
+
+  for (const p of predictions) {
+    const d = new Date(p.createdAt ?? p.startDate);
+    if (d >= todayStart) groups["Today"].push(p);
+    else if (d >= yesterdayStart) groups["Yesterday"].push(p);
+    else if (d >= weekStart) groups["This Week"].push(p);
+    else groups["Older"].push(p);
+  }
+
+  for (const key of Object.keys(groups) as PredGroup[])
+    groups[key].sort((a, b) => (b.predictionConfidence ?? 0) - (a.predictionConfidence ?? 0));
+
+  return groups;
 }
 
 // ─── Unauthenticated landing ───────────────────────────────────────────────
@@ -90,6 +186,8 @@ export default function DashboardPro() {
   const [insiderTicker, setInsiderTicker] = useState("NVDA");
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
   const [newTicker, setNewTicker] = useState("");
+  const [predFilter, setPredFilter] = useState<"all" | "call" | "put">("all");
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   // ── Core data ────────────────────────────────────────────────────────────
   const { data: agentStatus, refetch: refetchAgent } = trpc.agent.status.useQuery(
@@ -113,7 +211,9 @@ export default function DashboardPro() {
   const { data: alerts = [] } = trpc.alerts.list.useQuery(
     { unreadOnly: true }, { enabled: isAuthenticated }
   );
-  const { data: predictions = [], refetch: refetchPredictions } = trpc.predictions.upcoming.useQuery();
+  const { data: predictions = [], refetch: refetchPredictions } = trpc.predictions.upcoming.useQuery(
+    undefined, { refetchInterval: 5 * 60_000 }
+  );
   const { data: scorecard } = trpc.predictions.scorecard.useQuery();
   const { data: sectorMomentum = [] } = trpc.sectors.momentum.useQuery();
   const { data: riskSettings } = trpc.risk.settings.useQuery(
@@ -134,7 +234,7 @@ export default function DashboardPro() {
   );
   const { data: technicals } = trpc.technicals.multipleIndicators.useQuery(
     { symbols: watchlistTickers.slice(0, 15) },
-    { enabled: watchlistTickers.length > 0 }
+    { enabled: watchlistTickers.length > 0, refetchInterval: 60_000 }
   );
   const firstPortfolioId = portfolios[0]?.id;
   const { data: portfolioSummary } = trpc.portfolio.summary.useQuery(
@@ -199,6 +299,10 @@ export default function DashboardPro() {
 
   const lastCycle = cycleLogs[0];
   const equity = portfolioSummary?.totalEquity;
+
+  const activeSignals = deriveSignals(watchlist, technicals, stockQuotes);
+  const bullishSignals = activeSignals.filter(s => s.bias === "bullish");
+  const bearishSignals = activeSignals.filter(s => s.bias === "bearish");
   const pnl = portfolioSummary?.totalUnrealizedPnL ?? 0;
   const pnlColor = pnl >= 0 ? "text-profit" : "text-loss";
 
@@ -414,72 +518,98 @@ export default function DashboardPro() {
             </div>
           </div>
 
-          {/* ── CENTER: Predictions + Scorecard ────────────────────────────── */}
+          {/* ── CENTER: Active Signals ──────────────────────────────────────── */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Active Signals</h2>
-              <div className="flex items-center gap-2">
-                {scorecard && scorecard.evaluated > 0 && (
-                  <div className="flex items-center gap-1.5 text-xs font-mono">
-                    <span className="text-muted-foreground">Hit Rate</span>
-                    <span className={`font-bold ${scorecard.hitRate >= 55 ? "text-profit" : "text-loss"}`}>{scorecard.hitRate.toFixed(0)}%</span>
-                    <span className="text-muted-foreground">({scorecard.evaluated} eval'd)</span>
-                  </div>
-                )}
-              </div>
+              <Badge variant="outline" className="text-[10px] font-mono">
+                {activeSignals.length} signal{activeSignals.length !== 1 ? "s" : ""}
+              </Badge>
             </div>
 
-            {/* Scorecard row */}
-            {scorecard && scorecard.evaluated > 0 && (
-              <div className="grid grid-cols-4 gap-2">
-                {[
-                  { label: "Total", val: scorecard.totalPredictions, color: "text-foreground" },
-                  { label: "Correct", val: scorecard.correct, color: "text-profit" },
-                  { label: "Wrong", val: scorecard.incorrect, color: "text-loss" },
-                  { label: "Pending", val: scorecard.pending, color: "text-muted-foreground" },
-                ].map(({ label, val, color }) => (
-                  <div key={label} className="rounded-lg border border-border bg-card p-2.5 text-center">
-                    <div className={`text-lg font-mono font-bold ${color}`}>{val}</div>
-                    <div className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</div>
-                  </div>
-                ))}
+            {watchlist.length === 0 ? (
+              <div className="rounded-xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">
+                <Activity className="h-6 w-6 mx-auto mb-2 opacity-30" />
+                Add stocks to watchlist to see live signals
               </div>
-            )}
-
-            {/* Predictions grid */}
-            {predictions.length === 0 ? (
-              <div className="rounded-xl border border-border bg-card py-12 text-center text-sm text-muted-foreground">
-                <Sparkles className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                No predictions yet — click Generate
+            ) : !technicals ? (
+              <div className="rounded-xl border border-border bg-card py-10 flex justify-center">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              </div>
+            ) : activeSignals.length === 0 ? (
+              <div className="rounded-xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">
+                <Activity className="h-6 w-6 mx-auto mb-2 opacity-30" />
+                No extreme signals right now — market in neutral zone
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                {predictions.slice(0, 6).map((pred: any) => {
-                  const conf = pred.predictionConfidence ?? 0;
-                  const isCall = (pred.opportunityType ?? "call") === "call" || (pred.direction ?? "up") === "up";
-                  const signals = (() => { try { return JSON.parse(pred.earlySignals ?? "[]"); } catch { return []; } })();
-                  const stocks = (() => { try { return JSON.parse(pred.keyStocks ?? "[]"); } catch { return []; } })();
-                  return (
-                    <div key={pred.id} className={`rounded-xl border ${isCall ? "border-emerald-200 bg-emerald-50/40" : "border-red-200 bg-red-50/40"} p-3 relative overflow-hidden`}>
-                      <div className={`absolute top-0 left-0 right-0 h-0.5 ${isCall ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${conf}%` }} />
-                      <div className="flex items-start justify-between mb-1.5 mt-0.5">
-                        <Badge className={`text-[10px] font-mono px-1.5 py-0 border-0 ${isCall ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                          {isCall ? "▲ CALL" : "▼ PUT"}
-                        </Badge>
-                        <span className={`text-xl font-mono font-bold ${isCall ? "text-emerald-600" : "text-red-600"}`}>{conf}%</span>
-                      </div>
-                      <div className="text-xs font-semibold text-foreground mb-1 line-clamp-1">{pred.sector}</div>
-                      <p className="text-[10px] text-muted-foreground line-clamp-2 mb-2">{pred.description}</p>
-                      {stocks.slice(0, 3).length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {stocks.slice(0, 3).map((s: string) => (
-                            <span key={s} className="text-[10px] font-mono bg-secondary rounded px-1.5 py-0.5 text-foreground">{s}</span>
-                          ))}
-                        </div>
-                      )}
+              <div className="space-y-2">
+                {/* Bullish signals */}
+                {bullishSignals.length > 0 && (
+                  <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/20 overflow-hidden">
+                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-emerald-200/40 bg-emerald-50/30">
+                      <TrendingUp className="h-3.5 w-3.5 text-emerald-600" />
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
+                        Bullish — {bullishSignals.length}
+                      </span>
                     </div>
-                  );
-                })}
+                    <div className="divide-y divide-emerald-100/60">
+                      {bullishSignals.map(sig => (
+                        <div
+                          key={sig.ticker}
+                          className="flex items-center gap-3 px-3 py-2.5 hover:bg-emerald-50/40 transition-colors cursor-pointer"
+                          onClick={() => setChartSymbol(sig.ticker)}
+                        >
+                          <span className="font-mono font-bold text-xs text-foreground w-12 shrink-0">{sig.ticker}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <Badge className="text-[9px] font-mono px-1.5 py-0 border-0 bg-emerald-100 text-emerald-700 shrink-0">
+                                {sig.type}
+                              </Badge>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground truncate mt-0.5">{sig.detail}</p>
+                          </div>
+                          {sig.price != null && (
+                            <span className="text-[10px] font-mono text-muted-foreground shrink-0">${fmt(sig.price)}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Bearish signals */}
+                {bearishSignals.length > 0 && (
+                  <div className="rounded-xl border border-red-200/60 bg-red-50/20 overflow-hidden">
+                    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-red-200/40 bg-red-50/30">
+                      <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-red-700">
+                        Bearish — {bearishSignals.length}
+                      </span>
+                    </div>
+                    <div className="divide-y divide-red-100/60">
+                      {bearishSignals.map(sig => (
+                        <div
+                          key={sig.ticker}
+                          className="flex items-center gap-3 px-3 py-2.5 hover:bg-red-50/40 transition-colors cursor-pointer"
+                          onClick={() => setChartSymbol(sig.ticker)}
+                        >
+                          <span className="font-mono font-bold text-xs text-foreground w-12 shrink-0">{sig.ticker}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <Badge className="text-[9px] font-mono px-1.5 py-0 border-0 bg-red-100 text-red-700 shrink-0">
+                                {sig.type}
+                              </Badge>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground truncate mt-0.5">{sig.detail}</p>
+                          </div>
+                          {sig.price != null && (
+                            <span className="text-[10px] font-mono text-muted-foreground shrink-0">${fmt(sig.price)}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1006,6 +1136,7 @@ export default function DashboardPro() {
 
           {/* ── Predictions Tab ─────────────────────────────────────────────── */}
           <TabsContent value="predictions" className="space-y-4">
+            {/* Scorecard */}
             {scorecard && (
               <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
                 {[
@@ -1025,58 +1156,119 @@ export default function DashboardPro() {
                 ))}
               </div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {predictions.length === 0 ? (
-                <div className="col-span-3 py-16 text-center text-sm text-muted-foreground">
-                  <Sparkles className="h-8 w-8 mx-auto mb-3 opacity-30" />
-                  No predictions yet — click Generate
-                </div>
-              ) : predictions.map((pred: any) => {
-                const conf = pred.predictionConfidence ?? 0;
-                const isCall = (pred.opportunityType ?? "call") === "call" || (pred.direction ?? "up") === "up";
-                const signals = (() => { try { return JSON.parse(pred.earlySignals ?? "[]"); } catch { return []; } })();
-                const stocks = (() => { try { return JSON.parse(pred.keyStocks ?? "[]"); } catch { return []; } })();
-                return (
-                  <div key={pred.id} className={`rounded-xl border p-4 relative overflow-hidden ${isCall ? "border-emerald-200 bg-emerald-50/30" : "border-red-200 bg-red-50/30"}`}>
-                    <div className={`absolute top-0 left-0 right-0 h-0.5 ${isCall ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${conf}%` }} />
-                    <div className="flex items-start justify-between mb-2 mt-0.5">
-                      <div className="space-y-1">
-                        <Badge className={`text-[10px] font-mono px-2 py-0 border-0 ${isCall ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                          {isCall ? "▲ CALL" : "▼ PUT"}
-                        </Badge>
-                        <div className="text-xs font-semibold text-foreground">{pred.sector}</div>
-                      </div>
-                      <div className={`text-2xl font-mono font-bold ${isCall ? "text-emerald-600" : "text-red-600"}`}>{conf}%</div>
-                    </div>
-                    <p className="text-xs text-muted-foreground mb-3 line-clamp-3">{pred.description}</p>
-                    {signals.length > 0 && (
-                      <div className="mb-2">
-                        <div className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Signals</div>
-                        <div className="flex flex-wrap gap-1">
-                          {signals.slice(0, 3).map((s: string, i: number) => (
-                            <span key={i} className="text-[10px] bg-secondary rounded px-1.5 py-0.5 text-muted-foreground">{s}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {stocks.length > 0 && (
-                      <div>
-                        <div className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Key Stocks</div>
-                        <div className="flex flex-wrap gap-1">
-                          {stocks.slice(0, 5).map((s: string) => (
-                            <span key={s} className="text-[10px] font-mono font-semibold bg-card border border-border rounded px-1.5 py-0.5">{s}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border/40 text-[10px] text-muted-foreground font-mono">
-                      {pred.timeframe && <span>{pred.timeframe}</span>}
-                      <span className="ml-auto">{new Date(pred.startDate ?? pred.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                    </div>
-                  </div>
-                );
-              })}
+
+            {/* Filter pills */}
+            <div className="flex items-center gap-2">
+              {(["all", "call", "put"] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setPredFilter(f)}
+                  className={`text-xs font-mono px-3 py-1.5 rounded-lg border transition-colors ${
+                    predFilter === f
+                      ? f === "call" ? "bg-emerald-100 text-emerald-700 border-emerald-300"
+                        : f === "put" ? "bg-red-100 text-red-700 border-red-300"
+                        : "bg-primary/10 text-primary border-primary/30"
+                      : "border-border text-muted-foreground hover:border-primary/40"
+                  }`}
+                >
+                  {f === "all" ? "All" : f === "call" ? "▲ Calls" : "▼ Puts"}
+                </button>
+              ))}
+              <span className="text-[10px] text-muted-foreground font-mono ml-2">
+                {predictions.filter((p: any) =>
+                  predFilter === "all" ? true :
+                  predFilter === "call" ? ((p.opportunityType ?? "call") === "call" || (p.direction ?? "up") === "up") :
+                  ((p.opportunityType) === "put" || (p.direction) === "down")
+                ).length} predictions
+              </span>
             </div>
+
+            {predictions.length === 0 ? (
+              <div className="py-16 text-center text-sm text-muted-foreground">
+                <Sparkles className="h-8 w-8 mx-auto mb-3 opacity-30" />
+                No predictions yet — click Generate
+              </div>
+            ) : (() => {
+              const filtered = predictions.filter((p: any) =>
+                predFilter === "all" ? true :
+                predFilter === "call" ? ((p.opportunityType ?? "call") === "call" || (p.direction ?? "up") === "up") :
+                ((p.opportunityType) === "put" || (p.direction) === "down")
+              );
+              const grouped = groupPredictions(filtered);
+              const groupOrder: PredGroup[] = ["Today", "Yesterday", "This Week", "Older"];
+
+              return (
+                <div className="space-y-5">
+                  {groupOrder.map(groupName => {
+                    const items = grouped[groupName];
+                    if (items.length === 0) return null;
+                    const isExpanded = expandedGroups[groupName] ?? groupName === "Today";
+                    const showCount = groupName === "Today" ? items.length : 3;
+                    const visible = isExpanded ? items : items.slice(0, showCount);
+                    const hiddenCount = items.length - showCount;
+
+                    return (
+                      <div key={groupName}>
+                        <div className="flex items-center gap-3 mb-3">
+                          <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{groupName}</h3>
+                          <div className="flex-1 h-px bg-border/60" />
+                          <span className="text-[10px] font-mono text-muted-foreground">{items.length}</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                          {visible.map((pred: any) => {
+                            const conf = pred.predictionConfidence ?? 0;
+                            const isCall = (pred.opportunityType ?? "call") === "call" || (pred.direction ?? "up") === "up";
+                            const signals = (() => { try { return JSON.parse(pred.earlySignals ?? "[]"); } catch { return []; } })();
+                            const stocks = (() => { try { return JSON.parse(pred.keyStocks ?? "[]"); } catch { return []; } })();
+                            return (
+                              <div key={pred.id} className={`rounded-xl border p-4 relative overflow-hidden ${isCall ? "border-emerald-200 bg-emerald-50/30" : "border-red-200 bg-red-50/30"}`}>
+                                <div className={`absolute top-0 left-0 h-0.5 ${isCall ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${conf}%`, right: 0 }} />
+                                <div className="flex items-start justify-between mb-2 mt-0.5">
+                                  <div className="space-y-1">
+                                    <Badge className={`text-[10px] font-mono px-2 py-0 border-0 ${isCall ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                                      {isCall ? "▲ CALL" : "▼ PUT"}
+                                    </Badge>
+                                    <div className="text-xs font-semibold text-foreground">{pred.sector}</div>
+                                  </div>
+                                  <div className={`text-2xl font-mono font-bold ${isCall ? "text-emerald-600" : "text-red-600"}`}>{conf}%</div>
+                                </div>
+                                <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{pred.description}</p>
+                                {stocks.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mb-2">
+                                    {stocks.slice(0, 3).map((s: string) => (
+                                      <span key={s} className="text-[10px] font-mono font-semibold bg-card border border-border rounded px-1.5 py-0.5">{s}</span>
+                                    ))}
+                                  </div>
+                                )}
+                                {signals.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mb-2">
+                                    {signals.slice(0, 2).map((s: string, i: number) => (
+                                      <span key={i} className="text-[10px] bg-secondary rounded px-1.5 py-0.5 text-muted-foreground">{s}</span>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/40 text-[10px] text-muted-foreground font-mono">
+                                  {pred.timeframe && <span>{pred.timeframe}</span>}
+                                  <span className="ml-auto">{new Date(pred.createdAt ?? pred.startDate).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {groupName !== "Today" && hiddenCount > 0 && (
+                          <button
+                            className="mt-2 text-xs text-muted-foreground hover:text-foreground font-mono underline-offset-2 hover:underline transition-colors"
+                            onClick={() => setExpandedGroups(prev => ({ ...prev, [groupName]: !isExpanded }))}
+                          >
+                            {isExpanded ? `Show less` : `Show ${hiddenCount} more`}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </TabsContent>
 
 

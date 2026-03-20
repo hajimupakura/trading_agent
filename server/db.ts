@@ -379,7 +379,9 @@ export async function getHistoricalRallies() {
 export async function getPredictedRallies() {
   const db = await getDb();
   if (!db) return [];
-  return await db.select().from(rallyEvents).where(eq(rallyEvents.status, "predicted"));
+  return await db.select().from(rallyEvents)
+    .where(eq(rallyEvents.status, "predicted"))
+    .orderBy(desc(rallyEvents.createdAt));
 }
 
 export async function insertRallyPrediction(prediction: any) {
