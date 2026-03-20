@@ -54,7 +54,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
 export async function runInsiderAgent(ctx: AgentContext): Promise<AgentSummary> {
   const stocks = getTopStocks(ctx);
   return runSpecialist(
-    { name: "insider_institutional", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 5, maxOutputTokens: 1024, timeoutMs: 45_000 },
+    { name: "insider_institutional", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 10, maxOutputTokens: 1024, timeoutMs: 60_000 },
     `Analyze insider trading and SEC filings for: ${stocks.join(", ")}`,
     executeTool,
   );

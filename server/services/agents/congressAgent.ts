@@ -65,7 +65,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
 
 export async function runCongressAgent(ctx: AgentContext): Promise<AgentSummary> {
   return runSpecialist(
-    { name: "congress_trading", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 4, maxOutputTokens: 1024, timeoutMs: 30_000 },
+    { name: "congress_trading", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 8, maxOutputTokens: 1024, timeoutMs: 45_000 },
     "Analyze recent Congressional stock trading activity. Check Pelosi's trades and look for cluster buys.",
     executeTool,
   );

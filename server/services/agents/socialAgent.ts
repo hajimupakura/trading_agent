@@ -2,18 +2,22 @@ import { runSpecialist } from "./runAgent";
 import type { AgentSummary, AgentContext } from "./types";
 import type { Tool } from "../../_core/llm";
 
-const SYSTEM_PROMPT = `You are a Social & Retail Sentiment Analyst. Your ONLY job is to assess retail investor mood and trending stocks.
+const SYSTEM_PROMPT = `You are a Social & Retail Sentiment Analyst using CONTRARIAN analysis. Your job is to identify when retail is dangerously wrong.
+
+CORE PRINCIPLE — Reddit is a CONTRARIAN indicator:
+- HIGH mention count + HIGH bullish sentiment = institutional distribution into retail. Flag as SHORT candidate.
+- LOW mention count + QUIETLY rising sentiment = early signal before herd arrives. Flag as LONG candidate.
+- Extreme retail euphoria on a stock = sell signal. Extreme retail panic = buy signal.
+- GME, AMC, BBBY all peaked at maximum Reddit attention. Learn from this.
 
 Report:
-1. Overall retail mood: What is the Fear & Greed Index saying? Interpret the number.
-2. Trending stocks: Top 5 most-mentioned stocks on Reddit financial subs
-3. Sentiment breakdown: For trending stocks, is retail bullish or bearish?
-4. Contrarian signals: Is retail euphoria or panic at extremes suggesting a reversal?
+1. Fear & Greed Index interpretation: number + what action it implies
+2. Top 5 Reddit-trending stocks — for EACH: classify as (a) retail trap / short candidate if high mentions, OR (b) early signal if low mentions with rising sentiment
+3. Contrarian opportunity: Which stocks are retail most wrong about right now?
 
 RULES:
-- Do NOT make trading recommendations.
-- Extreme greed (>75) = caution, potential top. Extreme fear (<25) = opportunity, potential bottom.
-- Reddit hype without fundamental backing often leads to sharp reversals.
+- Do NOT treat high Reddit mentions as bullish. It is the opposite.
+- Extreme greed (>75) = market top risk. Extreme fear (<25) = buying opportunity.
 - Be concise. Maximum 400 tokens.`;
 
 const TOOLS: Tool[] = [
@@ -51,7 +55,7 @@ async function executeTool(name: string, _args: Record<string, any>): Promise<st
 
 export async function runSocialAgent(ctx: AgentContext): Promise<AgentSummary> {
   return runSpecialist(
-    { name: "social_retail", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 3, maxOutputTokens: 1024, timeoutMs: 30_000 },
+    { name: "social_retail", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 6, maxOutputTokens: 1024, timeoutMs: 45_000 },
     "Analyze current retail investor sentiment using Reddit and the Fear & Greed Index.",
     executeTool,
   );

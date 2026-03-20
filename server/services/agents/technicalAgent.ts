@@ -53,7 +53,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
 export async function runTechnicalAgent(ctx: AgentContext): Promise<AgentSummary> {
   const stocks = getTopStocks(ctx);
   return runSpecialist(
-    { name: "technical_analysis", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 5, maxOutputTokens: 1024, timeoutMs: 45_000 },
+    { name: "technical_analysis", systemPrompt: SYSTEM_PROMPT, tools: TOOLS, maxToolCalls: 10, maxOutputTokens: 1024, timeoutMs: 60_000 },
     `Analyze technical indicators for these stocks (in priority order): ${stocks.join(", ")}`,
     executeTool,
   );

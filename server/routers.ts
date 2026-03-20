@@ -727,8 +727,8 @@ export const appRouter = router({
           watchedSectors: existing?.watchedSectors ?? null,
           maxPositionPct: input.maxPositionPct ?? existing?.maxPositionPct ?? 10,
           maxSectorPct: input.maxSectorPct ?? existing?.maxSectorPct ?? 25,
-          stopLossPct: input.stopLossPct ?? existing?.stopLossPct ?? 5,
-          takeProfitPct: input.takeProfitPct ?? existing?.takeProfitPct ?? 15,
+          stopLossPct: input.stopLossPct ?? existing?.stopLossPct ?? 8,
+          takeProfitPct: input.takeProfitPct ?? existing?.takeProfitPct ?? 20,
           maxDrawdownPct: input.maxDrawdownPct ?? existing?.maxDrawdownPct ?? 15,
           maxOpenPositions: input.maxOpenPositions ?? existing?.maxOpenPositions ?? 10,
         });

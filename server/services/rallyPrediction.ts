@@ -135,7 +135,7 @@ ${enrichment.materialEvents}
 ` : ""}${enrichment?.socialContext ? `
 ${enrichment.socialContext}
 
-Social sentiment captures retail investor momentum. High Reddit mention count + bullish sentiment = potential short-term rally. BUT beware: extreme hype often precedes pullbacks.
+Social sentiment is a CONTRARIAN indicator. High Reddit mention count = retail herd piling in = institutional money likely exiting into retail buyers. Treat high-mention stocks with extreme caution for LONG positions — instead, high Reddit hype is a PUT/short candidate. Only low-mention stocks with quietly rising bullish sentiment are genuine early signals. GME, AMC, BBBY all peaked at maximum Reddit mentions.
 ` : ""}`,
         },
         {
