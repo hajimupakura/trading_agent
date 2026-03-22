@@ -1,4 +1,5 @@
 import axios from "axios";
+import https from "https";
 
 /**
  * SEC EDGAR Service
@@ -21,13 +22,23 @@ const secClient = axios.create({
   timeout: 15_000,
 });
 
-const xmlClient = axios.create({
-  headers: {
-    "User-Agent": USER_AGENT,
-    Accept: "text/html,application/xhtml+xml,application/xml,*/*",
-  },
-  timeout: 15_000,
-});
+/** Fetch a URL as raw text using Node's native https — bypasses axios transforms */
+function fetchText(url: string): Promise<string | null> {
+  return new Promise(resolve => {
+    const u = new URL(url);
+    const req = https.request(
+      { hostname: u.hostname, path: u.pathname + u.search, headers: { "User-Agent": USER_AGENT, Accept: "application/xml,text/xml,*/*" } },
+      res => {
+        const chunks: Buffer[] = [];
+        res.on("data", (d: Buffer) => chunks.push(d));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      }
+    );
+    req.setTimeout(15_000, () => { req.destroy(); resolve(null); });
+    req.on("error", () => resolve(null));
+    req.end();
+  });
+}
 
 // Rate limiter: max 8 req/sec (conservative)
 let lastRequestTime = 0;
@@ -40,8 +51,10 @@ async function rateLimitedGet<T>(url: string, useXmlClient = false): Promise<T |
   lastRequestTime = Date.now();
 
   try {
-    const client = useXmlClient ? xmlClient : secClient;
-    const res = await client.get<T>(url);
+    if (useXmlClient) {
+      return await fetchText(url) as unknown as T;
+    }
+    const res = await secClient.get<T>(url);
     return res.data;
   } catch (error: any) {
     console.error(`[SEC EDGAR] Error fetching ${url}:`, error.message);
@@ -289,7 +302,7 @@ export async function getInsiderTransactions(
 
       // Strip XSLT viewer prefix — submissions JSON often returns "xslF345X05/filename.xml"
       // which returns HTML. The raw XML is at the same path without the prefix.
-      const rawDoc = primaryDoc.replace(/^xslF345X05\//, "");
+      const rawDoc = primaryDoc.replace(/^xsl[A-Za-z0-9]+\//, "");
       const xmlUrl = `${EDGAR_ARCHIVES}/${cikNum}/${accNum}/${rawDoc}`;
       const xmlText = await rateLimitedGet<string>(xmlUrl, true);
       if (!xmlText || typeof xmlText !== "string") continue;
