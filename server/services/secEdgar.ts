@@ -118,10 +118,18 @@ export async function getCIK(ticker: string): Promise<string | null> {
 
 // ── Form 4 XML Parser ─────────────────────────────────────────────────────────
 
+/** Extract content of a tag — handles both <tag>text</tag> and <tag><value>text</value></tag> */
 function extractXmlValue(xml: string, tag: string): string | null {
-  const re = new RegExp(`<${tag}[^>]*>\\s*([^<]*)\\s*</${tag}>`, "i");
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
   const m = xml.match(re);
-  return m?.[1]?.trim() || null;
+  if (!m) return null;
+  const inner = m[1].trim();
+  // Strip nested <value>...</value>
+  const valueMatch = inner.match(/<value[^>]*>\s*([\s\S]*?)\s*<\/value>/i);
+  if (valueMatch) return valueMatch[1].trim();
+  // Return direct text if no child elements
+  if (!inner.includes("<")) return inner;
+  return null;
 }
 
 function extractXmlBlock(xml: string, tag: string): string | null {
@@ -140,12 +148,23 @@ function extractAllXmlBlocks(xml: string, tag: string): string[] {
   return results;
 }
 
+/**
+ * Form 4 transaction codes:
+ * P = Open market purchase (🟢 strong bullish)
+ * S = Open market sale (🔴 bearish)
+ * F = Tax withholding (shares sold to cover taxes — not discretionary selling)
+ * M = Exercise/conversion of derivative (option exercise)
+ * A = Award/grant (RSU vesting, stock grant)
+ * D = Disposition
+ * G = Gift
+ */
 function parseTransactionCode(code: string | null): "purchase" | "sale" | "other" {
   if (!code) return "other";
   const c = code.trim().toUpperCase();
   if (c === "P") return "purchase";
-  if (c === "S" || c === "D") return "sale";
-  if (c === "A") return "other"; // award/grant
+  if (c === "S") return "sale";
+  // F = tax withholding — show as sale but it's routine, not discretionary
+  if (c === "F") return "sale";
   return "other";
 }
 
@@ -154,27 +173,41 @@ async function parseForm4Xml(
   ticker: string,
   filingDate: string,
 ): Promise<InsiderTransaction[]> {
+  // Verify this is actually XML, not HTML (the xslF345X05/ path returns HTML)
+  if (xmlText.trim().startsWith("<!DOCTYPE html") || xmlText.trim().startsWith("<html")) {
+    return [];
+  }
+
   const transactions: InsiderTransaction[] = [];
 
-  // Owner info
+  // Owner info — rptOwnerName is nested inside reportingOwnerId
   const ownerBlock = extractXmlBlock(xmlText, "reportingOwner");
-  const ownerName = extractXmlValue(ownerBlock || xmlText, "rptOwnerName") || "Unknown";
-  const ownerTitle =
-    extractXmlValue(ownerBlock || xmlText, "officerTitle") ||
-    extractXmlValue(ownerBlock || xmlText, "relationship") ||
-    "";
+  const ownerIdBlock = extractXmlBlock(ownerBlock || "", "reportingOwnerId");
+  const ownerName = extractXmlValue(ownerIdBlock || ownerBlock || xmlText, "rptOwnerName") || "Unknown";
 
-  // Non-derivative transactions (actual stock buys/sells)
+  const relBlock = extractXmlBlock(ownerBlock || "", "reportingOwnerRelationship");
+  const ownerTitle =
+    extractXmlValue(relBlock || ownerBlock || "", "officerTitle") || "";
+
+  // Non-derivative transactions (actual stock purchases/sales)
   const ndTable = extractXmlBlock(xmlText, "nonDerivativeTable");
   if (ndTable) {
     const txBlocks = extractAllXmlBlocks(ndTable, "nonDerivativeTransaction");
     for (const txBlock of txBlocks) {
       const txDate = extractXmlValue(txBlock, "transactionDate") || filingDate;
-      const txCode = extractXmlValue(txBlock, "transactionCode");
-      const shares = parseFloat(extractXmlValue(txBlock, "transactionShares") || "0") || 0;
-      const priceRaw = extractXmlValue(txBlock, "transactionPricePerShare");
+
+      const codingBlock = extractXmlBlock(txBlock, "transactionCoding");
+      const txCode = extractXmlValue(codingBlock || txBlock, "transactionCode");
+
+      const amountsBlock = extractXmlBlock(txBlock, "transactionAmounts");
+      const sharesRaw = extractXmlValue(amountsBlock || txBlock, "transactionShares");
+      const shares = sharesRaw ? parseFloat(sharesRaw) || 0 : 0;
+
+      const priceRaw = extractXmlValue(amountsBlock || txBlock, "transactionPricePerShare");
       const price = priceRaw ? parseFloat(priceRaw) || null : null;
-      const sharesAfterRaw = extractXmlValue(txBlock, "sharesOwnedFollowingTransaction");
+
+      const postBlock = extractXmlBlock(txBlock, "postTransactionAmounts");
+      const sharesAfterRaw = extractXmlValue(postBlock || txBlock, "sharesOwnedFollowingTransaction");
       const sharesAfter = sharesAfterRaw ? parseFloat(sharesAfterRaw) || null : null;
 
       transactions.push({
@@ -192,7 +225,7 @@ async function parseForm4Xml(
     }
   }
 
-  // If no non-derivative transactions, create one entry from metadata
+  // If no non-derivative transactions found, still return one metadata entry
   if (transactions.length === 0) {
     transactions.push({
       ownerName,
@@ -254,7 +287,10 @@ export async function getInsiderTransactions(
 
       if (!accNum || !primaryDoc) continue;
 
-      const xmlUrl = `${EDGAR_ARCHIVES}/${cikNum}/${accNum}/${primaryDoc}`;
+      // Strip XSLT viewer prefix — submissions JSON often returns "xslF345X05/filename.xml"
+      // which returns HTML. The raw XML is at the same path without the prefix.
+      const rawDoc = primaryDoc.replace(/^xslF345X05\//, "");
+      const xmlUrl = `${EDGAR_ARCHIVES}/${cikNum}/${accNum}/${rawDoc}`;
       const xmlText = await rateLimitedGet<string>(xmlUrl, true);
       if (!xmlText || typeof xmlText !== "string") continue;
 
