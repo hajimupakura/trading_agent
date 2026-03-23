@@ -374,11 +374,150 @@ export const appRouter = router({
         return await getInsiderTransactions(input.ticker, input.limit ?? 20);
       }),
 
+    insiderAlerts: publicProcedure
+      .input(z.object({ tickers: z.array(z.string()) }))
+      .query(async ({ input }) => {
+        const { getInsiderTransactions } = await import("./services/secEdgar");
+        const alerts: Array<{
+          ticker: string;
+          type: "cluster_buy" | "cluster_sell";
+          uniqueInsiders: number;
+          totalValue: number;
+          names: string[];
+        }> = [];
+        for (const ticker of input.tickers.slice(0, 15)) {
+          const txs = await getInsiderTransactions(ticker, 20);
+          const purchases = txs.filter(t => t.transactionType === "purchase");
+          const sales = txs.filter(t => t.transactionType === "sale");
+          const uniqueBuyers = [...new Set(purchases.map(t => t.ownerName))];
+          const uniqueSellers = [...new Set(sales.map(t => t.ownerName))];
+          if (uniqueBuyers.length >= 2) {
+            alerts.push({
+              ticker,
+              type: "cluster_buy",
+              uniqueInsiders: uniqueBuyers.length,
+              totalValue: purchases.reduce((s, t) => s + (t.totalValue || 0), 0),
+              names: uniqueBuyers.slice(0, 3),
+            });
+          } else if (uniqueSellers.length >= 3) {
+            alerts.push({
+              ticker,
+              type: "cluster_sell",
+              uniqueInsiders: uniqueSellers.length,
+              totalValue: sales.reduce((s, t) => s + (t.totalValue || 0), 0),
+              names: uniqueSellers.slice(0, 3),
+            });
+          }
+        }
+        return alerts;
+      }),
+
     recentFilings: publicProcedure
       .input(z.object({ ticker: z.string(), forms: z.string().optional() }))
       .query(async ({ input }) => {
         const { getRecentFilings } = await import("./services/secEdgar");
         return await getRecentFilings(input.ticker, input.forms ?? "10-K,10-Q,8-K");
+      }),
+
+    dashboardAlerts: publicProcedure
+      .input(z.object({ tickers: z.array(z.string()) }))
+      .query(async ({ input }) => {
+        const alerts: Array<{
+          category: "insider" | "congress" | "macro";
+          type: string;
+          ticker: string | null;
+          headline: string;
+          detail: string;
+          value: number | null;
+          sentiment: "bullish" | "bearish" | "neutral";
+        }> = [];
+
+        // Run insider scan, congress, and fear/greed in parallel
+        const [insiderResults, congressResults, fearGreedResult, geoResults, volumeResults] = await Promise.allSettled([
+          (async () => {
+            const { getInsiderTransactions } = await import("./services/secEdgar");
+            const results: typeof alerts = [];
+            for (const ticker of input.tickers.slice(0, 15)) {
+              const txs = await getInsiderTransactions(ticker, 20);
+              const purchases = txs.filter(t => t.transactionType === "purchase");
+              const sales = txs.filter(t => t.transactionType === "sale");
+              const uniqueBuyers = [...new Set(purchases.map(t => t.ownerName))];
+              const uniqueSellers = [...new Set(sales.map(t => t.ownerName))];
+              const buyVal = purchases.reduce((s, t) => s + (t.totalValue || 0), 0);
+              const sellVal = sales.reduce((s, t) => s + (t.totalValue || 0), 0);
+              if (uniqueBuyers.length >= 2) {
+                results.push({
+                  category: "insider", type: "cluster_buy", ticker, sentiment: "bullish",
+                  headline: `${uniqueBuyers.length} insiders buying ${ticker}`,
+                  detail: uniqueBuyers.slice(0, 3).join(", "),
+                  value: buyVal,
+                });
+              } else if (uniqueSellers.length >= 3) {
+                results.push({
+                  category: "insider", type: "cluster_sell", ticker, sentiment: "bearish",
+                  headline: `${uniqueSellers.length} insiders selling ${ticker}`,
+                  detail: uniqueSellers.slice(0, 3).join(", "),
+                  value: sellVal,
+                });
+              }
+            }
+            return results;
+          })(),
+          (async () => {
+            const { getClusterBuys } = await import("./services/congressTracker");
+            const clusters = await getClusterBuys(30, 3);
+            return clusters.map(c => ({
+              category: "congress" as const, type: "congress_cluster_buy", ticker: c.ticker, sentiment: "bullish" as const,
+              headline: `${c.buyers} Congress members buying ${c.ticker}`,
+              detail: c.representatives.slice(0, 3).join(", "),
+              value: null,
+            }));
+          })(),
+          (async () => {
+            const { getFearGreedIndex } = await import("./services/fearGreedIndex");
+            const fg = await getFearGreedIndex();
+            if (!fg) return [];
+            const results: typeof alerts = [];
+            if (fg.value <= 25) {
+              results.push({
+                category: "macro", type: "extreme_fear", ticker: null, sentiment: "bullish",
+                headline: `Extreme Fear (${fg.value}) — contrarian buy zone`,
+                detail: `Previous close: ${fg.previousClose}, 1w ago: ${Math.round(fg.oneWeekAgo)}`,
+                value: fg.value,
+              });
+            } else if (fg.value >= 76) {
+              results.push({
+                category: "macro", type: "extreme_greed", ticker: null, sentiment: "bearish",
+                headline: `Extreme Greed (${fg.value}) — market top risk`,
+                detail: `Previous close: ${fg.previousClose}, 1w ago: ${Math.round(fg.oneWeekAgo)}`,
+                value: fg.value,
+              });
+            }
+            return results;
+          })(),
+          (async () => {
+            const { scanGeopoliticalEvents } = await import("./services/geopoliticalEngine");
+            const events = await scanGeopoliticalEvents();
+            return events.slice(0, 5).map(e => ({
+              category: "geopolitical" as const, type: e.category.toLowerCase(), ticker: null, sentiment: (e.sentiment === "risk_on" ? "bullish" : e.sentiment === "risk_off" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral",
+              headline: `${e.category.replace(/_/g, " ")} — ${e.headline.slice(0, 80)}`,
+              detail: e.tradeTemplate ? `Template: ${e.tradeTemplate.longETFs.join(",") || "—"} long / ${e.tradeTemplate.shortETFs.join(",") || "—"} short` : e.summary.slice(0, 80),
+              value: e.confidence,
+            }));
+          })(),
+          (async () => {
+            const { getVolumeAlertsForDashboard } = await import("./services/volumeAnomalyDetector");
+            return getVolumeAlertsForDashboard();
+          })(),
+        ]);
+
+        if (insiderResults.status === "fulfilled") alerts.push(...insiderResults.value);
+        if (congressResults.status === "fulfilled") alerts.push(...congressResults.value);
+        if (fearGreedResult.status === "fulfilled") alerts.push(...fearGreedResult.value);
+        if (geoResults.status === "fulfilled") alerts.push(...geoResults.value);
+        if (volumeResults.status === "fulfilled") alerts.push(...volumeResults.value);
+
+        return alerts;
       }),
   }),
 

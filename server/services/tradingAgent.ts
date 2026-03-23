@@ -473,6 +473,49 @@ Output a concise paragraph (3-5 sentences) of your key learnings.`;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// ── Event-Triggered Rapid Execution ──────────────────────────────────────────
+
+/**
+ * Check for high-confidence geopolitical events and trigger an immediate
+ * mini-cycle if one is detected. Called from the scheduler or externally.
+ *
+ * Unlike the full cycle, this skips RSS sync and prediction generation —
+ * it goes straight to agent decisions using the detected event as primary signal.
+ */
+export async function checkGeopoliticalTrigger(
+  portfolioId: number,
+  userId: number,
+): Promise<{ triggered: boolean; event?: string }> {
+  if (state.isPaused) return { triggered: false };
+  if (!isMarketHours()) return { triggered: false };
+
+  try {
+    const { getHighConfidenceEvent } = await import("./geopoliticalEngine");
+    const event = await getHighConfidenceEvent(80);
+    if (!event || !event.tradeTemplate) return { triggered: false };
+
+    console.log(
+      `[Agent] ⚡ GEOPOLITICAL TRIGGER: ${event.category} (conf=${event.confidence}%) — ${event.headline}`,
+    );
+    console.log(
+      `[Agent] ⚡ Template: ${event.tradeTemplate.name} — Long: ${event.tradeTemplate.longETFs.join(",")} Short: ${event.tradeTemplate.shortETFs.join(",")}`,
+    );
+
+    // Run a full agent cycle with force=true to bypass market hours check
+    // The geopolitical agent will pick up this event and surface it to the master agent
+    const result = await runAgentCycle(portfolioId, userId, true);
+
+    console.log(
+      `[Agent] ⚡ Rapid cycle complete — ${result.tradesExecuted.length} trades executed`,
+    );
+
+    return { triggered: true, event: `${event.category}: ${event.headline}` };
+  } catch (error: any) {
+    console.error("[Agent] Geopolitical trigger check failed:", error.message);
+    return { triggered: false };
+  }
+}
+
 function emptySummary(cycleNumber: number): CycleSummary {
   return {
     cycleNumber,

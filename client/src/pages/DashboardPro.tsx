@@ -14,7 +14,7 @@ import {
   ChevronUp, ChevronDown, Eye,
   Briefcase, Radio, AlertTriangle, BookOpen,
   Settings, LogOut, RotateCcw, Plus, X,
-  TrendingUp, TrendingDown,
+  TrendingUp, TrendingDown, Landmark, Globe, BarChart2, Siren,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -353,8 +353,13 @@ export default function DashboardPro() {
     { enabled: !!firstPortfolioId }
   );
   const { data: insiderData = [] } = trpc.sec.insiderTransactions.useQuery(
-    { ticker: insiderTicker, limit: 12 },
+    { ticker: insiderTicker, limit: 30 },
     { enabled: isAuthenticated }
+  );
+  const allAlertTickers = [...new Set(["NVDA", "AAPL", "TSLA", "MSFT", "META", "AMZN", ...watchlistTickers])];
+  const { data: dashboardAlerts = [] } = trpc.sec.dashboardAlerts.useQuery(
+    { tickers: allAlertTickers },
+    { enabled: isAuthenticated, refetchInterval: 300_000, staleTime: 300_000 }
   );
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -848,6 +853,103 @@ export default function DashboardPro() {
           </div>
         </div>
 
+        {/* ═══ UNIFIED DASHBOARD ALERTS ═══════════════════════════════════════ */}
+        {(() => {
+          // Compute technical alerts from existing technicals data (no extra API call)
+          const techAlerts: Array<{ category: string; type: string; ticker: string; headline: string; detail: string; sentiment: string }> = [];
+          if (technicals) {
+            for (const [symbol, ind] of Object.entries(technicals as Record<string, any>)) {
+              if (!ind) continue;
+              // RSI extremes
+              if (ind.rsi != null && ind.rsi <= 30)
+                techAlerts.push({ category: "technical", type: "rsi_oversold", ticker: symbol, headline: `${symbol} oversold — RSI ${ind.rsi.toFixed(1)}`, detail: "Potential bounce candidate", sentiment: "bullish" });
+              else if (ind.rsi != null && ind.rsi >= 70)
+                techAlerts.push({ category: "technical", type: "rsi_overbought", ticker: symbol, headline: `${symbol} overbought — RSI ${ind.rsi.toFixed(1)}`, detail: "Caution: extended move", sentiment: "bearish" });
+              // MACD crossover
+              if (ind.macd != null && ind.macdSignal != null && ind.macdHistogram != null) {
+                if (ind.macdHistogram > 0 && ind.macdHistogram < 0.5 && ind.macd > ind.macdSignal)
+                  techAlerts.push({ category: "technical", type: "macd_bullish", ticker: symbol, headline: `${symbol} bullish MACD crossover`, detail: `MACD ${ind.macd.toFixed(2)} > Signal ${ind.macdSignal.toFixed(2)}`, sentiment: "bullish" });
+                else if (ind.macdHistogram < 0 && ind.macdHistogram > -0.5 && ind.macd < ind.macdSignal)
+                  techAlerts.push({ category: "technical", type: "macd_bearish", ticker: symbol, headline: `${symbol} bearish MACD crossover`, detail: `MACD ${ind.macd.toFixed(2)} < Signal ${ind.macdSignal.toFixed(2)}`, sentiment: "bearish" });
+              }
+              // Bollinger squeeze
+              if (ind.bollingerUpper != null && ind.bollingerLower != null && ind.price) {
+                const bandwidth = (ind.bollingerUpper - ind.bollingerLower) / ind.price;
+                if (bandwidth < 0.04)
+                  techAlerts.push({ category: "technical", type: "bollinger_squeeze", ticker: symbol, headline: `${symbol} Bollinger squeeze — ${(bandwidth * 100).toFixed(1)}%`, detail: "Volatility breakout imminent", sentiment: "neutral" });
+              }
+              // Golden/Death cross
+              if (ind.sma50 != null && ind.sma200 != null && ind.sma200 > 0) {
+                const ratio = ind.sma50 / ind.sma200;
+                if (ratio >= 0.98 && ratio <= 1.02) {
+                  if (ind.sma50 > ind.sma200)
+                    techAlerts.push({ category: "technical", type: "golden_cross", ticker: symbol, headline: `${symbol} Golden Cross forming`, detail: `SMA50 ${ind.sma50.toFixed(2)} crossing above SMA200 ${ind.sma200.toFixed(2)}`, sentiment: "bullish" });
+                  else
+                    techAlerts.push({ category: "technical", type: "death_cross", ticker: symbol, headline: `${symbol} Death Cross forming`, detail: `SMA50 ${ind.sma50.toFixed(2)} crossing below SMA200 ${ind.sma200.toFixed(2)}`, sentiment: "bearish" });
+                }
+              }
+            }
+          }
+
+          // Combine backend alerts + frontend technical alerts
+          const allAlerts = [
+            ...dashboardAlerts.map((a: any) => ({ ...a })),
+            ...techAlerts,
+          ];
+
+          if (allAlerts.length === 0) return null;
+
+          const iconFor = (cat: string) => {
+            if (cat === "insider") return <Eye className="h-4 w-4 shrink-0" />;
+            if (cat === "congress") return <Landmark className="h-4 w-4 shrink-0" />;
+            if (cat === "macro") return <Globe className="h-4 w-4 shrink-0" />;
+            if (cat === "geopolitical") return <Siren className="h-4 w-4 shrink-0" />;
+            if (cat === "volume") return <BarChart2 className="h-4 w-4 shrink-0" />;
+            return <Activity className="h-4 w-4 shrink-0" />;
+          };
+          const colorFor = (s: string) => s === "bullish" ? "text-profit" : s === "bearish" ? "text-loss" : "text-yellow-500";
+          const borderFor = (s: string) => s === "bullish" ? "border-profit/30 bg-profit/5 hover:bg-profit/10" : s === "bearish" ? "border-loss/30 bg-loss/5 hover:bg-loss/10" : "border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10";
+          const tagFor = (cat: string) => {
+            if (cat === "insider") return "INSIDER";
+            if (cat === "congress") return "CONGRESS";
+            if (cat === "macro") return "MACRO";
+            if (cat === "geopolitical") return "GEO EVENT";
+            if (cat === "volume") return "VOLUME";
+            return "TECHNICAL";
+          };
+
+          return (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-muted-foreground font-medium">
+                <AlertTriangle className="h-3 w-3" /> Active Alerts ({allAlerts.length})
+              </div>
+              {allAlerts.map((alert: any, i: number) => (
+                <div
+                  key={`${alert.ticker}-${alert.type}-${i}`}
+                  onClick={() => {
+                    if (alert.category === "insider" && alert.ticker) {
+                      setInsiderTicker(alert.ticker);
+                      const tabEl = document.querySelector('[data-value="insider"]') as HTMLElement;
+                      tabEl?.click();
+                    } else if (alert.category === "technical" && alert.ticker) {
+                      const tabEl = document.querySelector('[data-value="signals"]') as HTMLElement;
+                      tabEl?.click();
+                    }
+                  }}
+                  className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${borderFor(alert.sentiment)}`}
+                >
+                  <span className={colorFor(alert.sentiment)}>{iconFor(alert.category)}</span>
+                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                    alert.sentiment === "bullish" ? "bg-profit/10 text-profit" : alert.sentiment === "bearish" ? "bg-loss/10 text-loss" : "bg-yellow-500/10 text-yellow-500"
+                  }`}>{tagFor(alert.category)}</span>
+                  <span className={`text-xs font-semibold ${colorFor(alert.sentiment)}`}>{alert.headline}</span>
+                  <span className="text-[10px] text-muted-foreground ml-auto shrink-0 hidden sm:inline">{alert.detail}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
         {/* ═══ DETAILED TABS ══════════════════════════════════════════════════ */}
         <Tabs defaultValue="portfolio" className="space-y-4">
           <TabsList className="bg-card border border-border border-t-primary/30 p-1 flex flex-wrap gap-0.5 h-auto">
@@ -1115,84 +1217,195 @@ export default function DashboardPro() {
               ))}
             </div>
 
-            {/* Cluster buy alert */}
+            {/* Insider summary metrics + alerts */}
             {(() => {
-              const buys = insiderData.filter((tx: any) => tx.transactionType === "purchase");
-              if (buys.length >= 3) return (
-                <div className="flex items-start gap-2.5 rounded-xl border border-profit/30 bg-profit/5 px-4 py-3">
-                  <TrendingUp className="h-4 w-4 text-profit shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-semibold text-profit">Cluster Buy Signal — {buys.length} insiders purchased</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {buys.length}+ insiders buying {insiderTicker} in the last 90 days is one of the strongest bullish signals in the market. Institutional money tracks this closely.
-                    </p>
-                  </div>
-                </div>
-              );
-              if (insiderData.filter((tx: any) => tx.transactionType === "sale").length >= 3) return (
-                <div className="flex items-start gap-2.5 rounded-xl border border-loss/30 bg-loss/5 px-4 py-3">
-                  <TrendingDown className="h-4 w-4 text-loss shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-semibold text-loss">Cluster Sell Warning — multiple insiders selling</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Insiders selling before public news is a bearish signal. Monitor closely.</p>
-                  </div>
-                </div>
-              );
-              return null;
-            })()}
+              const purchases = insiderData.filter((tx: any) => tx.transactionType === "purchase");
+              const sales = insiderData.filter((tx: any) => tx.transactionType === "sale");
+              const totalBuy$ = purchases.reduce((s: number, tx: any) => s + (tx.totalValue || 0), 0);
+              const totalSell$ = sales.reduce((s: number, tx: any) => s + (tx.totalValue || 0), 0);
+              const net$ = totalBuy$ - totalSell$;
+              const uniqueBuyers = new Set(purchases.map((tx: any) => tx.ownerName)).size;
+              const uniqueSellers = new Set(sales.map((tx: any) => tx.ownerName)).size;
+              const largestBuy = purchases.length > 0 ? purchases.reduce((a: any, b: any) => (b.totalValue || 0) > (a.totalValue || 0) ? b : a) : null;
+              const largestSell = sales.length > 0 ? sales.reduce((a: any, b: any) => (b.totalValue || 0) > (a.totalValue || 0) ? b : a) : null;
+              const total$ = totalBuy$ + totalSell$;
+              const sellPct = total$ > 0 ? Math.round((totalSell$ / total$) * 100) : 0;
+              const buyPct = total$ > 0 ? 100 - sellPct : 0;
 
-            <Card className="border-border">
-              <CardHeader className="pb-2 pt-4">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  SEC Form 4 — {insiderTicker} Insider Transactions
-                  <span className="text-[10px] font-normal text-muted-foreground">(last 90 days)</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pb-0">
-                {insiderData.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-muted-foreground">
-                    <Eye className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                    No Form 4 filings found for {insiderTicker}
+              const typeLabel = (t: string) => {
+                switch (t) {
+                  case "purchase": return "▲ BUY";
+                  case "sale": return "▼ SELL";
+                  case "tax_withholding": return "▼ TAX";
+                  case "option_exercise": return "⟳ EXERCISE";
+                  case "award": return "★ AWARD";
+                  case "gift": return "↗ GIFT";
+                  default: return t.toUpperCase();
+                }
+              };
+              const typeColor = (t: string) => {
+                switch (t) {
+                  case "purchase": return "text-profit";
+                  case "sale": return "text-loss";
+                  case "tax_withholding": return "text-yellow-500";
+                  default: return "text-muted-foreground";
+                }
+              };
+              const rowBg = (t: string) => {
+                switch (t) {
+                  case "purchase": return "bg-profit/5";
+                  case "sale": return "bg-loss/5";
+                  case "tax_withholding": return "bg-yellow-500/5";
+                  default: return "";
+                }
+              };
+
+              return (<>
+                {/* Summary metrics */}
+                {insiderData.length > 0 && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <Card className="border-border">
+                      <CardContent className="pt-4 pb-3">
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Net Insider Flow</div>
+                        <div className={`text-xl font-mono font-bold ${net$ >= 0 ? "text-profit" : "text-loss"}`}>
+                          {net$ >= 0 ? "+" : "-"}${fmt(Math.abs(net$), 0)}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">{net$ >= 0 ? "Net buying" : "Net selling"} (90d)</div>
+                      </CardContent>
+                    </Card>
+                    <Card className="border-border">
+                      <CardContent className="pt-4 pb-3">
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Unique Insiders</div>
+                        <div className="text-xl font-mono font-bold text-foreground">
+                          <span className="text-profit">{uniqueBuyers}B</span>
+                          <span className="text-muted-foreground mx-1">/</span>
+                          <span className="text-loss">{uniqueSellers}S</span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">Buyers vs sellers</div>
+                      </CardContent>
+                    </Card>
+                    <Card className="border-border">
+                      <CardContent className="pt-4 pb-3">
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Largest Purchase</div>
+                        {largestBuy ? (<>
+                          <div className="text-xl font-mono font-bold text-profit">{fmtUSD(largestBuy.totalValue)}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{largestBuy.ownerName}</div>
+                        </>) : (
+                          <div className="text-xl font-mono font-bold text-muted-foreground/40">—</div>
+                        )}
+                      </CardContent>
+                    </Card>
+                    <Card className="border-border">
+                      <CardContent className="pt-4 pb-3">
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Largest Sale</div>
+                        {largestSell ? (<>
+                          <div className="text-xl font-mono font-bold text-loss">{fmtUSD(largestSell.totalValue)}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{largestSell.ownerName}</div>
+                        </>) : (
+                          <div className="text-xl font-mono font-bold text-muted-foreground/40">—</div>
+                        )}
+                      </CardContent>
+                    </Card>
                   </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-primary/15 bg-primary/5">
-                          {["Insider", "Role", "Type", "Shares", "Price", "Value", "Date"].map(h => (
-                            <th key={h} className="text-left px-3 py-2 font-medium text-primary/70">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {insiderData.map((tx: any, i: number) => {
-                          const isBuy = tx.transactionType === "purchase";
-                          const isSell = tx.transactionType === "sale";
-                          const shares = tx.sharesTraded ?? tx.shares ?? 0;
-                          const date = tx.transactionDate ?? tx.date ?? "";
-                          return (
-                            <tr key={i} className={`border-b border-border/40 last:border-0 hover:bg-secondary/20 ${isBuy ? "bg-profit/5" : isSell ? "bg-loss/5" : ""}`}>
-                              <td className="px-3 py-2.5 font-semibold text-foreground max-w-[160px] truncate">{tx.ownerName ?? "—"}</td>
-                              <td className="px-3 py-2.5 text-muted-foreground text-[10px] max-w-[120px] truncate">{tx.ownerTitle || "—"}</td>
-                              <td className={`px-3 py-2.5 font-mono font-bold ${isBuy ? "text-profit" : isSell ? "text-loss" : "text-muted-foreground"}`}>
-                                {isBuy ? "▲ BUY" : isSell ? "▼ SELL" : (tx.transactionType ?? "other").toUpperCase()}
-                              </td>
-                              <td className="px-3 py-2.5 font-mono">{shares > 0 ? shares.toLocaleString() : "—"}</td>
-                              <td className="px-3 py-2.5 font-mono">{tx.pricePerShare != null ? `$${fmt(tx.pricePerShare)}` : "—"}</td>
-                              <td className="px-3 py-2.5 font-mono font-semibold">{tx.totalValue != null ? fmtUSD(tx.totalValue) : "—"}</td>
-                              <td className="px-3 py-2.5 font-mono text-muted-foreground">{date ? new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    <div className="px-3 py-2 border-t border-border/40 text-[10px] text-muted-foreground">
-                      Source: SEC EDGAR Form 4 filings · Rows highlighted green = purchases, red = sales
+                )}
+
+                {/* Sentiment bar */}
+                {total$ > 0 && (
+                  <div className="rounded-lg border border-border px-4 py-3">
+                    <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground mb-1.5">
+                      <span className="text-profit">Buy ${fmt(totalBuy$, 0)} ({buyPct}%)</span>
+                      <span className="font-semibold text-foreground">Insider Sentiment</span>
+                      <span className="text-loss">Sell ${fmt(totalSell$, 0)} ({sellPct}%)</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-loss/20 overflow-hidden">
+                      <div className="h-full rounded-full bg-profit" style={{ width: `${buyPct}%` }} />
                     </div>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+
+                {/* Cluster alerts — based on UNIQUE insiders, not transaction count */}
+                {uniqueBuyers >= 2 && (
+                  <div className="flex items-start gap-2.5 rounded-xl border border-profit/30 bg-profit/5 px-4 py-3">
+                    <TrendingUp className="h-4 w-4 text-profit shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-profit">Cluster Buy Signal — {uniqueBuyers} insiders purchasing</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {uniqueBuyers} distinct insiders buying {insiderTicker} in the last 90 days. Open-market insider purchases are one of the strongest bullish signals.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {uniqueSellers >= 3 && uniqueBuyers < 2 && (
+                  <div className="flex items-start gap-2.5 rounded-xl border border-loss/30 bg-loss/5 px-4 py-3">
+                    <TrendingDown className="h-4 w-4 text-loss shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-loss">Cluster Sell Warning — {uniqueSellers} insiders selling</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {uniqueSellers} distinct insiders selling {insiderTicker}. Excludes routine tax withholding. Monitor for upcoming news.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Transaction table */}
+                <Card className="border-border">
+                  <CardHeader className="pb-2 pt-4">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      SEC Form 4 — {insiderTicker} Insider Transactions
+                      <span className="text-[10px] font-normal text-muted-foreground">(last 90 days)</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pb-0">
+                    {insiderData.length === 0 ? (
+                      <div className="py-12 text-center text-sm text-muted-foreground">
+                        <Eye className="h-6 w-6 mx-auto mb-2 opacity-30" />
+                        No Form 4 filings found for {insiderTicker}
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-primary/15 bg-primary/5">
+                              {["Insider", "Role", "Type", "Shares", "Price", "Value", "% Held", "Date"].map(h => (
+                                <th key={h} className="text-left px-3 py-2 font-medium text-primary/70">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {insiderData.map((tx: any, i: number) => {
+                              const shares = tx.sharesTraded ?? tx.shares ?? 0;
+                              const date = tx.transactionDate ?? tx.date ?? "";
+                              const pctHeld = tx.sharesOwnedAfter && shares
+                                ? (shares / (tx.sharesOwnedAfter + shares)) * 100
+                                : null;
+                              return (
+                                <tr key={i} className={`border-b border-border/40 last:border-0 hover:bg-secondary/20 ${rowBg(tx.transactionType)}`}>
+                                  <td className="px-3 py-2.5 font-semibold text-foreground max-w-[160px] truncate">{tx.ownerName ?? "—"}</td>
+                                  <td className="px-3 py-2.5 text-muted-foreground text-[10px] max-w-[120px] truncate">{tx.ownerTitle || "—"}</td>
+                                  <td className={`px-3 py-2.5 font-mono font-bold ${typeColor(tx.transactionType)}`}>
+                                    {typeLabel(tx.transactionType)}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono">{shares > 0 ? shares.toLocaleString() : "—"}</td>
+                                  <td className="px-3 py-2.5 font-mono">{tx.pricePerShare != null ? `$${fmt(tx.pricePerShare)}` : "—"}</td>
+                                  <td className="px-3 py-2.5 font-mono font-semibold">{tx.totalValue != null ? fmtUSD(tx.totalValue) : "—"}</td>
+                                  <td className={`px-3 py-2.5 font-mono ${pctHeld != null && pctHeld > 20 ? "text-loss font-bold" : "text-muted-foreground"}`}>
+                                    {pctHeld != null ? `${pctHeld.toFixed(1)}%` : "—"}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono text-muted-foreground">{date ? new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        <div className="px-3 py-2 border-t border-border/40 text-[10px] text-muted-foreground">
+                          Source: SEC EDGAR Form 4 filings · % Held = shares traded as % of total holdings · Green = purchases, Red = sales, Yellow = tax withholding
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </>);
+            })()}
           </TabsContent>
 
           {/* ── Agent Brain Tab ─────────────────────────────────────────────── */}

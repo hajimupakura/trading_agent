@@ -68,7 +68,7 @@ export interface InsiderTransaction {
   ownerName: string;
   ownerTitle: string;
   transactionDate: string;
-  transactionType: "purchase" | "sale" | "other";
+  transactionType: "purchase" | "sale" | "tax_withholding" | "option_exercise" | "award" | "gift" | "other";
   sharesTraded: number;
   pricePerShare: number | null;
   totalValue: number | null;
@@ -171,13 +171,15 @@ function extractAllXmlBlocks(xml: string, tag: string): string[] {
  * D = Disposition
  * G = Gift
  */
-function parseTransactionCode(code: string | null): "purchase" | "sale" | "other" {
+function parseTransactionCode(code: string | null): "purchase" | "sale" | "tax_withholding" | "option_exercise" | "award" | "gift" | "other" {
   if (!code) return "other";
   const c = code.trim().toUpperCase();
   if (c === "P") return "purchase";
   if (c === "S") return "sale";
-  // F = tax withholding — show as sale but it's routine, not discretionary
-  if (c === "F") return "sale";
+  if (c === "F") return "tax_withholding";
+  if (c === "M") return "option_exercise";
+  if (c === "A") return "award";
+  if (c === "G") return "gift";
   return "other";
 }
 
@@ -261,7 +263,7 @@ async function parseForm4Xml(
 
 export async function getInsiderTransactions(
   ticker: string,
-  limit: number = 20,
+  limit: number = 30,
 ): Promise<InsiderTransaction[]> {
   try {
     const cik = await getCIK(ticker);

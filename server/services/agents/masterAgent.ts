@@ -20,6 +20,7 @@ YOUR INPUTS:
 5. Social & Retail Analyst — Reddit sentiment, Fear & Greed Index
 6. Congressional Trading Analyst — US Congress member trades
 7. Macro & Economic Analyst — GDP, CPI, Fed policy
+8. Geopolitical & Event-Driven Analyst — war/sanctions/trade war/Fed surprises, ETF trade templates, volume anomalies
 
 DECISION FRAMEWORK:
 - ALWAYS execute trades when high-confidence predictions exist AND 2+ analysts support the direction
@@ -58,8 +59,16 @@ function buildUserMessage(
   portfolio: any,
   agentMemory: string | null,
   predictions: any[] = [],
+  dashboardAlerts: string | null = null,
 ): string {
   const sections: string[] = [];
+
+  // Dashboard alerts — cross-source signals already detected
+  if (dashboardAlerts) {
+    sections.push(`=== ACTIVE DASHBOARD ALERTS ===
+These are real-time cross-source signals detected across the watchlist. Prioritize these in your analysis.
+${dashboardAlerts}`);
+  }
 
   // High-confidence predictions are the PRIMARY trade signal
   if (predictions.length > 0) {
@@ -214,9 +223,10 @@ export async function runMasterAgent(
   portfolio: any,
   agentMemory: string | null,
   predictions: any[] = [],
+  dashboardAlerts: string | null = null,
 ): Promise<MasterDecision> {
   const startTime = Date.now();
-  const userMessage = buildUserMessage(summaries, portfolio, agentMemory, predictions);
+  const userMessage = buildUserMessage(summaries, portfolio, agentMemory, predictions, dashboardAlerts);
 
   // Run both models in parallel
   const [primaryResponse, secondaryDecision] = await Promise.all([

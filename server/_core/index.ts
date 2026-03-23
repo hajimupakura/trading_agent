@@ -305,6 +305,25 @@ function startScheduledJobs() {
     }
   }, SL_TP_CHECK_INTERVAL);
 
+  // Geopolitical event trigger — every 10 minutes during market hours
+  const GEO_TRIGGER_INTERVAL = 10 * 60 * 1000; // 10 minutes
+  console.log("[Scheduler] Geopolitical trigger: every 10 min (market hours)");
+
+  setInterval(async () => {
+    try {
+      const { isMarketHours } = await import("../services/rssNewsSync");
+      if (!isMarketHours()) return;
+
+      const { checkGeopoliticalTrigger } = await import("../services/tradingAgent");
+      const result = await checkGeopoliticalTrigger(AGENT_PORTFOLIO_ID, AGENT_USER_ID);
+      if (result.triggered) {
+        console.log(`[Scheduler] ⚡ Geopolitical rapid cycle triggered: ${result.event}`);
+      }
+    } catch (error) {
+      console.error("[Scheduler] Geopolitical trigger error:", error);
+    }
+  }, GEO_TRIGGER_INTERVAL);
+
   // Daily reflection — at ~4:05 PM EST on weekdays
   let reflectionRanToday = false;
   setInterval(async () => {

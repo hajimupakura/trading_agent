@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { EventEmitter } from "events";
+import { ingestTrade } from "./volumeAnomalyDetector";
 
 /**
  * Real-time price feed using Finnhub WebSocket API.
@@ -70,6 +71,8 @@ class PriceWebSocketService extends EventEmitter {
             };
             this.priceCache.set(update.symbol, update);
             this.emit("price", update);
+            // Feed volume data to anomaly detector
+            ingestTrade(update.symbol, update.volume, update.timestamp);
           }
         }
       } catch {
