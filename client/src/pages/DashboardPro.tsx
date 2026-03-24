@@ -291,6 +291,7 @@ function UnauthScreen() {
 export default function DashboardPro() {
   const { user, loading: authLoading, isAuthenticated, logout } = useAuth();
   const [insiderTicker, setInsiderTicker] = useState("NVDA");
+  const [expandedAlert, setExpandedAlert] = useState<number | null>(null);
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
   const [newTicker, setNewTicker] = useState("");
   const [predFilter, setPredFilter] = useState<"all" | "call" | "put">("all");
@@ -856,36 +857,37 @@ export default function DashboardPro() {
         {/* ═══ UNIFIED DASHBOARD ALERTS ═══════════════════════════════════════ */}
         {(() => {
           // Compute technical alerts from existing technicals data (no extra API call)
-          const techAlerts: Array<{ category: string; type: string; ticker: string; headline: string; detail: string; sentiment: string }> = [];
+          const techAlerts: Array<{ category: string; type: string; ticker: string; headline: string; detail: string; context: string; sentiment: string; timestamp: string }> = [];
           if (technicals) {
             for (const [symbol, ind] of Object.entries(technicals as Record<string, any>)) {
               if (!ind) continue;
               // RSI extremes
+              const now = new Date().toISOString();
               if (ind.rsi != null && ind.rsi <= 30)
-                techAlerts.push({ category: "technical", type: "rsi_oversold", ticker: symbol, headline: `${symbol} oversold — RSI ${ind.rsi.toFixed(1)}`, detail: "Potential bounce candidate", sentiment: "bullish" });
+                techAlerts.push({ category: "technical", type: "rsi_oversold", ticker: symbol, headline: `${symbol} oversold — RSI ${ind.rsi.toFixed(1)}`, detail: "Potential bounce candidate", context: `${symbol} RSI is at ${ind.rsi.toFixed(1)} — deep in oversold territory (below 30). This indicates the stock has been heavily sold and may be due for a bounce. Oversold RSI combined with positive catalysts (insider buying, news) creates a high-probability long setup.`, sentiment: "bullish", timestamp: now });
               else if (ind.rsi != null && ind.rsi >= 70)
-                techAlerts.push({ category: "technical", type: "rsi_overbought", ticker: symbol, headline: `${symbol} overbought — RSI ${ind.rsi.toFixed(1)}`, detail: "Caution: extended move", sentiment: "bearish" });
+                techAlerts.push({ category: "technical", type: "rsi_overbought", ticker: symbol, headline: `${symbol} overbought — RSI ${ind.rsi.toFixed(1)}`, detail: "Caution: extended move", context: `${symbol} RSI is at ${ind.rsi.toFixed(1)} — overbought territory (above 70). The stock has had an extended run and is stretched. Consider tightening stops or taking partial profits. A pullback to the 20-day SMA is common after RSI readings this high.`, sentiment: "bearish", timestamp: now });
               // MACD crossover
               if (ind.macd != null && ind.macdSignal != null && ind.macdHistogram != null) {
                 if (ind.macdHistogram > 0 && ind.macdHistogram < 0.5 && ind.macd > ind.macdSignal)
-                  techAlerts.push({ category: "technical", type: "macd_bullish", ticker: symbol, headline: `${symbol} bullish MACD crossover`, detail: `MACD ${ind.macd.toFixed(2)} > Signal ${ind.macdSignal.toFixed(2)}`, sentiment: "bullish" });
+                  techAlerts.push({ category: "technical", type: "macd_bullish", ticker: symbol, headline: `${symbol} bullish MACD crossover`, detail: `MACD ${ind.macd.toFixed(2)} > Signal ${ind.macdSignal.toFixed(2)}`, context: `${symbol} MACD (${ind.macd.toFixed(2)}) just crossed above its signal line (${ind.macdSignal.toFixed(2)}). This is a bullish momentum shift — the histogram flipped positive at ${ind.macdHistogram.toFixed(3)}. Fresh MACD crossovers confirmed by rising volume are high-probability entry signals.`, sentiment: "bullish", timestamp: now });
                 else if (ind.macdHistogram < 0 && ind.macdHistogram > -0.5 && ind.macd < ind.macdSignal)
-                  techAlerts.push({ category: "technical", type: "macd_bearish", ticker: symbol, headline: `${symbol} bearish MACD crossover`, detail: `MACD ${ind.macd.toFixed(2)} < Signal ${ind.macdSignal.toFixed(2)}`, sentiment: "bearish" });
+                  techAlerts.push({ category: "technical", type: "macd_bearish", ticker: symbol, headline: `${symbol} bearish MACD crossover`, detail: `MACD ${ind.macd.toFixed(2)} < Signal ${ind.macdSignal.toFixed(2)}`, context: `${symbol} MACD (${ind.macd.toFixed(2)}) just crossed below its signal line (${ind.macdSignal.toFixed(2)}). This is a bearish momentum shift — the histogram turned negative at ${ind.macdHistogram.toFixed(3)}. Consider tightening stops or reducing position size.`, sentiment: "bearish", timestamp: now });
               }
               // Bollinger squeeze
               if (ind.bollingerUpper != null && ind.bollingerLower != null && ind.price) {
                 const bandwidth = (ind.bollingerUpper - ind.bollingerLower) / ind.price;
                 if (bandwidth < 0.04)
-                  techAlerts.push({ category: "technical", type: "bollinger_squeeze", ticker: symbol, headline: `${symbol} Bollinger squeeze — ${(bandwidth * 100).toFixed(1)}%`, detail: "Volatility breakout imminent", sentiment: "neutral" });
+                  techAlerts.push({ category: "technical", type: "bollinger_squeeze", ticker: symbol, headline: `${symbol} Bollinger squeeze — ${(bandwidth * 100).toFixed(1)}%`, detail: "Volatility breakout imminent", context: `${symbol} Bollinger Band width compressed to ${(bandwidth * 100).toFixed(1)}% — well below the 4% threshold. Upper band: ${ind.bollingerUpper.toFixed(2)}, Lower band: ${ind.bollingerLower.toFixed(2)}. Tight squeezes like this typically resolve with a sharp directional move. Watch the first candle that breaks above or below the bands for direction.`, sentiment: "neutral", timestamp: now });
               }
               // Golden/Death cross
               if (ind.sma50 != null && ind.sma200 != null && ind.sma200 > 0) {
                 const ratio = ind.sma50 / ind.sma200;
                 if (ratio >= 0.98 && ratio <= 1.02) {
                   if (ind.sma50 > ind.sma200)
-                    techAlerts.push({ category: "technical", type: "golden_cross", ticker: symbol, headline: `${symbol} Golden Cross forming`, detail: `SMA50 ${ind.sma50.toFixed(2)} crossing above SMA200 ${ind.sma200.toFixed(2)}`, sentiment: "bullish" });
+                    techAlerts.push({ category: "technical", type: "golden_cross", ticker: symbol, headline: `${symbol} Golden Cross forming`, detail: `SMA50 ${ind.sma50.toFixed(2)} crossing above SMA200 ${ind.sma200.toFixed(2)}`, context: `${symbol} 50-day SMA (${ind.sma50.toFixed(2)}) is crossing above its 200-day SMA (${ind.sma200.toFixed(2)}) — a Golden Cross. This is a major long-term bullish signal. Historically, Golden Crosses precede sustained rallies. Institutional algorithms often trigger buy programs on this pattern.`, sentiment: "bullish", timestamp: now });
                   else
-                    techAlerts.push({ category: "technical", type: "death_cross", ticker: symbol, headline: `${symbol} Death Cross forming`, detail: `SMA50 ${ind.sma50.toFixed(2)} crossing below SMA200 ${ind.sma200.toFixed(2)}`, sentiment: "bearish" });
+                    techAlerts.push({ category: "technical", type: "death_cross", ticker: symbol, headline: `${symbol} Death Cross forming`, detail: `SMA50 ${ind.sma50.toFixed(2)} crossing below SMA200 ${ind.sma200.toFixed(2)}`, context: `${symbol} 50-day SMA (${ind.sma50.toFixed(2)}) is crossing below its 200-day SMA (${ind.sma200.toFixed(2)}) — a Death Cross. This is a major long-term bearish signal. Institutional selling often accelerates after this pattern. Consider reducing exposure or hedging with puts/inverse ETFs.`, sentiment: "bearish", timestamp: now });
                 }
               }
             }
@@ -923,29 +925,54 @@ export default function DashboardPro() {
               <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-muted-foreground font-medium">
                 <AlertTriangle className="h-3 w-3" /> Active Alerts ({allAlerts.length})
               </div>
-              {allAlerts.map((alert: any, i: number) => (
-                <div
-                  key={`${alert.ticker}-${alert.type}-${i}`}
-                  onClick={() => {
-                    if (alert.category === "insider" && alert.ticker) {
-                      setInsiderTicker(alert.ticker);
-                      const tabEl = document.querySelector('[data-value="insider"]') as HTMLElement;
-                      tabEl?.click();
-                    } else if (alert.category === "technical" && alert.ticker) {
-                      const tabEl = document.querySelector('[data-value="signals"]') as HTMLElement;
-                      tabEl?.click();
-                    }
-                  }}
-                  className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${borderFor(alert.sentiment)}`}
-                >
-                  <span className={colorFor(alert.sentiment)}>{iconFor(alert.category)}</span>
-                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                    alert.sentiment === "bullish" ? "bg-profit/10 text-profit" : alert.sentiment === "bearish" ? "bg-loss/10 text-loss" : "bg-yellow-500/10 text-yellow-500"
-                  }`}>{tagFor(alert.category)}</span>
-                  <span className={`text-xs font-semibold ${colorFor(alert.sentiment)}`}>{alert.headline}</span>
-                  <span className="text-[10px] text-muted-foreground ml-auto shrink-0 hidden sm:inline">{alert.detail}</span>
-                </div>
-              ))}
+              {allAlerts.map((alert: any, i: number) => {
+                const isExpanded = expandedAlert === i;
+                const tabFor = (cat: string) => {
+                  if (cat === "insider") return "insider";
+                  if (cat === "technical") return "signals";
+                  if (cat === "volume") return "signals";
+                  return null;
+                };
+                const targetTab = tabFor(alert.category);
+                return (
+                  <div key={`${alert.ticker}-${alert.type}-${i}`}>
+                    <div
+                      onClick={() => setExpandedAlert(isExpanded ? null : i)}
+                      className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${borderFor(alert.sentiment)}`}
+                    >
+                      <span className={colorFor(alert.sentiment)}>{iconFor(alert.category)}</span>
+                      <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                        alert.sentiment === "bullish" ? "bg-profit/10 text-profit" : alert.sentiment === "bearish" ? "bg-loss/10 text-loss" : "bg-yellow-500/10 text-yellow-500"
+                      }`}>{tagFor(alert.category)}</span>
+                      <span className={`text-xs font-semibold ${colorFor(alert.sentiment)}`}>{alert.headline}</span>
+                      <span className="ml-auto flex items-center gap-2 shrink-0">
+                        {alert.timestamp && <span className="text-[10px] font-mono text-muted-foreground">{timeAgo(alert.timestamp)}</span>}
+                        <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                      </span>
+                    </div>
+                    {isExpanded && (
+                      <div className={`ml-8 mr-3 mt-1 mb-1 rounded-md border px-3 py-2.5 text-xs leading-relaxed text-muted-foreground ${
+                        alert.sentiment === "bullish" ? "border-profit/20 bg-profit/5" : alert.sentiment === "bearish" ? "border-loss/20 bg-loss/5" : "border-yellow-500/20 bg-yellow-500/5"
+                      }`}>
+                        {alert.context || alert.detail}
+                        {targetTab && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (alert.category === "insider" && alert.ticker) setInsiderTicker(alert.ticker);
+                              const tabEl = document.querySelector(`[data-value="${targetTab}"]`) as HTMLElement;
+                              tabEl?.click();
+                            }}
+                            className={`ml-2 inline-flex items-center gap-1 text-[10px] font-semibold ${colorFor(alert.sentiment)} hover:underline`}
+                          >
+                            View in {targetTab === "insider" ? "Insider" : "Signals"} →
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })()}

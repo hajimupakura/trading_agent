@@ -150,15 +150,24 @@ export function getVolumeAlertsForDashboard(): Array<{
   ticker: string;
   headline: string;
   detail: string;
+  context: string;
   sentiment: "bullish" | "bearish" | "neutral";
+  timestamp: string;
+  value: number | null;
 }> {
   const anomalies = getRecentAnomalies("L3"); // Only L3+ for dashboard
-  return anomalies.slice(0, 5).map((a) => ({
-    category: "volume" as const,
-    type: `volume_${a.level.toLowerCase()}`,
-    ticker: a.symbol,
-    headline: `${a.symbol} ${a.level} volume spike — ${a.ratio}x average`,
-    detail: `${a.currentVolume.toLocaleString()} vs avg ${a.averageVolume.toLocaleString()}`,
-    sentiment: "neutral" as const,
-  }));
+  return anomalies.slice(0, 5).map((a) => {
+    const levelDesc = a.level === "L4" ? "whale-tier (5x+)" : "unusual (3-5x)";
+    return {
+      category: "volume" as const,
+      type: `volume_${a.level.toLowerCase()}`,
+      ticker: a.symbol,
+      headline: `${a.symbol} ${a.level} volume spike — ${a.ratio}x average`,
+      detail: `${a.currentVolume.toLocaleString()} vs avg ${a.averageVolume.toLocaleString()}`,
+      context: `${a.symbol} traded ${a.currentVolume.toLocaleString()} shares in the last minute vs its 20-day average of ${a.averageVolume.toLocaleString()} — a ${a.ratio}x spike classified as ${levelDesc}. Volume anomalies of this magnitude often precede major news, earnings surprises, or large institutional positioning. Watch for price confirmation in the next 5-15 minutes.`,
+      sentiment: "neutral" as const,
+      timestamp: a.timestamp.toISOString(),
+      value: a.ratio,
+    };
+  });
 }
