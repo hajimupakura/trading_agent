@@ -13,6 +13,7 @@ export function rankContracts(contracts: RawContract[]): Contract[] {
     if (contract.volume < 25) rejectionReasons.push("Volume below 25");
     if (contract.midpoint < .1) rejectionReasons.push("Premium below $0.10");
     if (contract.ask > 8) rejectionReasons.push("Ask exceeds $8.00");
+    if (contract.quoteUpdatedAt == null || Date.now() - contract.quoteUpdatedAt > 60_000) rejectionReasons.push("Quote is older than 60 seconds");
     const score = clamp(
       Math.log1p(contract.volume) / Math.log1p(maxVolume) * 40 +
       Math.log1p(contract.openInterest) / Math.log1p(maxOi) * 12 +

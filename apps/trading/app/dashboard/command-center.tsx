@@ -7,7 +7,9 @@ import {
   CircleDollarSign,
   Clock3,
   Crosshair,
+  LogOut,
   RefreshCw,
+  Send,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
@@ -15,9 +17,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
+import { logout } from "@/app/login/actions";
 
 const money = (value: number | null | undefined, digits = 2) =>
-  value == null
+  value == null || !Number.isFinite(value)
     ? "—"
     : value.toLocaleString("en-US", {
         minimumFractionDigits: digits,
@@ -26,11 +29,27 @@ const money = (value: number | null | undefined, digits = 2) =>
 
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
-export function CommandCenterView() {
+interface PaperState {
+  configured:boolean; mode:"paper"; error?:string;
+  account?:{ equity:string; buying_power:string; options_buying_power:string; status:string };
+  positions?:unknown[]; orders?:unknown[];
+}
+
+export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [underlying, setUnderlying] = useState<Underlying>("SPY");
   const [data, setData] = useState<CommandCenter | null>(null);
   const [loading, setLoading] = useState(true);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [paper, setPaper] = useState<PaperState | null>(null);
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
+
+  const refreshPaper = useCallback(async () => {
+    const response = await fetch("/api/paper-trading", { cache:"no-store" });
+    const payload = await response.json();
+    setPaper(payload);
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -52,7 +71,24 @@ export function CommandCenterView() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  useEffect(() => { void refreshPaper(); }, [refreshPaper]);
+
   const signal = data?.signal;
+  const approveOrder = useCallback(async () => {
+    if (!signal?.contract) return;
+    setSubmitting(true); setOrderMessage(null);
+    try {
+      const response = await fetch("/api/paper-trading", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ underlying, signalId:signal.id, contractTicker:signal.contract.ticker }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error([payload.error, ...(payload.reasons ?? [])].filter(Boolean).join(" · "));
+      setOrderMessage({ tone:"success", text:`Paper order ${payload.order.status}: ${payload.order.symbol} at $${payload.order.limit_price}` });
+      setApprovalOpen(false);
+      await Promise.all([refresh(), refreshPaper()]);
+    } catch (error) {
+      setOrderMessage({ tone:"error", text:error instanceof Error ? error.message : "Paper order failed" });
+    } finally { setSubmitting(false); }
+  }, [signal, underlying, refresh, refreshPaper]);
+
   const market = data?.market;
   const technicals = market?.technicals;
   const eligible = data?.contracts.filter((contract) => contract.eligible) ?? [];
@@ -71,10 +107,10 @@ export function CommandCenterView() {
           <span className="nav-item"><Activity size={16} /> Replay lab <small>Soon</small></span>
           <span className="nav-item"><BrainCircuit size={16} /> AI review <small>Soon</small></span>
         </nav>
-        <div className="sidebar-note">
-          <ShieldCheck size={17} />
-          <div><strong>Paper mode</strong><span>No brokerage connected</span></div>
-        </div>
+          <div className="sidebar-note">
+            <ShieldCheck size={17} />
+          <div><strong>Alpaca paper</strong><span>{paper?.configured ? "Approval required" : "Connection unavailable"}</span></div>
+          </div>
       </aside>
 
       <div className="workspace">
@@ -83,7 +119,7 @@ export function CommandCenterView() {
             <p className="eyebrow">INTRADAY OPTIONS INTELLIGENCE</p>
             <h1>0–2 DTE Command Center</h1>
           </div>
-          <div className="market-status"><span className="live-dot" /> LIVE DATA <b>{updated}</b></div>
+          <div className="topbar-actions"><div className="market-status"><span className="live-dot" /> LIVE DATA <b>{updated}</b></div><form action={logout}><button className="logout-button" title={`Sign out${userEmail ? ` ${userEmail}` : ""}`}><LogOut size={14}/> Sign out</button></form></div>
         </header>
 
         <main className="dashboard">
@@ -105,6 +141,15 @@ export function CommandCenterView() {
           {(requestError || data?.errors.length) ? (
             <div className="system-alert"><span>DATA NOTICE</span>{requestError ?? data?.errors.join(" · ")}</div>
           ) : null}
+          {orderMessage ? <div className={`order-message ${orderMessage.tone}`}>{orderMessage.text}</div> : null}
+
+          <section className="paper-strip">
+            <div><span>PAPER EQUITY</span><strong>${money(Number(paper?.account?.equity))}</strong></div>
+            <div><span>DAILY LOSS LIMIT</span><strong>$1,000</strong></div>
+            <div><span>MAX CONTRACT DEBIT</span><strong>$800</strong></div>
+            <div><span>OPEN POSITIONS / ORDERS</span><strong>{paper?.positions?.length ?? 0} / {paper?.orders?.length ?? 0}</strong></div>
+            <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
+          </section>
 
           <section className="market-grid">
             <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice)}`} detail={`${market?.regime ?? "waiting"} regime${underlying === "SPX" ? " · SPY proxy" : ""}`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
@@ -132,7 +177,9 @@ export function CommandCenterView() {
 
             <article className="contract-card">
               <div className="card-heading"><span>BEST EXECUTABLE CONTRACT</span><span className="price-cap">ASK ≤ $8.00</span></div>
-              {signal?.contract ? <ContractSpotlight contract={signal.contract} /> : (
+              {signal?.contract ? <><ContractSpotlight contract={signal.contract} />
+                <button className="approve-button" disabled={!signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
+              </> : (
                 <div className="empty-contract"><Clock3 size={26} /><strong>No contract selected</strong><span>The scanner is waiting for directional confirmation and executable liquidity.</span></div>
               )}
             </article>
@@ -166,9 +213,17 @@ export function CommandCenterView() {
             </table></div>
           </section>
 
-          <footer className="risk-footer"><ShieldCheck size={15} /> Research and paper trading only. 0DTE options can lose 100% of premium rapidly. The engine does not place orders.</footer>
+          <footer className="risk-footer"><ShieldCheck size={15} /> Paper trading only. Every entry requires explicit approval and can lose 100% of its premium.</footer>
         </main>
       </div>
+      {approvalOpen && signal?.contract ? <div className="approval-backdrop" role="presentation" onMouseDown={() => !submitting && setApprovalOpen(false)}><section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="approval-title" onMouseDown={event => event.stopPropagation()}>
+        <div className="approval-icon"><ShieldCheck size={21}/></div><p className="eyebrow">ALPACA PAPER · BUY TO OPEN</p><h2 id="approval-title">Approve one contract?</h2>
+        <div className="approval-symbol"><strong>{signal.contract.ticker}</strong><span>{signal.contract.side.toUpperCase()} · {signal.contract.dte} DTE · {signal.contract.strike} strike</span></div>
+        <div className="approval-grid"><div><span>LIMIT PRICE</span><strong>${money(signal.contract.ask)}</strong></div><div><span>MAXIMUM DEBIT</span><strong>${money(signal.contract.ask * 100, 0)}</strong></div><div><span>PLANNED 30% STOP</span><strong>≈ ${money(signal.contract.ask * 30, 0)}</strong></div><div><span>QUANTITY</span><strong>1</strong></div></div>
+        <p className="approval-warning">The server will rescan the market and re-check the 1% debit limit, $1,000 daily limit, trading window, open positions and duplicate orders before submission. Exit automation is not enabled in approval mode; this position must be closed manually in Alpaca.</p>
+        {orderMessage?.tone === "error" ? <div className="auth-alert error">{orderMessage.text}</div> : null}
+        <div className="approval-actions"><button className="cancel-button" onClick={() => setApprovalOpen(false)} disabled={submitting}>Cancel</button><button className="confirm-button" onClick={() => void approveOrder()} disabled={submitting}>{submitting ? "Checking risk…" : "Approve paper order"}</button></div>
+      </section></div> : null}
     </div>
   );
 }

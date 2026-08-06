@@ -15,6 +15,21 @@ export async function updateSession(request: NextRequest) {
       },
     } },
   );
-  await supabase.auth.getClaims();
+  const { data } = await supabase.auth.getClaims();
+  const authenticated = Boolean(data?.claims?.sub);
+  const path = request.nextUrl.pathname;
+  const isPublic = path === "/login" || path.startsWith("/api/cron/");
+  if (!authenticated && !isPublic) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+  if (authenticated && path === "/login") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
   return response;
 }

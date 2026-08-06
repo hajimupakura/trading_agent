@@ -18,8 +18,9 @@ When the key is configured, the server continuously refreshes both SPX and SPY. 
 
 ## Safety behavior
 
-- Live Alpaca orders are disabled unless `ENABLE_LIVE_TRADING=true` and the caller is an admin.
-- The new system does not submit any order, including paper orders, yet.
+- The focused Next.js application always uses Alpaca's paper endpoint; live order submission is not implemented.
+- An authenticated owner can approve one-contract Alpaca paper limit orders. Every order is rescanned and risk-checked on the server before submission.
+- Automatic exits are not enabled yet; approval-mode positions must be closed manually in Alpaca.
 - AI only reviews a deterministic entry candidate and cannot create one or override rejection rules.
 - Repeated identical signals reuse the previous AI verdict to control cost.
 - Contracts are rejected when they are outside 0-2 DTE, one-sided, too wide, too thin, below the premium floor, or offered above the $8.00 quote cap (roughly $800 for one standard 100-multiplier contract).

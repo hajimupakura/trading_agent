@@ -12,11 +12,11 @@ pnpm build:trading
 
 For Vercel, set the project Root Directory to `apps/trading`. The application uses Supabase Auth and does not require the legacy `DATABASE_URL`, `JWT_SECRET`, Express server, or MySQL schema.
 
-The primary interface is a paper-only 0–2 DTE SPX/SPY research system. It monitors each underlying's own one-minute chart, filters the option chain for executable contracts, and ranks eligible contracts with volume as the largest component. It does not place live orders.
+The primary interface is a paper-only 0–2 DTE SPX/SPY research system. It uses Alpaca IEX SPY bars (including SPY as the directional proxy for SPX), filters Massive option-chain data, and ranks eligible contracts with volume as the largest component. A signed-in owner can explicitly approve one-contract limit orders for Alpaca Paper Trading; live orders and automatic exits remain disabled.
 
 ## Current decision flow
 
-1. Load SPY stock bars or the `I:SPX` index bars from Massive.
+1. Load one-minute SPY IEX bars from Alpaca and SPY/SPX option snapshots from Massive.
 2. Require a confirmed 15-minute opening-range break aligned with trend.
 3. Reject contracts outside 0–2 DTE, one-sided quotes, spreads above 12%, volume below 25, premiums below $0.10, or asks above $8.00 (about $800 per standard contract).
 4. Rank the remainder by volume (40%), spread quality (20%), volume/open-interest flow (18%), open interest (12%), and delta proximity (10%).
@@ -36,10 +36,11 @@ NEXT_PUBLIC_SUPABASE_URL=https://wgjyeddedsnbrqcbatwz.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 SUPABASE_SECRET_KEY=sb_secret_...
 CRON_SECRET=...
+TRADING_OWNER_SETUP_CODE=... # optional; CRON_SECRET is the one-time fallback
 AI_OPTIONS_REVIEW_ENABLED=false
 ```
 
-Never expose `SUPABASE_SECRET_KEY` through a `VITE_` variable. The options tables have RLS enabled and are intentionally server-only. `vercel.json` schedules a once-per-minute SPY/SPX persistence refresh; the signed-in dashboard also refreshes on demand every 15 seconds. Vercel Cron's once-per-minute schedule requires a paid plan. This cadence is suitable for research and alerting, not latency-sensitive automatic execution.
+Never expose `SUPABASE_SECRET_KEY` through a `VITE_` variable. The options and paper-order journals have RLS enabled and are intentionally server-only. The first owner signup requires `TRADING_OWNER_SETUP_CODE` (or `CRON_SECRET`) and closes registration after that account exists. `vercel.json` schedules a once-per-minute SPY/SPX persistence refresh; the signed-in dashboard also refreshes on demand every 15 seconds. Vercel Cron's once-per-minute schedule requires a paid plan. This cadence is suitable for research and approval-mode paper entries, not latency-sensitive automatic exits.
 
 The pre-existing broader market-intelligence application remains available at `/legacy`.
 
