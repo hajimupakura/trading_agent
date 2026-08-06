@@ -10,25 +10,32 @@ function emaSeries(values: number[], period: number): number[] {
   const k = 2 / (period + 1);
   return values.slice(1).reduce<number[]>((series, value) => [...series, value * k + series.at(-1)! * (1 - k)], [values[0]!]);
 }
+// Wilder's smoothing (the textbook RSI/ATR): seed with a simple average over the first
+// `period` changes, then smooth with (prev*(period-1)+current)/period across the session.
 function rsi(values: number[], period = 14): number | null {
   if (values.length <= period) return null;
-  const recent = values.slice(-period - 1);
   let gain = 0; let loss = 0;
-  for (let index = 1; index < recent.length; index++) {
-    const change = recent[index]! - recent[index - 1]!;
+  for (let index = 1; index <= period; index++) {
+    const change = values[index]! - values[index - 1]!;
     gain += Math.max(0, change); loss += Math.max(0, -change);
+  }
+  gain /= period; loss /= period;
+  for (let index = period + 1; index < values.length; index++) {
+    const change = values[index]! - values[index - 1]!;
+    gain = (gain * (period - 1) + Math.max(0, change)) / period;
+    loss = (loss * (period - 1) + Math.max(0, -change)) / period;
   }
   if (!loss) return 100;
   return 100 - 100 / (1 + gain / loss);
 }
 function atr(bars: Bar[], period = 14): number | null {
   if (bars.length <= period) return null;
-  const recent = bars.slice(-period - 1); let total = 0;
-  for (let index = 1; index < recent.length; index++) {
-    const bar = recent[index]!; const previous = recent[index - 1]!;
-    total += Math.max(bar.high - bar.low, Math.abs(bar.high - previous.close), Math.abs(bar.low - previous.close));
-  }
-  return total / period;
+  const trueRange = (bar: Bar, previous: Bar) => Math.max(bar.high - bar.low, Math.abs(bar.high - previous.close), Math.abs(bar.low - previous.close));
+  let value = 0;
+  for (let index = 1; index <= period; index++) value += trueRange(bars[index]!, bars[index - 1]!);
+  value /= period;
+  for (let index = period + 1; index < bars.length; index++) value = (value * (period - 1) + trueRange(bars[index]!, bars[index - 1]!)) / period;
+  return value;
 }
 function pattern(bars: Bar[]): Technicals["candlePattern"] {
   if (bars.length < 2) return "none";
@@ -61,7 +68,8 @@ export function calculateTechnicals(bars: Bar[], underlying: Underlying, opening
     ema8: ema(closes.slice(-30), 8), ema21: ema(closes.slice(-30), 21), rsi14: rsi(closes), atr14, macd, macdSignal,
     bollingerPosition: last20.length >= 20 && deviation ? (current.close - mean) / (2 * deviation) : null,
     breakoutAtr: atr14 ? distance / atr14 : null,
-    volumeConfirmation: volumes.length >= 5 ? current.volume >= averageVolume * 1.2 : null, vwapSlope,
+    volumeConfirmation: volumes.length >= 5 ? current.volume >= averageVolume * 1.2 : null,
+    relativeVolume: volumes.length >= 5 && averageVolume > 0 ? current.volume / averageVolume : null, vwapSlope,
     candlePattern: pattern(bars),
   };
 }

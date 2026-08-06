@@ -12,13 +12,15 @@ export interface Bar { timestamp: number; open: number; high: number; low: numbe
 export interface Technicals {
   ema8: number; ema21: number; rsi14: number | null; atr14: number | null;
   macd: number | null; macdSignal: number | null; bollingerPosition: number | null;
-  breakoutAtr: number | null; volumeConfirmation: boolean | null; vwapSlope: number | null;
+  breakoutAtr: number | null; volumeConfirmation: boolean | null; relativeVolume: number | null; vwapSlope: number | null;
   candlePattern: "bullish_engulfing" | "bearish_engulfing" | "hammer" | "shooting_star" | "none";
 }
 export interface MarketState {
   symbol: Underlying; chartSymbol: Underlying; asOf: number; price: number; displayPrice: number; referencePrice: number;
   referenceLabel: "VWAP" | "SESSION MEAN"; openingRangeHigh: number; openingRangeLow: number;
   regime: "opening" | "uptrend" | "downtrend" | "range"; technicals: Technicals; bars: Bar[];
+  // Prior session levels for daily context (null when unavailable, e.g. SPX or replay).
+  priorDay?: { high: number; low: number; close: number } | null;
 }
 export interface Contract {
   ticker: string; underlying: Underlying; expirationDate: string; dte: number; side: Side; strike: number;

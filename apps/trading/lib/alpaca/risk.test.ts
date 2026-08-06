@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePositionSize, validatePaperEntry } from "./risk";
+import { computePositionSize, entryCooldownActive, validatePaperEntry } from "./risk";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 import type { Contract, Signal } from "@/lib/options/types";
 
@@ -63,5 +63,22 @@ describe("swing entry window", () => {
   it("still rejects the late-day window when swing mode is off", () => {
     const result = validatePaperEntry({ signal, contract:{ ...contract, dte:1 as const }, account, positions:[], orders:[], tradesToday:0, now:lateDay });
     expect(result.errors).toContain("Current time is outside the configured ET entry window");
+  });
+});
+
+describe("re-entry cooldown", () => {
+  const now = new Date("2026-08-06T15:00:00.000Z");
+  const stopExit = { contractTicker:"O:SPY260806C00770000", exitReason:"premium_stop", at:"2026-08-06T14:50:00.000Z" };
+  it("blocks a same-direction entry within 20 minutes of a stop", () => {
+    expect(entryCooldownActive({ action:"enter_call", recentExits:[stopExit], now })).not.toBeNull();
+  });
+  it("allows the opposite direction", () => {
+    expect(entryCooldownActive({ action:"enter_put", recentExits:[stopExit], now })).toBeNull();
+  });
+  it("expires after 20 minutes", () => {
+    expect(entryCooldownActive({ action:"enter_call", recentExits:[{ ...stopExit, at:"2026-08-06T14:35:00.000Z" }], now })).toBeNull();
+  });
+  it("ignores winners released by the trailing stop", () => {
+    expect(entryCooldownActive({ action:"enter_call", recentExits:[{ ...stopExit, exitReason:"trailing_stop" }], now })).toBeNull();
   });
 });

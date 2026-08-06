@@ -1,8 +1,9 @@
 import { config } from "./config.js";
 import { evaluateExit, easternClock } from "./exit-engine.js";
-import { getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
+import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
+import { cancelOrder, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
-import { createWorkerAlert, getControl, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor } from "./store.js";
+import { createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
 import type { AlpacaOrder, OptionQuote } from "./types.js";
 
 const activeOrder = (order:AlpacaOrder) => ["new","accepted","pending_new","partially_filled","accepted_for_bidding"].includes(order.status);
@@ -24,15 +25,23 @@ export class PositionManager {
   private async cycle() {
     const [positions,orders,control] = await Promise.all([getPositions(),getTodayOrders(),getControl()]);
     const optionPositions = positions.filter(position => position.asset_class === "us_option" && Number(position.qty) > 0);
-    this.quotes.setSymbols(optionPositions.map(position => `O:${position.symbol}`)); this.managedCount = 0;
+    const entryOrders = orders.filter(order => order.side === "buy" && activeOrder(order));
+    this.quotes.setSymbols([...optionPositions.map(position => `O:${position.symbol}`), ...entryOrders.map(order => `O:${order.symbol}`)]); this.managedCount = 0;
     await markMissingPositions(optionPositions.map(position => `O:${position.symbol}`),orders);
+    if (!marketSession(new Date())) return;
+    const cycleErrors:string[] = [];
+    // Working BUY orders are managed regardless of the exit toggle or kill switch —
+    // an already-submitted entry must still be escalated toward the ask or canceled.
+    for (const order of entryOrders) {
+      try { await this.manageEntryOrder(order); }
+      catch (error) { cycleErrors.push(`entry ${order.symbol}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     // kill_switch halts NEW ENTRIES (enforced in the app's paper-trading route);
     // protective exits keep running regardless so an emergency stop never strands a position.
     const enabled = config.exitsEnabled && control.auto_exits_enabled;
-    if (!enabled || !marketSession(new Date())) return;
+    if (!enabled) { if (cycleErrors.length) throw new Error(cycleErrors.join(" | ")); return; }
     const needsSpx = optionPositions.some(position => position.symbol.startsWith("SPX"));
     const [spyPrice,spxPrice] = await Promise.all([getSpyPrice().catch(() => null), needsSpx ? getSpxPrice().catch(() => null) : Promise.resolve(null)]);
-    const cycleErrors:string[] = [];
     for (const brokerPosition of optionPositions) {
       try {
         await this.managePosition(brokerPosition,orders,spyPrice,spxPrice);
@@ -43,6 +52,27 @@ export class PositionManager {
       }
     }
     if (cycleErrors.length) throw new Error(cycleErrors.join(" | "));
+  }
+  private async manageEntryOrder(order:AlpacaOrder) {
+    const ticker = `O:${order.symbol}`; const now = Date.now();
+    const root = order.symbol.replace(/\d{6}[CP]\d{8}$/,"");
+    const quote = fresh(this.quotes.get(ticker),now) ?? await getSnapshotQuote(root === "SPXW" ? "SPX" : root, ticker);
+    if (!quote || now - quote.timestamp > 30_000) return; // no fresh quote — try again next cycle
+    // Age from the journal's original submission time: an Alpaca replace creates a new
+    // broker order with a reset created_at, which would otherwise restart the clock.
+    const journal = await getEntryJournal(order.id);
+    const ageMs = now - Date.parse(journal?.created_at ?? order.created_at);
+    const plan = planEntryOrder({ ageMs, ask:quote.ask, midpoint:(quote.bid + quote.ask) / 2, currentLimit:Number(order.limit_price) });
+    if (plan.action === "cancel") {
+      await cancelOrder(order.id);
+      await updateEntryJournal(order.id,{ status:"canceled" });
+      if (journal) await createWorkerAlert({ userId:journal.user_id, signalId:journal.signal_id, eventKey:`paper-entry-canceled-${order.id}`, severity:"warning", title:"Entry canceled — not filled", body:`BUY ${order.symbol} did not fill within ${Math.round(ENTRY_RULES.cancelMs/1000)}s and was canceled; the signal that justified it is stale. No position was opened.`, metadata:{ orderId:order.id, contractTicker:ticker } });
+      console.log(JSON.stringify({ event:"paper_entry_canceled", symbol:order.symbol, orderId:order.id, ageMs }));
+    } else if (plan.action === "reprice") {
+      const replaced = await replaceCloseOrder(order.id, plan.price);
+      await updateEntryJournal(order.id,{ alpaca_order_id:replaced.id, limit_price:plan.price });
+      console.log(JSON.stringify({ event:"paper_entry_repriced", symbol:order.symbol, orderId:order.id, newOrderId:replaced.id, price:plan.price, ageMs }));
+    }
   }
   private async managePosition(brokerPosition:{symbol:string;qty:string;avg_entry_price:string},orders:AlpacaOrder[],spyPrice:number|null,spxPrice:number|null) {
     const entryPrice = Number(brokerPosition.avg_entry_price); if (!(entryPrice > 0)) return;

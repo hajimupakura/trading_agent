@@ -38,7 +38,34 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
       if (!reasons.length) reasons.push("Trend, RSI, VWAP slope, MACD, or candle confirmation is incomplete");
     }
   }
+  // Daily context: confluence information, deliberately NOT a veto — the human decides.
+  const priorDay = market.priorDay ?? null;
+  let priorDayAligned: boolean | null = null;
+  if (action === "enter_call" && priorDay) {
+    priorDayAligned = market.price > priorDay.high;
+    reasons.push(priorDayAligned ? `Breakout also clears yesterday's high ${priorDay.high.toFixed(2)}` : `Caution: still below yesterday's high ${priorDay.high.toFixed(2)} — overhead supply above`);
+  } else if (action === "enter_put" && priorDay) {
+    priorDayAligned = market.price < priorDay.low;
+    reasons.push(priorDayAligned ? `Breakdown also clears yesterday's low ${priorDay.low.toFixed(2)}` : `Caution: still above yesterday's low ${priorDay.low.toFixed(2)} — support below`);
+  }
   if (contract) reasons.push(`${contract.ticker} is ranked ${contract.liquidityScore}/100 and asks $${contract.ask.toFixed(2)}`);
   const id = `${market.symbol}-${market.asOf}-${action}-${contract?.ticker ?? "none"}`;
-  return { id, generatedAt:Date.now(), action, setup:action.startsWith("enter") ? "opening_range" : "none", confidence:contract ? Math.min(action.startsWith("enter") ? 90 : 55, Math.round(contract.liquidityScore * (action.startsWith("enter") ? .7 : .5) + (action.startsWith("enter") ? 20 : 0))) : 0, reasons, invalidation, contract, market:summary };
+  // Confidence: for entries, scored from how much margin each factor passed by —
+  // RSI centering in its band, breakout centering in the 0.10-0.65 ATR window,
+  // relative volume above the 1.2x floor, contract liquidity, daily-context alignment.
+  // For watch/no_trade it stays a dim liquidity echo.
+  const clamp = (value:number, maximum:number) => Math.max(0, Math.min(maximum, value));
+  let confidence = 0;
+  if (contract && action.startsWith("enter")) {
+    const rsiCenter = action === "enter_call" ? 62 : 38;
+    const rsiScore = technicals.rsi14 == null ? 0 : clamp(15 * (1 - Math.abs(technicals.rsi14 - rsiCenter) / 10), 15);
+    const breakoutScore = technicals.breakoutAtr == null ? 0 : clamp(15 * (1 - Math.abs(technicals.breakoutAtr - .375) / .275), 15);
+    const volumeScore = technicals.relativeVolume == null ? 5 : clamp((technicals.relativeVolume - 1.2) / .8 * 10, 10);
+    const liquidityScore = clamp(contract.liquidityScore / 10, 10);
+    const dailyScore = priorDayAligned == null ? 5 : priorDayAligned ? 10 : 0;
+    confidence = Math.round(clamp(45 + rsiScore + breakoutScore + volumeScore + liquidityScore + dailyScore, 100));
+  } else if (contract) {
+    confidence = Math.min(55, Math.round(contract.liquidityScore * .5));
+  }
+  return { id, generatedAt:Date.now(), action, setup:action.startsWith("enter") ? "opening_range" : "none", confidence, reasons, invalidation, contract, market:summary };
 }

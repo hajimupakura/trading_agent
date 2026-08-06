@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getAuthenticatedUser } from "@/lib/supabase/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPaperTradingState, submitPaperOptionOrder } from "@/lib/alpaca/paper";
-import { PAPER_RULES, computePositionSize, validatePaperEntry } from "@/lib/alpaca/risk";
+import { PAPER_RULES, computePositionSize, entryCooldownActive, validatePaperEntry } from "@/lib/alpaca/risk";
 import { refreshCommandCenter } from "@/lib/options/command-center";
 import {loadRiskSettings} from "@/lib/settings/risk-settings";
 import {createAlert} from "@/lib/alerts/server";
@@ -50,16 +50,25 @@ export async function POST(request:Request) {
     if (!signal || !contract || signal.id !== parsed.data.signalId || contract.ticker !== parsed.data.contractTicker) {
       return Response.json({ error:"The signal or selected contract changed. Review the refreshed ticket before approving." }, { status:409 });
     }
+    const { data:recentExits, error:exitQueryError } = await createAdminClient().from("paper_trade_orders")
+      .select("contract_ticker,risk_snapshot,updated_at").eq("user_id",user.id).eq("action","sell_to_close")
+      .gte("updated_at", new Date(Date.now() - PAPER_RULES.cooldownMinutes * 60_000).toISOString());
+    if (exitQueryError) throw new Error(`Cooldown check unavailable: ${exitQueryError.message}`);
+    const cooldown = entryCooldownActive({ action:signal.action, recentExits:(recentExits ?? []).map(row => ({ contractTicker:String(row.contract_ticker), exitReason:(row.risk_snapshot as {exitReason?:string}|null)?.exitReason ?? null, at:String(row.updated_at) })) });
+    if (cooldown) return Response.json({ error:`Cooldown active: a ${signal.action === "enter_call" ? "call" : "put"} was stopped out (${cooldown.exitReason.replaceAll("_"," ")}) less than ${PAPER_RULES.cooldownMinutes} minutes ago. Entries in this direction resume at ${cooldown.until.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",timeZone:"America/New_York"})} ET.` }, { status:422 });
     const quantity = computePositionSize({ ask:contract.ask, equity:Number(trading.account.equity), optionsBuyingPower:Number(trading.account.options_buying_power), settings });
     const risk = validatePaperEntry({ signal, contract, ...trading, tradesToday,settings,quantity });
     if (!risk.allowed) return Response.json({ error:"Order blocked by risk controls", reasons:risk.errors }, { status:422 });
     const clientOrderId = `velocity-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
-    const order = await submitPaperOptionOrder({ symbol:contract.ticker, limitPrice:contract.ask, clientOrderId, quantity:risk.quantity });
-    await createAlert({userId:user.id,signalId:signal.id,eventKey:`paper-entry-${order.id}`,severity:"success",title:"Paper entry submitted",body:`BUY ${risk.quantity} ${contract.ticker} at a $${contract.ask.toFixed(2)} limit · maximum debit $${risk.debit.toFixed(0)}`,metadata:{orderId:order.id,contractTicker:contract.ticker,limitPrice:contract.ask,maxDebit:risk.debit,quantity:risk.quantity,status:order.status}}).catch(error=>console.error("Entry alert failed",error));
+    // Submit at the midpoint, not the ask — the position worker escalates the limit toward
+    // the ask if unfilled and cancels a stale entry, so we stop paying the full spread.
+    const entryLimit = Math.max(.01, Number(contract.midpoint.toFixed(2)));
+    const order = await submitPaperOptionOrder({ symbol:contract.ticker, limitPrice:entryLimit, clientOrderId, quantity:risk.quantity });
+    await createAlert({userId:user.id,signalId:signal.id,eventKey:`paper-entry-${order.id}`,severity:"success",title:"Paper entry submitted",body:`BUY ${risk.quantity} ${contract.ticker} at a $${entryLimit.toFixed(2)} midpoint limit (ask $${contract.ask.toFixed(2)}) · maximum debit $${risk.debit.toFixed(0)}`,metadata:{orderId:order.id,contractTicker:contract.ticker,limitPrice:entryLimit,maxDebit:risk.debit,quantity:risk.quantity,status:order.status}}).catch(error=>console.error("Entry alert failed",error));
     const { error:journalError } = await createAdminClient().from("paper_trade_orders").insert({
       user_id:user.id, signal_id:signal.id, alpaca_order_id:order.id, client_order_id:order.client_order_id,
       action:"buy_to_open", underlying:parsed.data.underlying, contract_ticker:contract.ticker,
-      quantity:risk.quantity, order_type:"limit", limit_price:contract.ask, max_debit:risk.debit, status:order.status,
+      quantity:risk.quantity, order_type:"limit", limit_price:entryLimit, max_debit:risk.debit, status:order.status,
       risk_snapshot:{ equity:risk.equity, dayPnl:risk.dayPnl, rules:settings,systemCaps:PAPER_RULES }, broker_response:order,
     });
     if (journalError) return Response.json({ ok:true, warning:"Order was submitted, but journal persistence failed", order, detail:journalError.message });

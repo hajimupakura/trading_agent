@@ -7,7 +7,25 @@ export const PAPER_RULES = {
   maxPremium: 8, maxDebitPct: .01, dailyLossPct: .01, maxTradesPerDay: 3, maxOpenPositions: 1,
   entryStartMinutes:9 * 60 + 45, entryEndMinutes:14 * 60 + 45,
   stopLossPct: .30, // must match EXIT_RULES.stopLossPct in apps/position-worker/src/exit-engine.ts
+  cooldownMinutes: 20, // no same-direction re-entry this long after a stopped-out exit
 } as const;
+
+const COOLDOWN_REASONS = ["premium_stop", "no_follow_through"];
+const sideFromOccTicker = (ticker: string): "call" | "put" | null => {
+  const match = /\d{6}([CP])\d{8}$/.exec(ticker.replace(/^O:/, ""));
+  return match ? (match[1] === "C" ? "call" : "put") : null;
+};
+// After the same direction stopped out, an identical setup usually re-qualifies within
+// minutes — without a cooldown one chop can burn the whole trades/day budget.
+export function entryCooldownActive(input: { action: Signal["action"]; recentExits: Array<{ contractTicker: string; exitReason?: string | null; at: string }>; now?: Date }) {
+  const side = input.action === "enter_call" ? "call" : input.action === "enter_put" ? "put" : null;
+  if (!side) return null;
+  const cutoff = (input.now ?? new Date()).getTime() - PAPER_RULES.cooldownMinutes * 60_000;
+  const blocking = input.recentExits.find(exit =>
+    exit.exitReason != null && COOLDOWN_REASONS.includes(exit.exitReason) &&
+    Date.parse(exit.at) >= cutoff && sideFromOccTicker(exit.contractTicker) === side);
+  return blocking ? { contractTicker: blocking.contractTicker, exitReason: blocking.exitReason!, until: new Date(Date.parse(blocking.at) + PAPER_RULES.cooldownMinutes * 60_000) } : null;
+}
 
 // Fixed-fractional sizing: risk (debit x stop distance) targets riskPerTradePct of equity,
 // bounded by the per-trade debit cap, the 1%-of-equity debit cap, buying power, and the contract cap.

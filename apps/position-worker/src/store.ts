@@ -36,6 +36,14 @@ export async function journalExit(position:ManagedPosition,order:AlpacaOrder,lim
   const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:position.ticker.startsWith("O:SPX")?"SPX":"SPY",contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order },{onConflict:"alpaca_order_id"});
   if (error) throw error;
 }
+export async function updateEntryJournal(alpacaOrderId:string,fields:{status?:string;limit_price?:number;alpaca_order_id?:string}) {
+  const { error } = await db.from("paper_trade_orders").update({ ...fields, updated_at:new Date().toISOString() }).eq("alpaca_order_id",alpacaOrderId);
+  if (error) throw error;
+}
+export async function getEntryJournal(alpacaOrderId:string):Promise<{user_id:string;signal_id:string;created_at:string}|null> {
+  const { data, error } = await db.from("paper_trade_orders").select("user_id,signal_id,created_at").eq("alpaca_order_id",alpacaOrderId).eq("action","buy_to_open").maybeSingle();
+  if (error) throw error; return data;
+}
 export async function heartbeat(input:{healthy:boolean;positions:number;lastError:string|null}) {
   const { error } = await db.from("position_manager_status").upsert({ id:config.MANAGER_INSTANCE_ID,enabled:config.exitsEnabled,healthy:input.healthy,managed_positions:input.positions,last_error:input.lastError,last_heartbeat:new Date().toISOString(),updated_at:new Date().toISOString() });
   if (error) throw error;

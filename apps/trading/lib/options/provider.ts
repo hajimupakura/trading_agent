@@ -25,6 +25,20 @@ export async function getMarketState(underlying: Underlying): Promise<MarketStat
   return getEquityMarketState(underlying);
 }
 
+async function getPriorDayLevels(symbol: string, headers: Record<string,string>): Promise<MarketState["priorDay"]> {
+  try {
+    const url = new URL(`${ALPACA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
+    url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "5");
+    url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "desc");
+    const response = await fetch(url, { headers, cache:"no-store", signal:AbortSignal.timeout(8000) });
+    if (!response.ok) return null;
+    const payload = await response.json() as { bars?: Array<{ t:string;h:number;l:number;c:number }> };
+    const today = dateEt();
+    const prior = (payload.bars ?? []).find(bar => new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date(bar.t)) < today);
+    return prior ? { high:prior.h, low:prior.l, close:prior.c } : null;
+  } catch { return null; }
+}
+
 async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<MarketState> {
   const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
   if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
@@ -32,7 +46,11 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
   const url = new URL(`${ALPACA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
   url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", date); url.searchParams.set("feed", "iex");
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
-  const response = await fetch(url, { headers:{ "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret }, cache:"no-store", signal:AbortSignal.timeout(12_000) });
+  const headers = { "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret };
+  const [response, priorDay] = await Promise.all([
+    fetch(url, { headers, cache:"no-store", signal:AbortSignal.timeout(12_000) }),
+    getPriorDayLevels(symbol, headers),
+  ]);
   if (!response.ok) throw new Error(`Alpaca ${symbol} bars ${response.status}`);
   const payload = await response.json() as { bars?: Array<{ t:string;o:number;h:number;l:number;c:number;v?:number;vw?:number }> };
   const inRegularSession = (timestamp: string) => {
@@ -50,7 +68,7 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
     : bars.reduce((sum, bar) => sum + bar.close, 0) / bars.length;
   const technicals = calculateTechnicals(bars, symbol, openingRangeHigh, openingRangeLow);
   const regime = bars.length < 15 ? "opening" : current.close > referencePrice && technicals.ema8 > technicals.ema21 ? "uptrend" : current.close < referencePrice && technicals.ema8 < technicals.ema21 ? "downtrend" : "range";
-  return { symbol, chartSymbol:symbol, asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
+  return { symbol, chartSymbol:symbol, asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120), priorDay };
 }
 
 async function getSpxMarketState():Promise<MarketState> {

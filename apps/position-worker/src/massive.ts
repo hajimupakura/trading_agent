@@ -45,7 +45,7 @@ export async function getSpxPrice():Promise<number|null> {
   return Number.isFinite(price) && price > 0 ? price : null;
 }
 
-export async function getSnapshotQuote(underlying:"SPY"|"SPX",ticker:string):Promise<OptionQuote|null> {
+export async function getSnapshotQuote(underlying:string,ticker:string):Promise<OptionQuote|null> {
   const url = new URL(`https://api.massive.com/v3/snapshot/options/${underlying}/${encodeURIComponent(ticker)}`); url.searchParams.set("apiKey",config.MASSIVE_API_KEY);
   const response = await fetch(url,{signal:AbortSignal.timeout(8000)}); if (!response.ok) return null;
   const payload = await response.json() as {results?:{last_quote?:{bid?:number;ask?:number;last_updated?:number}}}; const quote = payload.results?.last_quote;

@@ -21,3 +21,7 @@ export async function submitCloseOrder(input:{symbol:string;quantity:number;limi
 export async function replaceCloseOrder(orderId:string,limitPrice:number) {
   return request<AlpacaOrder>(PAPER,`/v2/orders/${encodeURIComponent(orderId)}`, { method:"PATCH", body:JSON.stringify({ limit_price:limitPrice.toFixed(2) }) });
 }
+export async function cancelOrder(orderId:string) {
+  const response = await fetch(`${PAPER}/v2/orders/${encodeURIComponent(orderId)}`, { method:"DELETE", headers, signal:AbortSignal.timeout(8000) });
+  if (!response.ok && response.status !== 404) throw new Error(`Alpaca cancel ${response.status}`);
+}
