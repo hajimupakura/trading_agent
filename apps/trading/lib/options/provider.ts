@@ -19,6 +19,11 @@ async function massive<T>(pathOrUrl: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 export async function getMarketState(underlying: Underlying): Promise<MarketState> {
+  if (underlying === "SPX") return getSpxMarketState();
+  return getSpyMarketState();
+}
+
+async function getSpyMarketState(): Promise<MarketState> {
   const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
   if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
   const date = dateEt();
@@ -41,9 +46,25 @@ export async function getMarketState(underlying: Underlying): Promise<MarketStat
   const referencePrice = totalVolume
     ? bars.reduce((sum, bar) => sum + (bar.vwap ?? bar.close) * bar.volume, 0) / totalVolume
     : bars.reduce((sum, bar) => sum + bar.close, 0) / bars.length;
-  const technicals = calculateTechnicals(bars, underlying, openingRangeHigh, openingRangeLow);
+  const technicals = calculateTechnicals(bars, "SPY", openingRangeHigh, openingRangeLow);
   const regime = bars.length < 15 ? "opening" : current.close > referencePrice && technicals.ema8 > technicals.ema21 ? "uptrend" : current.close < referencePrice && technicals.ema8 < technicals.ema21 ? "downtrend" : "range";
-  return { symbol:underlying, chartSymbol:"SPY", asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
+  return { symbol:"SPY", chartSymbol:"SPY", asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
+}
+
+async function getSpxMarketState():Promise<MarketState> {
+  const date=dateEt();
+  const payload=await massive<{results?:Array<{t:number;o:number;h:number;l:number;c:number}>}>(`/v2/aggs/ticker/I:SPX/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);
+  const inRegularSession=(timestamp:number)=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(timestamp));const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);return minutes>=570&&minutes<960;};
+  const bars:Bar[]=(payload.results??[]).filter(item=>inRegularSession(item.t)).map(item=>({timestamp:item.t,open:item.o,high:item.h,low:item.l,close:item.c,volume:0,vwap:null}));
+  if(!bars.length)throw new Error("No Massive I:SPX one-minute bars returned; verify live index-data access");
+  const current=bars.at(-1)!;const opening=bars.slice(0,15);
+  const openingRangeHigh=Math.max(...opening.map(bar=>bar.high));const openingRangeLow=Math.min(...opening.map(bar=>bar.low));
+  const referencePrice=bars.reduce((sum,bar)=>sum+bar.close,0)/bars.length;
+  const technicals=calculateTechnicals(bars,"SPX",openingRangeHigh,openingRangeLow);
+  // SPX is a calculated index, not a traded instrument, so native volume/VWAP do not exist.
+  // Price-only momentum remains usable; volume confirmation is deliberately treated as unavailable.
+  const regime=bars.length<15?"opening":current.close>referencePrice&&technicals.ema8>technicals.ema21?"uptrend":current.close<referencePrice&&technicals.ema8<technicals.ema21?"downtrend":"range";
+  return {symbol:"SPX",chartSymbol:"SPX",asOf:current.timestamp,price:current.close,displayPrice:current.close,referencePrice,referenceLabel:"SESSION MEAN",openingRangeHigh,openingRangeLow,regime,technicals,bars:bars.slice(-120)};
 }
 
 export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {

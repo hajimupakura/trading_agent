@@ -179,9 +179,9 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"KILL SWITCH ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume paper exits":"Emergency stop"}</button></section>
 
           <section className="market-grid">
-            <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice)}`} detail={`${market?.regime ?? "waiting"} regime${underlying === "SPX" ? " · SPY proxy" : ""}`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
-            <MarketCard label={`${underlying === "SPX" ? "SPY PROXY · " : ""}${market?.referenceLabel ?? "VWAP"}`} value={`$${money(market?.referencePrice)}`} detail={market && market.price >= market.referencePrice ? "Price above reference" : "Price below reference"} icon={<Crosshair />} />
-            <MarketCard label={`${underlying === "SPX" ? "SPY PROXY · " : ""}OPENING RANGE`} value={`${money(market?.openingRangeLow)} – ${money(market?.openingRangeHigh)}`} detail={market ? `${money(market.openingRangeHigh - market.openingRangeLow)} pts wide` : "Waiting"} icon={<BarChart3 />} />
+            <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice)}`} detail={`${market?.regime ?? "waiting"} regime`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
+            <MarketCard label={market?.referenceLabel ?? (underlying === "SPX" ? "SESSION MEAN" : "VWAP")} value={`$${money(market?.referencePrice)}`} detail={market && market.price >= market.referencePrice ? "Price above reference" : "Price below reference"} icon={<Crosshair />} />
+            <MarketCard label="OPENING RANGE" value={`${money(market?.openingRangeLow)} – ${money(market?.openingRangeHigh)}`} detail={market ? `${money(market.openingRangeHigh - market.openingRangeLow)} pts wide` : "Waiting"} icon={<BarChart3 />} />
             <MarketCard label="ELIGIBLE CONTRACTS" value={eligible.length.toString()} detail={`${data?.contracts.length ?? 0} contracts scanned`} icon={<CircleDollarSign />} />
           </section>
 
@@ -214,7 +214,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
 
           <section className="analysis-grid">
             <article className="chart-card">
-              <div className="section-heading"><div><span>PRICE ACTION · ALPACA IEX</span><strong>{underlying === "SPX" ? "SPY DIRECTIONAL PROXY" : "SPY"} · 1 MINUTE</strong></div><div className="chart-legend"><i /> Price <i className="reference" /> {market?.referenceLabel ?? "Reference"}</div></div>
+              <div className="section-heading"><div><span>PRICE ACTION · {underlying === "SPX" ? "MASSIVE INDEX DATA" : "ALPACA IEX"}</span><strong>{underlying} · 1 MINUTE</strong></div><div className="chart-legend"><i /> Price <i className="reference" /> {market?.referenceLabel ?? "Reference"}</div></div>
               <PriceChart bars={market?.bars ?? []} reference={market?.referencePrice ?? null} />
             </article>
             <article className="technicals-card">

@@ -12,7 +12,6 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const [marketResult, chainResult] = await Promise.allSettled([getMarketState(underlying), getOptionChain(underlying,settings)]);
   const market = marketResult.status === "fulfilled" ? marketResult.value : null;
   const contracts = chainResult.status === "fulfilled" ? chainResult.value : [];
-  if (market && underlying === "SPX") market.displayPrice = contracts.find(contract => contract.underlyingPrice != null)?.underlyingPrice ?? market.price;
   const errors = [marketResult, chainResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
   const signal = market ? generateSignal(market, contracts) : null;
   const contractsByDte = ([0,1,2] as const).flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));

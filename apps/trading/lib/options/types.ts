@@ -9,8 +9,8 @@ export interface Technicals {
   candlePattern: "bullish_engulfing" | "bearish_engulfing" | "hammer" | "shooting_star" | "none";
 }
 export interface MarketState {
-  symbol: Underlying; chartSymbol: "SPY"; asOf: number; price: number; displayPrice: number; referencePrice: number;
-  referenceLabel: "VWAP"; openingRangeHigh: number; openingRangeLow: number;
+  symbol: Underlying; chartSymbol: Underlying; asOf: number; price: number; displayPrice: number; referencePrice: number;
+  referenceLabel: "VWAP" | "SESSION MEAN"; openingRangeHigh: number; openingRangeLow: number;
   regime: "opening" | "uptrend" | "downtrend" | "range"; technicals: Technicals; bars: Bar[];
 }
 export interface Contract {
