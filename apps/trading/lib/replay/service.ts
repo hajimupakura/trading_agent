@@ -6,7 +6,10 @@ import type { Bar, Side, Underlying } from "@/lib/options/types";
 import { findReplayTriggers, summarizeTrades } from "./engine";
 import type { ReplayResult, ReplayTrade } from "./types";
 
-const BASE="https://api.massive.com"; const STRATEGY_VERSION="orb-v2.1";
+const BASE="https://api.massive.com"; const STRATEGY_VERSION="orb-v2.2-prod-exits";
+// Mirrors EXIT_RULES in apps/position-worker/src/exit-engine.ts — the deployed exit engine.
+// Keep these in lockstep so replay results describe the strategy that actually runs.
+const PROD_EXIT_RULES={stopLossPct:.30,trailActivationPct:.40,trailPct:.20,stretchActivationPct:1,stretchTrailPct:.15,noFollowThroughMs:10*60_000,followThroughPct:.10,mandatoryExitMinutes:15*60+10,sessionOpenMinutes:9*60+30} as const;
 type ReferenceContract={ticker:string;contract_type:Side;strike_price:number;expiration_date:string};
 type Quote={ask_price:number;bid_price:number;sip_timestamp:number};
 
@@ -47,12 +50,35 @@ async function inspectCandidate(contract:ReferenceContract,date:string,signalTim
   return {contract,quotes,cumulativeVolume,entry,spreadPct,eligible,reason};
 }
 
-function simulate(candidate:Awaited<ReturnType<typeof inspectCandidate>>,trigger:ReturnType<typeof findReplayTriggers>[number]):ReplayTrade{
-  const entry=candidate.entry!; const entryAsk=entry.ask_price; const stop=entryAsk*.7; const target=entryAsk*2;
-  const holdingEnd=entry.timestamp+10*60_000; const after=candidate.quotes.filter(quote=>quote.timestamp>=entry.timestamp&&quote.timestamp<=holdingEnd); let exit=after.at(-1)!; let exitReason:ReplayTrade["exitReason"]=exit.timestamp>=holdingEnd-60_000?"time":"end_of_data";
-  for(const quote of after){if(quote.bid_price<=stop){exit=quote;exitReason="stop";break;}if(quote.bid_price>=target){exit=quote;exitReason="target";break;}}
-  if(!exit) { exit=entry; exitReason="end_of_data"; }
-  const realized=after.filter(quote=>quote.timestamp<=exit.timestamp); const bids=realized.map(quote=>quote.bid_price); const mfePct=(Math.max(entryAsk,...bids)-entryAsk)/entryAsk*100; const maePct=(Math.min(entryAsk,...bids)-entryAsk)/entryAsk*100;
+async function fetchSessionQuotes(ticker:string,fromTs:number,toTs:number):Promise<Array<Quote&{timestamp:number}>>{
+  const path=`/v3/quotes/${encodeURIComponent(ticker)}?timestamp.gte=${encodeURIComponent(iso(fromTs))}&timestamp.lte=${encodeURIComponent(iso(toTs))}&sort=timestamp&order=asc&limit=50000`;
+  const payload=await massive<{results?:Quote[]}>(path);
+  return (payload.results??[]).map(q=>({...q,timestamp:Math.floor(q.sip_timestamp/1_000_000)})).filter(q=>q.ask_price>0&&q.bid_price>=0&&q.ask_price>=q.bid_price);
+}
+
+// Simulates the PRODUCTION exit engine (see PROD_EXIT_RULES) against historical quotes:
+// premium stop, two-stage trailing stop, no-follow-through, underlying invalidation
+// (underlying price approximated by the latest 1-minute bar close), mandatory 15:10 flat.
+function simulate(candidate:Awaited<ReturnType<typeof inspectCandidate>>,trigger:ReturnType<typeof findReplayTriggers>[number],quotes:Array<Quote&{timestamp:number}>,bars:Bar[],sessionStartTs:number):ReplayTrade{
+  const entry=candidate.entry!; const entryAsk=entry.ask_price;
+  const mandatoryTs=sessionStartTs+(PROD_EXIT_RULES.mandatoryExitMinutes-PROD_EXIT_RULES.sessionOpenMinutes)*60_000;
+  const barCloseAt=(ts:number)=>{let close:number|null=null;for(const bar of bars){if(bar.timestamp<=ts)close=bar.close;else break;}return close;};
+  const after=quotes.filter(quote=>quote.timestamp>entry.timestamp);
+  let peakBid=entryAsk; let exit:(Quote&{timestamp:number})|null=null; let exitReason:ReplayTrade["exitReason"]="end_of_data";
+  for(const quote of after){
+    peakBid=Math.max(peakBid,quote.bid_price);
+    if(quote.timestamp>=mandatoryTs){exit=quote;exitReason="mandatory_time_exit";break;}
+    if(quote.bid_price<=entryAsk*(1-PROD_EXIT_RULES.stopLossPct)){exit=quote;exitReason="premium_stop";break;}
+    const underlyingClose=barCloseAt(quote.timestamp);
+    if(underlyingClose!=null&&(trigger.side==="call"?underlyingClose<=trigger.openingRangeHigh:underlyingClose>=trigger.openingRangeLow)){exit=quote;exitReason="underlying_invalidation";break;}
+    const gain=peakBid/entryAsk-1;
+    const trail=gain>=PROD_EXIT_RULES.stretchActivationPct?PROD_EXIT_RULES.stretchTrailPct:gain>=PROD_EXIT_RULES.trailActivationPct?PROD_EXIT_RULES.trailPct:null;
+    if(trail!=null&&quote.bid_price<=peakBid*(1-trail)){exit=quote;exitReason="trailing_stop";break;}
+    if(quote.timestamp-entry.timestamp>=PROD_EXIT_RULES.noFollowThroughMs&&peakBid<entryAsk*(1+PROD_EXIT_RULES.followThroughPct)){exit=quote;exitReason="no_follow_through";break;}
+  }
+  if(!exit){exit=after.at(-1)??entry;exitReason="end_of_data";}
+  const realized=after.filter(quote=>quote.timestamp<=exit.timestamp); const bids=realized.length?realized.map(quote=>quote.bid_price):[entry.bid_price];
+  const mfePct=(Math.max(entryAsk,...bids)-entryAsk)/entryAsk*100; const maePct=(Math.min(entryAsk,...bids)-entryAsk)/entryAsk*100;
   const pnlDollars=(exit.bid_price-entryAsk)*100;
   return {signalTime:trigger.timestamp,action:trigger.side==="call"?"enter_call":"enter_put",contractTicker:candidate.contract.ticker,side:trigger.side,strike:candidate.contract.strike_price,entryAsk,exitBid:exit.bid_price,exitTime:exit.timestamp,exitReason,pnlDollars,returnPct:pnlDollars/entryAsk,mfePct,maePct,cumulativeVolume:candidate.cumulativeVolume,spreadPct:candidate.spreadPct!,passedRules:trigger.reasons};
 }
@@ -66,11 +92,16 @@ export async function runHistoricalReplay(input:{ownerId:string;underlying:Under
     const inspected=await Promise.all(contracts.map(contract=>inspectCandidate(contract,input.sessionDate,trigger.timestamp)));
     rawEvents.push({trigger,referenceSpot,candidates:inspected});
     const selected=inspected.filter(candidate=>candidate.eligible).sort((a,b)=>b.cumulativeVolume-a.cumulativeVolume||a.spreadPct!-b.spreadPct!)[0];
-    if(selected) trades.push(simulate(selected,trigger)); else noTradeReasons.push(`${iso(trigger.timestamp)} ${trigger.side.toUpperCase()}: no nearby contract passed ask, spread, volume, and quote-freshness rules`);
+    if(selected){
+      const sessionStartTs=bars[0]!.timestamp;
+      const mandatoryTs=sessionStartTs+(PROD_EXIT_RULES.mandatoryExitMinutes-PROD_EXIT_RULES.sessionOpenMinutes)*60_000;
+      const quotes=await fetchSessionQuotes(selected.contract.ticker,selected.entry!.timestamp,mandatoryTs+60_000);
+      trades.push(simulate(selected,trigger,quotes,bars,sessionStartTs));
+    } else noTradeReasons.push(`${iso(trigger.timestamp)} ${trigger.side.toUpperCase()}: no nearby contract passed ask, spread, volume, and quote-freshness rules`);
   }
   if(!triggers.length) noTradeReasons.push("The deterministic strategy produced no qualified opening-range trigger during this session.");
   const summary={...summarizeTrades(trades),signals:triggers.length}; const status:ReplayResult["status"]=trades.length===triggers.length?"complete":"partial";
-  const result:ReplayResult={underlying:input.underlying,sessionDate:input.sessionDate,dte:input.dte,expirationDate,strategyVersion:STRATEGY_VERSION,status,bars,trades,noTradeReasons,summary,limitations:["Historical fills use the first ask after a signal and subsequent bid quotes; commissions and exchange fees are excluded.","Candidate search is bounded to the 10 strikes nearest the underlying and at most three distinct intraday triggers.","Historical open interest and Greeks are not reconstructed; cumulative traded volume and spread are used for replay liquidity."],createdAt:new Date().toISOString()};
+  const result:ReplayResult={underlying:input.underlying,sessionDate:input.sessionDate,dte:input.dte,expirationDate,strategyVersion:STRATEGY_VERSION,status,bars,trades,noTradeReasons,summary,limitations:["Historical fills use the first ask after a signal and subsequent bid quotes; commissions and exchange fees are excluded.","Candidate search is bounded to the 10 strikes nearest the underlying and at most three distinct intraday triggers.","Historical open interest and Greeks are not reconstructed; cumulative traded volume and spread are used for replay liquidity.","Exits simulate the production engine (30% premium stop, 40%/100% two-stage trail, 10-minute no-follow-through, opening-range invalidation, 15:10 ET mandatory flat); underlying invalidation is approximated with 1-minute bar closes instead of live trades."],createdAt:new Date().toISOString()};
   const admin=createAdminClient(); const rawPath=`${input.ownerId}/${input.sessionDate}/${crypto.randomUUID()}.json.gz`;
   const {error:uploadError}=await admin.storage.from("historical-replay").upload(rawPath,gzipSync(JSON.stringify({input,bars,events:rawEvents})),{contentType:"application/gzip",upsert:false});
   if(uploadError) throw new Error(`Replay raw-data storage failed: ${uploadError.message}`);

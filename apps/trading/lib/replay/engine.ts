@@ -4,7 +4,7 @@ import type { Bar, Contract, Side, Underlying } from "@/lib/options/types";
 
 const dummy = (underlying:Underlying, side:Side):Contract => ({ ticker:`REPLAY-${side}`,underlying,expirationDate:"",dte:0,side,strike:0,exerciseStyle:"unknown",bid:1,ask:1.05,midpoint:1.025,spreadPct:4.9,quoteUpdatedAt:0,volume:1000,openInterest:1000,volumeToOpenInterest:1,impliedVolatility:null,delta:null,gamma:null,theta:null,underlyingPrice:null,liquidityScore:100,eligible:true,rejectionReasons:[] });
 
-export interface ReplayTrigger { timestamp:number; side:Side; reasons:string[]; spot:number }
+export interface ReplayTrigger { timestamp:number; side:Side; reasons:string[]; spot:number; openingRangeHigh:number; openingRangeLow:number }
 
 export function findReplayTriggers(underlying:Underlying, bars:Bar[], maximum=3):ReplayTrigger[] {
   const triggers:ReplayTrigger[]=[]; let previous:"call"|"put"|null=null;
@@ -12,7 +12,7 @@ export function findReplayTriggers(underlying:Underlying, bars:Bar[], maximum=3)
     const window=bars.slice(0,index+1); const market=marketStateAt(underlying,window);
     const signal=generateSignal(market,[dummy(underlying,"call"),dummy(underlying,"put")]);
     const side=signal.action === "enter_call" ? "call" : signal.action === "enter_put" ? "put" : null;
-    if(side && side !== previous) triggers.push({timestamp:market.asOf,side,reasons:signal.reasons.filter(reason=>!reason.startsWith("REPLAY-")),spot:market.price});
+    if(side && side !== previous) triggers.push({timestamp:market.asOf,side,reasons:signal.reasons.filter(reason=>!reason.startsWith("REPLAY-")),spot:market.price,openingRangeHigh:market.openingRangeHigh,openingRangeLow:market.openingRangeLow});
     previous=side;
     if(triggers.length>=maximum) break;
   }

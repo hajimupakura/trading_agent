@@ -1,7 +1,16 @@
 import type { Contract, MarketState, Signal } from "./types";
 
-export function generateSignal(market: MarketState, contracts: Contract[]): Signal {
+export function generateSignal(market: MarketState, contracts: Contract[], options?: { deltaTarget?: number }): Signal {
   const eligible = contracts.filter(contract => contract.eligible);
+  const deltaTarget = options?.deltaTarget ?? .45;
+  // Deliberate contract choice: nearest |delta| to the target (missing delta = worst),
+  // liquidity score breaks ties — instead of "whichever contract ranked first".
+  const pickContract = (side: Contract["side"]) => {
+    const candidates = eligible.filter(contract => contract.side === side);
+    if (!candidates.length) return null;
+    const distance = (contract: Contract) => contract.delta == null ? .5 : Math.abs(Math.abs(contract.delta) - deltaTarget);
+    return candidates.slice().sort((a, b) => distance(a) - distance(b) || b.liquidityScore - a.liquidityScore)[0];
+  };
   const summary = (({ bars: _, ...value }) => value)(market);
   const technicals = market.technicals; const latestBars = market.bars.slice(-2);
   const twoClosesAbove = latestBars.length === 2 && latestBars.every(bar => bar.close > market.openingRangeHigh && bar.close > market.referencePrice);
@@ -10,7 +19,7 @@ export function generateSignal(market: MarketState, contracts: Contract[]): Sign
   const participationConfirmed = market.symbol === "SPX" ? true : technicals.volumeConfirmation === true;
   const callMomentum = technicals.rsi14 != null && technicals.rsi14 >= 52 && technicals.rsi14 <= 72 && technicals.macd != null && technicals.macdSignal != null && technicals.macd > technicals.macdSignal && technicals.vwapSlope != null && technicals.vwapSlope > 0 && participationConfirmed && breakoutControlled && !["bearish_engulfing","shooting_star"].includes(technicals.candlePattern);
   const putMomentum = technicals.rsi14 != null && technicals.rsi14 <= 48 && technicals.rsi14 >= 28 && technicals.macd != null && technicals.macdSignal != null && technicals.macd < technicals.macdSignal && technicals.vwapSlope != null && technicals.vwapSlope < 0 && participationConfirmed && breakoutControlled && !["bullish_engulfing","hammer"].includes(technicals.candlePattern);
-  const call = eligible.find(contract => contract.side === "call") ?? null; const put = eligible.find(contract => contract.side === "put") ?? null;
+  const call = pickContract("call"); const put = pickContract("put");
   let action: Signal["action"] = eligible.length ? "watch" : "no_trade"; let contract = eligible[0] ?? null; let invalidation: string | null = null; const reasons: string[] = [];
   if (market.regime === "uptrend" && twoClosesAbove && callMomentum && call) {
     action = "enter_call"; contract = call; invalidation = `${market.chartSymbol} below ${market.referenceLabel} ${market.referencePrice.toFixed(2)} or OR high ${market.openingRangeHigh.toFixed(2)}`;

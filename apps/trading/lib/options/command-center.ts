@@ -14,7 +14,7 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const contracts = chainResult.status === "fulfilled" ? chainResult.value : [];
   const spotPrice=market?.displayPrice??contracts.find(contract=>contract.underlyingPrice!=null)?.underlyingPrice??null;
   const errors = [marketResult, chainResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
-  const signal = market ? generateSignal(market, contracts) : null;
+  const signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget }) : null;
   const contractsByDte = ([0,1,2] as const).flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
   const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:contractsByDte, signal, errors };
   const admin = createAdminClient();

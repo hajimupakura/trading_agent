@@ -76,5 +76,17 @@ async function accessToken(userId:string){const row=await connection(userId);if(
 function parseMcp(text:string){if(!text.trim())return null;if(text.trim().startsWith("{"))return JSON.parse(text);const data=text.split(/\r?\n/).filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trim()).filter(Boolean).at(-1);return data?JSON.parse(data):null;}
 async function rpc(token:string,body:unknown,sessionId?:string){const response=await fetch(MCP_URL,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",Accept:"application/json, text/event-stream",...(sessionId?{"Mcp-Session-Id":sessionId}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(15_000)});const text=await response.text();if(!response.ok)throw new Error(`Robinhood MCP failed (${response.status})`);const payload=parseMcp(text);if(payload?.error)throw new Error(payload.error.message??"Robinhood MCP error");return {payload,sessionId:response.headers.get("mcp-session-id")??sessionId};}
 export async function listRobinhoodTools(userId:string){const token=await accessToken(userId);const initialized=await rpc(token,{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"velocity-options-desk",version:"1.0.0"}}});await rpc(token,{jsonrpc:"2.0",method:"notifications/initialized"},initialized.sessionId);const listed=await rpc(token,{jsonrpc:"2.0",id:2,method:"tools/list",params:{}},initialized.sessionId);const tools=(listed.payload?.result?.tools??[]) as Array<{name:string;description?:string;inputSchema?:Record<string,unknown>}>;const {error}=await createAdminClient().from("broker_connections").update({capabilities:{tools:tools.map(tool=>({name:tool.name,description:tool.description??null,inputSchema:tool.inputSchema??{}})),discoveredAt:new Date().toISOString()},last_error:null,updated_at:new Date().toISOString()}).eq("user_id",userId).eq("broker","robinhood");if(error)throw error;return tools;}
+// Execution groundwork: invoke a Robinhood MCP tool (e.g. review_option_order, place_option_order).
+// NOT yet routed from any order flow — live Robinhood execution stays disabled until exits are
+// managed for Robinhood positions the same way the position worker manages Alpaca ones.
+export async function callRobinhoodTool(userId:string,name:string,args:Record<string,unknown>){
+  const token=await accessToken(userId);
+  const initialized=await rpc(token,{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"velocity-options-desk",version:"1.0.0"}}});
+  await rpc(token,{jsonrpc:"2.0",method:"notifications/initialized"},initialized.sessionId);
+  const result=await rpc(token,{jsonrpc:"2.0",id:2,method:"tools/call",params:{name,arguments:args}},initialized.sessionId);
+  const payload=result.payload?.result as {isError?:boolean;content?:unknown}|undefined;
+  if(payload?.isError)throw new Error(`Robinhood tool ${name} failed: ${JSON.stringify(payload.content??payload)}`);
+  return payload;
+}
 export async function robinhoodConnectionStatus(userId:string){const row=await connection(userId);if(!row)return {connected:false as const};return {connected:row.status==="connected",status:row.status,expiresAt:row.token_expires_at};}
 export async function disconnectRobinhood(userId:string){const {error}=await createAdminClient().from("broker_connections").delete().eq("user_id",userId).eq("broker","robinhood");if(error)throw error;}

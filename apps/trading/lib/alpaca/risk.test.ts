@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { validatePaperEntry } from "./risk";
+import { computePositionSize, validatePaperEntry } from "./risk";
+import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 import type { Contract, Signal } from "@/lib/options/types";
 
 const contract = { ticker:"O:SPY260806C00770000", underlying:"SPY", expirationDate:"2026-08-06", dte:0, side:"call", strike:770, exerciseStyle:"american", bid:7.7, ask:8, midpoint:7.85, spreadPct:3.8, quoteUpdatedAt:Date.now(), volume:5000, openInterest:2000, volumeToOpenInterest:2.5, impliedVolatility:.2, delta:.5, gamma:.1, theta:-.3, underlyingPrice:770, liquidityScore:90, eligible:true, rejectionReasons:[] } satisfies Contract;
@@ -25,5 +26,25 @@ describe("paper-entry risk gate", () => {
     const result = validatePaperEntry({ signal, contract, account, positions:[], orders:[], tradesToday:0, now:new Date("2026-08-06T19:00:00.000Z") });
     expect(result.errors).toContain("Current time is outside the configured ET entry window");
   });
-  it("enforces a tighter saved debit limit",()=>{const result=validatePaperEntry({signal,contract,account,positions:[],orders:[],tradesToday:0,now:inWindow,settings:{maxOptionAsk:8,maxTradeDebit:500,maxDailyLoss:500,maxTradesPerDay:3,allowedUnderlyings:["SPY","SPX"],allowedDte:[0,1,2],minContractVolume:100,maxSpreadPct:10,maxOpenPositions:1,entryStartMinutes:585,entryEndMinutes:885,paperTradingEnabled:true,aiReviewEnabled:false}});expect(result.errors).toContain("Full option debit exceeds the $500 per-trade limit");});
+  it("enforces a tighter saved debit limit",()=>{const result=validatePaperEntry({signal,contract,account,positions:[],orders:[],tradesToday:0,now:inWindow,settings:{maxOptionAsk:8,maxTradeDebit:500,maxDailyLoss:500,maxTradesPerDay:3,allowedUnderlyings:["SPY","SPX"],allowedDte:[0,1,2],minContractVolume:100,maxSpreadPct:10,maxOpenPositions:1,entryStartMinutes:585,entryEndMinutes:885,paperTradingEnabled:true,aiReviewEnabled:false,riskPerTradePct:.005,maxContractsPerTrade:5,deltaTarget:.45}});expect(result.errors).toContain("Total debit (1 contract) exceeds the $500 per-trade limit");});
+});
+
+describe("position sizing", () => {
+  it("sizes by risk budget then applies the tightest debit cap", () => {
+    // $2 ask: risk budget $500 (0.5% of $100k), $60 risk/contract -> 8 by risk,
+    // but $800 trade cap -> 4 and 1% equity cap -> 5; tightest wins.
+    expect(computePositionSize({ ask:2, equity:100_000, optionsBuyingPower:100_000, settings:DEFAULT_RISK_SETTINGS })).toBe(4);
+  });
+  it("caps at maxContractsPerTrade for cheap contracts", () => {
+    expect(computePositionSize({ ask:.2, equity:100_000, optionsBuyingPower:100_000, settings:DEFAULT_RISK_SETTINGS })).toBe(5);
+  });
+  it("never sizes below one contract", () => {
+    expect(computePositionSize({ ask:8, equity:1_000, optionsBuyingPower:100, settings:DEFAULT_RISK_SETTINGS })).toBe(1);
+  });
+  it("multi-contract debit is validated in total", () => {
+    const cheap = { ...contract, ask:5, bid:4.8, midpoint:4.9 };
+    const result = validatePaperEntry({ signal, contract:cheap, account, positions:[], orders:[], tradesToday:0, now:inWindow, quantity:2 });
+    expect(result.debit).toBe(1000);
+    expect(result.errors).toContain("Total debit (2 contracts) exceeds the $800 per-trade limit");
+  });
 });

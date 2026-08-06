@@ -41,9 +41,9 @@ export async function getPaperTradingState() {
   return { account, positions:positions.filter(position => position.asset_class === "us_option"), orders };
 }
 
-export async function submitPaperOptionOrder(input: { symbol:string; limitPrice:number; clientOrderId:string }) {
+export async function submitPaperOptionOrder(input: { symbol:string; limitPrice:number; clientOrderId:string; quantity:number }) {
   return alpaca<AlpacaOrder>("/v2/orders", { method:"POST", body:JSON.stringify({
-    symbol:optionSymbolForAlpaca(input.symbol), qty:"1", side:"buy", type:"limit", time_in_force:"day",
+    symbol:optionSymbolForAlpaca(input.symbol), qty:String(Math.max(1,Math.floor(input.quantity))), side:"buy", type:"limit", time_in_force:"day",
     limit_price:input.limitPrice.toFixed(2), client_order_id:input.clientOrderId, position_intent:"buy_to_open",
   }) });
 }

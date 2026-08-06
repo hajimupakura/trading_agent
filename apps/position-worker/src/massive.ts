@@ -35,6 +35,16 @@ export class MassiveQuoteStream {
   }
 }
 
+export async function getSpxPrice():Promise<number|null> {
+  const date = new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});
+  const url = new URL(`https://api.massive.com/v2/aggs/ticker/${encodeURIComponent("I:SPX")}/range/1/minute/${date}/${date}`);
+  url.searchParams.set("apiKey",config.MASSIVE_API_KEY); url.searchParams.set("sort","desc"); url.searchParams.set("limit","1");
+  const response = await fetch(url,{signal:AbortSignal.timeout(8000)}); if (!response.ok) return null;
+  const payload = await response.json() as {results?:Array<{c:number}>};
+  const price = Number(payload.results?.[0]?.c);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 export async function getSnapshotQuote(underlying:"SPY"|"SPX",ticker:string):Promise<OptionQuote|null> {
   const url = new URL(`https://api.massive.com/v3/snapshot/options/${underlying}/${encodeURIComponent(ticker)}`); url.searchParams.set("apiKey",config.MASSIVE_API_KEY);
   const response = await fetch(url,{signal:AbortSignal.timeout(8000)}); if (!response.ok) return null;

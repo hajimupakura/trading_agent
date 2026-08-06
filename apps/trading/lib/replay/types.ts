@@ -2,7 +2,7 @@ import type { Bar, Side, Underlying } from "@/lib/options/types";
 
 export interface ReplayTrade {
   signalTime:number; action:"enter_call"|"enter_put"; contractTicker:string; side:Side; strike:number;
-  entryAsk:number; exitBid:number; exitTime:number; exitReason:"stop"|"target"|"time"|"end_of_data";
+  entryAsk:number; exitBid:number; exitTime:number; exitReason:"mandatory_time_exit"|"premium_stop"|"underlying_invalidation"|"trailing_stop"|"no_follow_through"|"end_of_data";
   pnlDollars:number; returnPct:number; mfePct:number; maePct:number; cumulativeVolume:number; spreadPct:number;
   passedRules:string[];
 }
