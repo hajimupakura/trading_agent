@@ -18,7 +18,7 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<Com
   const shortContracts = shortResult.status === "fulfilled" ? shortResult.value : [];
   const longContracts = longResult.status === "fulfilled" ? longResult.value : [];
   const contractsByDte = ([0,1,2] as const).flatMap(dte => shortContracts.filter(contract => contract.dte === dte).slice(0,40));
-  const contracts = [...contractsByDte, ...longContracts.slice(0, 400)];
+  const contracts = [...contractsByDte, ...longContracts];
   const spotPrice = market?.displayPrice ?? contracts.find(contract => contract.underlyingPrice != null)?.underlyingPrice ?? null;
   const errors = [marketResult, shortResult, longResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
   const snapshot: CommandCenter = { configured:true, asOf:Date.now(), market, spotPrice, contracts, signal:null, errors };

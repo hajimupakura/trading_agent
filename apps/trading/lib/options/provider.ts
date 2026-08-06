@@ -134,7 +134,8 @@ export async function getHorizonChains(underlying: Underlying, horizons: Array<"
       }
       next = payload.next_url;
     }
-    return rankContracts(rows, settings, { monitorOnly:true });
+    // Cap per expiration bucket so one horizon cannot starve the others downstream.
+    return rankContracts(rows, settings, { monitorOnly:true }).slice(0, 80);
   }));
   return buckets.flat();
 }
