@@ -41,7 +41,7 @@ interface PaperState {
   account?:{ equity:string; buying_power:string; options_buying_power:string; status:string };
   positions?:unknown[]; orders?:unknown[];
 }
-interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; error?:string }
+interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; brokerPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; unmanagedPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; error?:string }
 interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;read_at:string|null;created_at:string}
 interface AlertState{alerts:AlertItem[];unread:number}
 
@@ -176,7 +176,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div><span>OPEN POSITIONS / ORDERS</span><strong>{paper?.positions?.length ?? 0} / {paper?.orders?.length ?? 0}</strong></div>
             <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
           </section>
-          <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"KILL SWITCH ACTIVE":manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed positions</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume paper exits":"Emergency stop"}</button></section>
+          <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"KILL SWITCH ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume paper exits":"Emergency stop"}</button></section>
 
           <section className="market-grid">
             <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice)}`} detail={`${market?.regime ?? "waiting"} regime${underlying === "SPX" ? " · SPY proxy" : ""}`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
