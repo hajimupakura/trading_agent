@@ -5,7 +5,7 @@ export type WatchUnderlying = typeof WATCH_UNDERLYINGS[number];
 export type Underlying = TradeUnderlying | WatchUnderlying;
 export type Side = "call" | "put";
 // Long-dated monitoring horizons and their target days-to-expiry.
-export const LONG_HORIZONS = { "3M": 91, "6M": 182, "9M": 273, "1Y": 365 } as const;
+export const LONG_HORIZONS = { "1M": 30, "3M": 91, "6M": 182, "9M": 273, "1Y": 365 } as const;
 export type LongHorizon = keyof typeof LONG_HORIZONS;
 
 export interface Bar { timestamp: number; open: number; high: number; low: number; close: number; volume: number; vwap: number | null }

@@ -105,7 +105,8 @@ export async function getHorizonChains(underlying: Underlying, horizons: Array<"
   const today = dateEt();
   const expirations = await Promise.all(horizons.map(async horizon => {
     const targetDays = horizon === "NEAR" ? 0 : LONG_HORIZONS[horizon];
-    const floor = horizon === "NEAR" ? today : addDays(today, Math.max(0, targetDays - 21));
+    // Floor scales with the horizon so a short target (1M) can't resolve to a near-week expiry.
+    const floor = horizon === "NEAR" ? today : addDays(today, Math.max(0, targetDays - Math.min(21, Math.round(targetDays / 3))));
     const payload = await massive<{ results?: Array<{ expiration_date?: string }> }>(
       `/v3/reference/options/contracts?underlying_ticker=${encodeURIComponent(underlying)}&expiration_date.gte=${floor}&limit=1&sort=expiration_date&order=asc`,
     ).catch(() => null);
@@ -138,7 +139,7 @@ export async function getHorizonChains(underlying: Underlying, horizons: Array<"
   return buckets.flat();
 }
 
-export async function getOptionChain(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<Contract[]> {
+export async function getOptionChain(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS,options?:{monitorOnly?:boolean}): Promise<Contract[]> {
   const today = dateEt();
   const buckets = await Promise.all([0,1,2].map(async dte => {
     const expiration = addDays(today,dte); const rows: Parameters<typeof rankContracts>[0] = [];
@@ -162,5 +163,5 @@ export async function getOptionChain(underlying: Underlying,settings:RiskSetting
     return rows;
   }));
   const raw=buckets.flat();
-  return rankContracts(raw,settings);
+  return rankContracts(raw,settings,{monitorOnly:options?.monitorOnly});
 }

@@ -60,13 +60,11 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
-  type HorizonTab = 0|1|2|"NEAR"|"3M"|"6M"|"9M"|"1Y";
-  const isWatch = (WATCH_UNDERLYINGS as readonly string[]).includes(underlying);
+  type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
-  useEffect(() => { setSelectedHorizon(current => isWatch ? (typeof current === "number" ? "NEAR" : current) : current === "NEAR" ? 0 : current); }, [isWatch]);
-  const horizonRange = (tab: HorizonTab): [number, number] => tab === 0 ? [0,0] : tab === 1 ? [1,1] : tab === 2 ? [2,2] : tab === "NEAR" ? [0,7] : tab === "3M" ? [8,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
+  const horizonRange = (tab: HorizonTab): [number, number] => tab === 0 ? [0,0] : tab === 1 ? [1,1] : tab === 2 ? [2,2] : tab === "1M" ? [3,59] : tab === "3M" ? [60,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
   const horizonLabel = (tab: HorizonTab) => typeof tab === "number" ? `${tab}DTE` : tab;
-  const horizonTabs: HorizonTab[] = isWatch ? ["NEAR","3M","6M","9M","1Y"] : [0,1,2,"3M","6M","9M","1Y"];
+  const horizonTabs: HorizonTab[] = [0,1,2,"1M","3M","6M","9M","1Y"];
 
   const refreshPaper = useCallback(async () => {
     const [paperResponse,managerResponse,alertResponse,robinhoodResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"}),fetch("/api/brokers/robinhood/status",{cache:"no-store"})]);

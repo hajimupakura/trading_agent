@@ -36,7 +36,7 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   // NEVER passed to generateSignal — the 0-2 DTE strategy stays untouched.
   let longContracts:typeof contracts = [];
   if (options?.includeLongHorizons) {
-    const [longResult] = await Promise.allSettled([getHorizonChains(underlying,["3M","6M","9M","1Y"],settings)]);
+    const [longResult] = await Promise.allSettled([getHorizonChains(underlying,["1M","3M","6M","9M","1Y"],settings)]);
     if (longResult.status === "fulfilled") longContracts = longResult.value; else errors.push(`Long-horizon chain: ${String(longResult.reason)}`);
   } else {
     const { data:previous } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying",underlying).maybeSingle();
