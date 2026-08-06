@@ -2,6 +2,8 @@ import "server-only";
 import { calculateTechnicals } from "./indicators";
 import { rankContracts } from "./ranker";
 import type { Bar, Contract, MarketState, Side, Underlying } from "./types";
+import type { RiskSettings } from "@/lib/settings/config";
+import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 
 const BASE = "https://api.massive.com";
 const ALPACA_BASE = "https://data.alpaca.markets";
@@ -63,7 +65,7 @@ export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
   return bars;
 }
 
-export async function getOptionChain(underlying: Underlying): Promise<Contract[]> {
+export async function getOptionChain(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<Contract[]> {
   const today = dateEt();
   const buckets = await Promise.all([0,1,2].map(async dte => {
     const expiration = addDays(today,dte); const rows: Parameters<typeof rankContracts>[0] = [];
@@ -87,5 +89,5 @@ export async function getOptionChain(underlying: Underlying): Promise<Contract[]
     return rows;
   }));
   const raw=buckets.flat();
-  return rankContracts(raw);
+  return rankContracts(raw,settings);
 }

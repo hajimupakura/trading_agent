@@ -15,6 +15,7 @@ import {
   TrendingUp,
   Zap,
   LineChart,
+  Settings,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
@@ -33,6 +34,7 @@ const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFra
 
 interface PaperState {
   configured:boolean; mode:"paper"; error?:string;
+  rules?:{maxTradeDebit:number;maxDailyLoss:number};
   account?:{ equity:string; buying_power:string; options_buying_power:string; status:string };
   positions?:unknown[]; orders?:unknown[];
 }
@@ -120,6 +122,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           <span className="nav-item"><Crosshair size={16} /> Setups <em>Live</em></span>
           <Link className="nav-item" href="/dashboard/replay"><Activity size={16} /> Replay lab <em>Ready</em></Link>
           <Link className="nav-item" href="/dashboard/analytics"><LineChart size={16} /> Analytics</Link>
+          <Link className="nav-item" href="/dashboard/settings"><Settings size={16} /> Risk settings</Link>
           <span className="nav-item"><BrainCircuit size={16} /> AI review <small>Soon</small></span>
         </nav>
           <div className="sidebar-note">
@@ -160,8 +163,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
 
           <section className="paper-strip">
             <div><span>PAPER EQUITY</span><strong>${money(Number(paper?.account?.equity))}</strong></div>
-            <div><span>DAILY LOSS LIMIT</span><strong>$1,000</strong></div>
-            <div><span>MAX CONTRACT DEBIT</span><strong>$800</strong></div>
+            <div><span>DAILY LOSS LIMIT</span><strong>${money(paper?.rules?.maxDailyLoss,0)}</strong></div>
+            <div><span>MAX CONTRACT DEBIT</span><strong>${money(paper?.rules?.maxTradeDebit,0)}</strong></div>
             <div><span>OPEN POSITIONS / ORDERS</span><strong>{paper?.positions?.length ?? 0} / {paper?.orders?.length ?? 0}</strong></div>
             <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
           </section>

@@ -3,10 +3,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getMarketState, getOptionChain } from "./provider";
 import { generateSignal } from "./signal";
 import type { CommandCenter, Underlying } from "./types";
+import type { RiskSettings } from "@/lib/settings/config";
+import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 
-export async function refreshCommandCenter(underlying: Underlying): Promise<CommandCenter> {
+export async function refreshCommandCenter(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<CommandCenter> {
   if (!process.env.MASSIVE_API_KEY) return { configured:false, asOf:Date.now(), market:null, contracts:[], signal:null, errors:["MASSIVE_API_KEY is not configured"] };
-  const [marketResult, chainResult] = await Promise.allSettled([getMarketState(underlying), getOptionChain(underlying)]);
+  if(!settings.allowedUnderlyings.includes(underlying))return {configured:true,asOf:Date.now(),market:null,contracts:[],signal:null,errors:[`${underlying} is disabled in risk settings`]};
+  const [marketResult, chainResult] = await Promise.allSettled([getMarketState(underlying), getOptionChain(underlying,settings)]);
   const market = marketResult.status === "fulfilled" ? marketResult.value : null;
   const contracts = chainResult.status === "fulfilled" ? chainResult.value : [];
   if (market && underlying === "SPX") market.displayPrice = contracts.find(contract => contract.underlyingPrice != null)?.underlyingPrice ?? market.price;

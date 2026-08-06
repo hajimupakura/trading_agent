@@ -11,18 +11,19 @@ describe("paper-entry risk gate", () => {
   it("allows one $800 contract in a flat $100k paper account", () => {
     expect(validatePaperEntry({ signal, contract, account, positions:[], orders:[], tradesToday:0, now:inWindow }).allowed).toBe(true);
   });
-  it("blocks the entry after a one-percent daily loss", () => {
+  it("blocks the entry after the configured absolute daily loss", () => {
     const result = validatePaperEntry({ signal, contract, account:{ ...account, equity:"99000" }, positions:[], orders:[], tradesToday:0, now:inWindow });
-    expect(result.errors).toContain("Daily loss limit has been reached");
+    expect(result.errors).toContain("Daily loss limit of $500 has been reached");
   });
   it("blocks a fourth entry and any concurrent option position", () => {
     const position = { symbol:"SPY260806C00770000", asset_class:"us_option", qty:"1", market_value:"800", cost_basis:"800", unrealized_pl:"0", unrealized_plpc:"0" };
     const result = validatePaperEntry({ signal, contract, account, positions:[position], orders:[], tradesToday:3, now:inWindow });
-    expect(result.errors).toContain("Maximum three entries per day reached");
-    expect(result.errors).toContain("An option position is already open");
+    expect(result.errors).toContain("Maximum 3 entries per day reached");
+    expect(result.errors).toContain("Maximum 1 open option positions reached");
   });
   it("blocks entries outside the approved time window", () => {
     const result = validatePaperEntry({ signal, contract, account, positions:[], orders:[], tradesToday:0, now:new Date("2026-08-06T19:00:00.000Z") });
-    expect(result.errors).toContain("Entries are limited to 9:45 a.m.–2:45 p.m. ET");
+    expect(result.errors).toContain("Current time is outside the configured ET entry window");
   });
+  it("enforces a tighter saved debit limit",()=>{const result=validatePaperEntry({signal,contract,account,positions:[],orders:[],tradesToday:0,now:inWindow,settings:{maxOptionAsk:8,maxTradeDebit:500,maxDailyLoss:500,maxTradesPerDay:3,allowedUnderlyings:["SPY","SPX"],allowedDte:[0,1,2],minContractVolume:100,maxSpreadPct:10,maxOpenPositions:1,entryStartMinutes:585,entryEndMinutes:885,paperTradingEnabled:true,aiReviewEnabled:false}});expect(result.errors).toContain("Full option debit exceeds the $500 per-trade limit");});
 });
