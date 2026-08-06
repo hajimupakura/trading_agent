@@ -43,6 +43,26 @@ export async function getMarketState(underlying: Underlying): Promise<MarketStat
   const regime = bars.length < 15 ? "opening" : current.close > referencePrice && technicals.ema8 > technicals.ema21 ? "uptrend" : current.close < referencePrice && technicals.ema8 < technicals.ema21 ? "downtrend" : "range";
   return { symbol:underlying, chartSymbol:"SPY", asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
 }
+
+export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
+  const start = date; const end = addDays(date, 1);
+  const url = new URL(`${ALPACA_BASE}/v2/stocks/SPY/bars`);
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", start); url.searchParams.set("end", end);
+  url.searchParams.set("feed", "iex"); url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
+  const response = await fetch(url, { headers:{ "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret }, cache:"no-store", signal:AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`Alpaca historical SPY bars ${response.status}`);
+  const payload = await response.json() as { bars?: Array<{ t:string;o:number;h:number;l:number;c:number;v?:number;vw?:number }> };
+  const bars = (payload.bars ?? []).filter(item=>{
+    const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(item.t));
+    const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);
+    return minutes>=570&&minutes<960;
+  }).map(item => ({ timestamp:Date.parse(item.t), open:item.o, high:item.h, low:item.l, close:item.c, volume:item.v ?? 0, vwap:item.vw ?? null }));
+  if (bars.length < 35) throw new Error("Not enough historical SPY bars for a deterministic replay");
+  return bars;
+}
+
 export async function getOptionChain(underlying: Underlying): Promise<Contract[]> {
   const today = dateEt();
   const buckets = await Promise.all([0,1,2].map(async dte => {

@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
 import { logout } from "@/app/login/actions";
+import Link from "next/link";
 
 const money = (value: number | null | undefined, digits = 2) =>
   value == null || !Number.isFinite(value)
@@ -114,9 +115,9 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
         <div className="brand-mark"><Zap size={17} fill="currentColor" /> VELOCITY</div>
         <div className="desk-label">OPTIONS DESK</div>
         <nav className="desk-nav" aria-label="Trading workspace">
-          <span className="nav-item active"><BarChart3 size={16} /> Command center</span>
+          <Link className="nav-item active" href="/dashboard"><BarChart3 size={16} /> Command center</Link>
           <span className="nav-item"><Crosshair size={16} /> Setups <em>Live</em></span>
-          <span className="nav-item"><Activity size={16} /> Replay lab <small>Soon</small></span>
+          <Link className="nav-item" href="/dashboard/replay"><Activity size={16} /> Replay lab <em>Ready</em></Link>
           <span className="nav-item"><BrainCircuit size={16} /> AI review <small>Soon</small></span>
         </nav>
           <div className="sidebar-note">
