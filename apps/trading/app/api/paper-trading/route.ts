@@ -35,6 +35,9 @@ export async function POST(request:Request) {
   if (!user) return Response.json({ error:"Unauthorized" }, { status:401 });
   const parsed = requestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error:"Invalid order approval" }, { status:400 });
+  if (parsed.data.underlying === "SPX") {
+    return Response.json({ error:"Alpaca retail accounts do not currently support SPX index-option execution. SPX remains analysis-only; use SPY for paper automation." }, { status:422 });
+  }
   try {
     const [scan, trading, tradesToday] = await Promise.all([refreshCommandCenter(parsed.data.underlying), getPaperTradingState(), entriesToday()]);
     const signal = scan.signal;

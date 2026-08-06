@@ -34,6 +34,7 @@ interface PaperState {
   account?:{ equity:string; buying_power:string; options_buying_power:string; status:string };
   positions?:unknown[]; orders?:unknown[];
 }
+interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; error?:string }
 
 export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [underlying, setUnderlying] = useState<Underlying>("SPY");
@@ -41,15 +42,19 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [loading, setLoading] = useState(true);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [paper, setPaper] = useState<PaperState | null>(null);
+  const [manager, setManager] = useState<ManagerState | null>(null);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
 
   const refreshPaper = useCallback(async () => {
-    const response = await fetch("/api/paper-trading", { cache:"no-store" });
-    const payload = await response.json();
-    setPaper(payload);
+    const [paperResponse,managerResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"})]);
+    setPaper(await paperResponse.json()); setManager(await managerResponse.json());
   }, []);
+  const setKillSwitch = useCallback(async (killSwitch:boolean) => {
+    const response=await fetch("/api/position-manager",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({killSwitch})});
+    const payload=await response.json(); if(!response.ok){setOrderMessage({tone:"error",text:payload.error??"Control update failed"});return;} setManager(payload);
+  },[]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -150,6 +155,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div><span>OPEN POSITIONS / ORDERS</span><strong>{paper?.positions?.length ?? 0} / {paper?.orders?.length ?? 0}</strong></div>
             <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
           </section>
+          <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"KILL SWITCH ACTIVE":manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed positions</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume paper exits":"Emergency stop"}</button></section>
 
           <section className="market-grid">
             <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice)}`} detail={`${market?.regime ?? "waiting"} regime${underlying === "SPX" ? " · SPY proxy" : ""}`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
@@ -178,7 +184,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <article className="contract-card">
               <div className="card-heading"><span>BEST EXECUTABLE CONTRACT</span><span className="price-cap">ASK ≤ $8.00</span></div>
               {signal?.contract ? <><ContractSpotlight contract={signal.contract} />
-                <button className="approve-button" disabled={!signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
+                <button className="approve-button" disabled={underlying === "SPX" || !signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{underlying === "SPX" ? "SPX analysis only" : signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
               </> : (
                 <div className="empty-contract"><Clock3 size={26} /><strong>No contract selected</strong><span>The scanner is waiting for directional confirmation and executable liquidity.</span></div>
               )}
@@ -220,7 +226,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
         <div className="approval-icon"><ShieldCheck size={21}/></div><p className="eyebrow">ALPACA PAPER · BUY TO OPEN</p><h2 id="approval-title">Approve one contract?</h2>
         <div className="approval-symbol"><strong>{signal.contract.ticker}</strong><span>{signal.contract.side.toUpperCase()} · {signal.contract.dte} DTE · {signal.contract.strike} strike</span></div>
         <div className="approval-grid"><div><span>LIMIT PRICE</span><strong>${money(signal.contract.ask)}</strong></div><div><span>MAXIMUM DEBIT</span><strong>${money(signal.contract.ask * 100, 0)}</strong></div><div><span>PLANNED 30% STOP</span><strong>≈ ${money(signal.contract.ask * 30, 0)}</strong></div><div><span>QUANTITY</span><strong>1</strong></div></div>
-        <p className="approval-warning">The server will rescan the market and re-check the 1% debit limit, $1,000 daily limit, trading window, open positions and duplicate orders before submission. Exit automation is not enabled in approval mode; this position must be closed manually in Alpaca.</p>
+        <p className="approval-warning">The server will rescan the market and re-check the 1% debit limit, $1,000 daily limit, trading window, open positions and duplicate orders before submission. The Railway manager handles exits only when it is online and enabled; otherwise close the position manually in Alpaca.</p>
         {orderMessage?.tone === "error" ? <div className="auth-alert error">{orderMessage.text}</div> : null}
         <div className="approval-actions"><button className="cancel-button" onClick={() => setApprovalOpen(false)} disabled={submitting}>Cancel</button><button className="confirm-button" onClick={() => void approveOrder()} disabled={submitting}>{submitting ? "Checking risk…" : "Approve paper order"}</button></div>
       </section></div> : null}
