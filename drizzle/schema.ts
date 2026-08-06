@@ -302,3 +302,28 @@ export const agentConfig = mysqlTable("agent_config", {
 
 export type AgentConfig = typeof agentConfig.$inferSelect;
 export type InsertAgentConfig = typeof agentConfig.$inferInsert;
+
+/**
+ * Immutable research journal for SPX/SPY 0-2 DTE signals.
+ * Stores the full feature snapshot so every hypothesis can be replayed later.
+ */
+export const optionSignals = mysqlTable("option_signals", {
+  id: int("id").autoincrement().primaryKey(),
+  signalId: varchar("signal_id", { length: 32 }).notNull().unique(),
+  underlying: mysqlEnum("underlying", ["SPY", "SPX"]).notNull(),
+  action: mysqlEnum("action", ["watch", "enter_call", "enter_put", "no_trade"]).notNull(),
+  setup: mysqlEnum("setup", ["opening_range", "vwap_trend", "none"]).notNull(),
+  confidence: int("confidence").notNull(),
+  contractTicker: varchar("contract_ticker", { length: 64 }),
+  fingerprint: varchar("fingerprint", { length: 256 }).notNull(),
+  marketSnapshot: text("market_snapshot").notNull(),
+  contractSnapshot: text("contract_snapshot"),
+  reasons: text("reasons").notNull(),
+  invalidation: text("invalidation"),
+  aiReview: text("ai_review"),
+  generatedAt: timestamp("generated_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type OptionSignalRecord = typeof optionSignals.$inferSelect;
+export type InsertOptionSignalRecord = typeof optionSignals.$inferInsert;

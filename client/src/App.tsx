@@ -2,21 +2,24 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
+import { lazy, Suspense } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Home from "./pages/Home";
-import DashboardV2 from "./pages/DashboardV2";
-import Dashboard from "./pages/Dashboard";
-import DashboardEnhanced from "./pages/DashboardEnhanced";
-import DashboardPro from "./pages/DashboardPro";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import OptionsCommandCenter from "./pages/OptionsCommandCenter";
+
+const Home = lazy(() => import("./pages/Home"));
+const DashboardV2 = lazy(() => import("./pages/DashboardV2"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const DashboardPro = lazy(() => import("./pages/DashboardPro"));
 
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={DashboardPro} />
+      <Route path="/" component={OptionsCommandCenter} />
+      <Route path="/legacy" component={DashboardPro} />
       <Route path="/login" component={Login} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
@@ -43,7 +46,9 @@ function App() {
       >
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <Suspense fallback={<div className="min-h-screen grid place-items-center text-sm text-muted-foreground">Loading…</div>}>
+            <Router />
+          </Suspense>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

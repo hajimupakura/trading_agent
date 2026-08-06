@@ -1,4 +1,37 @@
-# AI Trading Agent
+# SPX / SPY Options Research Command Center
+
+The primary interface is a paper-only 0–2 DTE SPX/SPY research system. It monitors each underlying's own one-minute chart, filters the option chain for executable contracts, and ranks eligible contracts with volume as the largest component. It does not place live orders.
+
+## Current decision flow
+
+1. Load SPY stock bars or the `I:SPX` index bars from Massive.
+2. Require a confirmed 15-minute opening-range break aligned with trend.
+3. Reject contracts outside 0–2 DTE, one-sided quotes, spreads above 12%, volume below 25, premiums below $0.10, or asks above $8.00 (about $800 per standard contract).
+4. Rank the remainder by volume (40%), spread quality (20%), volume/open-interest flow (18%), open interest (12%), and delta proximity (10%).
+5. Display the top call or put for the confirmed direction, plus its exact invalidation.
+
+AI is not required and is off by default. With `AI_OPTIONS_REVIEW_ENABLED=true`, it only adds a structured confirm/reject/caution critique after the deterministic engine selects a candidate. It cannot select a different ticker or override the controls.
+
+## Supabase and Vercel
+
+Apply [the Supabase migration](supabase/migrations/20260806040123_create_options_research_tables.sql), then configure these server-side Vercel variables:
+
+```env
+MASSIVE_API_KEY=...
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+JWT_SECRET=...
+CRON_SECRET=...
+AI_OPTIONS_REVIEW_ENABLED=false
+```
+
+Never expose `SUPABASE_SECRET_KEY` through a `VITE_` variable. The options tables have RLS enabled and are intentionally server-only. `vercel.json` schedules a once-per-minute SPY/SPX persistence refresh; the signed-in dashboard also refreshes on demand every 15 seconds. Vercel Cron's once-per-minute schedule requires a paid plan. This cadence is suitable for research and alerting, not latency-sensitive automatic execution.
+
+The pre-existing broader market-intelligence application remains available at `/legacy`.
+
+---
+
+# Legacy AI Trading Agent
 
 An intelligent financial market intelligence dashboard that helps retail traders identify investment opportunities 2-3 weeks before they go mainstream. Powered by Gemini 2.0 Flash and autonomous browser agents.
 

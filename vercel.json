@@ -1,0 +1,22 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist/public",
+  "functions": {
+    "api/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/options-monitor",
+      "schedule": "* * * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/legacy",
+      "destination": "/index.html"
+    }
+  ]
+}

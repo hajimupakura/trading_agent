@@ -152,6 +152,13 @@ async function startServer() {
 
   // Start scheduled jobs
   startScheduledJobs();
+
+  // Start the SPX/SPY shadow monitor whenever options data is configured.
+  if (process.env.MASSIVE_API_KEY || process.env.POLYGON_API_KEY) {
+    const { startOptionsMonitor } = await import("../services/options/optionsMonitor");
+    startOptionsMonitor(parseInt(process.env.OPTIONS_MONITOR_INTERVAL_MS || "15000"));
+    console.log("[OptionsMonitor] SPX/SPY shadow monitor started (live orders disabled)");
+  }
 }
 
 async function startPriceWebSocket() {

@@ -17,6 +17,12 @@ const envSchema = z.object({
   AGENT_USER_ID: z.string().optional(),
   FRED_API_KEY: z.string().optional(),
   SECONDARY_LLM_MODEL: z.string().optional(),
+  MASSIVE_API_KEY: z.string().optional(),
+  POLYGON_API_KEY: z.string().optional(),
+  AI_OPTIONS_REVIEW_ENABLED: z.enum(["true", "false"]).default("false"),
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_SECRET_KEY: z.string().optional(),
+  ENABLE_LIVE_TRADING: z.enum(["true", "false"]).default("false"),
 });
 
 // In test/dev, provide defaults for required vars so env parsing doesn't crash
@@ -58,4 +64,9 @@ export const ENV = {
   telegramChatId: env.TELEGRAM_CHAT_ID,
   agentPortfolioId: env.AGENT_PORTFOLIO_ID,
   agentUserId: env.AGENT_USER_ID,
+  massiveApiKey: env.MASSIVE_API_KEY || env.POLYGON_API_KEY,
+  aiOptionsReviewEnabled: env.AI_OPTIONS_REVIEW_ENABLED === "true",
+  supabaseUrl: env.SUPABASE_URL,
+  supabaseSecretKey: env.SUPABASE_SECRET_KEY,
+  enableLiveTrading: env.ENABLE_LIVE_TRADING === "true",
 };

@@ -1,7 +1,7 @@
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import { syncRSSNews, analyzePendingNews } from "./services/rssNewsSync";
 import { getStockQuote, getMultipleStockQuotes, searchStocks } from "./services/stockPriceService";
@@ -17,6 +17,34 @@ export const appRouter = router({
       return {
         success: true,
       } as const;
+    }),
+  }),
+
+  // Focused SPX/SPY 0-2 DTE research command center. Paper/shadow mode only.
+  options: router({
+    commandCenter: protectedProcedure
+      .input(z.object({ underlying: z.enum(["SPY", "SPX"]).default("SPY") }).optional())
+      .query(async ({ input }) => {
+        const { refreshOptionsCommandCenter } = await import("./services/options/optionsMonitor");
+        return await refreshOptionsCommandCenter(input?.underlying ?? "SPY");
+      }),
+    monitorStatus: protectedProcedure.query(async () => {
+      const { getOptionsMonitorState } = await import("./services/options/optionsMonitor");
+      return getOptionsMonitorState();
+    }),
+    startMonitor: adminProcedure
+      .input(z.object({
+        intervalSeconds: z.number().int().min(5).max(300).default(15),
+      }).optional())
+      .mutation(async ({ input }) => {
+        const { startOptionsMonitor, getOptionsMonitorState } = await import("./services/options/optionsMonitor");
+        startOptionsMonitor((input?.intervalSeconds ?? 15) * 1000);
+        return getOptionsMonitorState();
+      }),
+    stopMonitor: adminProcedure.mutation(async () => {
+      const { stopOptionsMonitor, getOptionsMonitorState } = await import("./services/options/optionsMonitor");
+      stopOptionsMonitor();
+      return getOptionsMonitorState();
     }),
   }),
 
@@ -609,7 +637,8 @@ export const appRouter = router({
         return await getOrders(input?.status ?? "all");
       }),
 
-    placeOrder: protectedProcedure
+    // Live broker mutation is admin-only and disabled unless explicitly opted in.
+    placeOrder: adminProcedure
       .input(z.object({
         symbol: z.string(),
         qty: z.number().int().min(1),
@@ -620,6 +649,9 @@ export const appRouter = router({
         timeInForce: z.enum(["day", "gtc", "ioc"]).optional(),
       }))
       .mutation(async ({ input }) => {
+        if (process.env.ENABLE_LIVE_TRADING !== "true") {
+          throw new Error("Live trading is disabled. This build is paper/shadow mode only.");
+        }
         const { placeOrder } = await import("./services/alpacaService");
         const order = await placeOrder(input);
         if (!order) throw new Error("Failed to place order. Check Alpaca credentials.");

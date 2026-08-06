@@ -28,6 +28,8 @@ import {
   agentCycleLogs,
   InsertAgentCycleLog,
   agentConfig,
+  optionSignals,
+  InsertOptionSignalRecord,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -44,6 +46,14 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+export async function insertOptionSignal(signal: InsertOptionSignalRecord) {
+  const db = await getDb();
+  if (!db) return null;
+  return await db.insert(optionSignals).values(signal).onDuplicateKeyUpdate({
+    set: { aiReview: signal.aiReview ?? null },
+  });
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
