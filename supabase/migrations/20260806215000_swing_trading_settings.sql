@@ -1,6 +1,6 @@
 -- Late-day swing entry mode: buy 1-2 DTE in a 15:45-15:58 ET window (configurable,
 -- floor 15:30 to match the position worker's swing threshold), hold overnight,
--- force-sold by 10:30 ET next morning by the exit engine. Disabled by default.
+-- managed next day by stop/trail rules until the standard 15:10 ET flat (expiry guard). Disabled by default.
 alter table public.user_settings
   add column if not exists swing_trading_enabled boolean not null default false,
   add column if not exists swing_entry_start_minutes integer not null default 945,

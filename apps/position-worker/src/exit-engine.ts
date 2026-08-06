@@ -1,8 +1,10 @@
 import type { ManagedPosition } from "./types.js";
 
 export const EXIT_RULES = { stopLossPct:.30, trailActivationPct:.40, trailPct:.20, stretchActivationPct:1, stretchTrailPct:.15, noFollowThroughMs:10 * 60_000, followThroughPct:.10, mandatoryExitMinutes:15 * 60 + 10,
-  // Swing positions: opened at/after 15:30 ET, deliberately held overnight, force-sold by 10:30 next morning.
-  swingOpenThresholdMinutes:15 * 60 + 30, swingMorningDeadlineMinutes:10 * 60 + 30 } as const;
+  // Swing positions: opened at/after 15:30 ET and deliberately held overnight. Next day they run
+  // on stop/trail/invalidation only, until the standard 15:10 flat — which also guards expiry,
+  // since a 1DTE swing expires at that day's close.
+  swingOpenThresholdMinutes:15 * 60 + 30 } as const;
 
 export type ExitReason = "mandatory_time_exit"|"premium_stop"|"underlying_invalidation"|"trailing_stop"|"no_follow_through";
 export function easternClock(now:Date) {
@@ -17,7 +19,7 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // same-day 15:10 flat, held overnight, and force-sold by 10:30 the next morning instead of 09:30.
   const isSwing = openedClock.minutes >= EXIT_RULES.swingOpenThresholdMinutes;
   const weekday = !["Sat","Sun"].includes(clock.weekday);
-  if (weekday && heldOvernight && clock.minutes >= (isSwing ? EXIT_RULES.swingMorningDeadlineMinutes : 570)) return "mandatory_time_exit";
+  if (weekday && heldOvernight && clock.minutes >= (isSwing ? EXIT_RULES.mandatoryExitMinutes : 570)) return "mandatory_time_exit";
   if (weekday && !heldOvernight && !isSwing && clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
   if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
   if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";

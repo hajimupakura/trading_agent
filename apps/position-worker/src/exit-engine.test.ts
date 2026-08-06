@@ -20,5 +20,7 @@ describe("swing exit handling", () => {
   it("skips the ten-minute follow-through test for swing entries", () => expect(evaluateExit({ position:{...swing,peakBid:4.1}, bid:3.9, underlyingPrice:771, now:at("19:57") })).toBe(null));
   it("holds a swing position through the next open", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T13:35:00Z") })).toBe(null));
   it("stops out a swing position on a gap down at the open", () => expect(evaluateExit({ position:swing, bid:2.5, underlyingPrice:771, now:new Date("2026-08-07T13:31:00Z") })).toBe("premium_stop"));
-  it("force-sells a swing position by 10:30 the next morning", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T14:30:00Z") })).toBe("mandatory_time_exit"));
+  it("keeps holding through the next morning while no sell criterion is met", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T14:30:00Z") })).toBe(null));
+  it("keeps holding into the next afternoon while no sell criterion is met", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T18:00:00Z") })).toBe(null));
+  it("goes flat at 15:10 on the day after entry to beat expiry", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T19:10:00Z") })).toBe("mandatory_time_exit"));
 });
