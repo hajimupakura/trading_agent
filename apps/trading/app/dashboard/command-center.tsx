@@ -99,6 +99,11 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const eligible = data?.contracts.filter((contract) => contract.eligible) ?? [];
   const actionTone = signal?.action === "enter_call" ? "call" : signal?.action === "enter_put" ? "put" : "wait";
   const actionLabel = signal?.action === "enter_call" ? "CALL SETUP" : signal?.action === "enter_put" ? "PUT SETUP" : "STAND ASIDE";
+  const actionDescription = signal?.action === "enter_call"
+    ? "Bullish confluence is complete: SPY is above VWAP, EMA 8 is above EMA 21, price cleared the 15-minute opening-range high, momentum confirms, and an eligible call exists. Review only—not a guaranteed winner or automatic entry."
+    : signal?.action === "enter_put"
+      ? "Bearish confluence is complete: SPY is below VWAP, EMA 8 is below EMA 21, price broke the 15-minute opening-range low, momentum confirms, and an eligible put exists. Review only—not a guaranteed winner or automatic entry."
+      : "No qualified entry currently exists. Price structure, momentum, or contract liquidity is incomplete, so the engine recommends waiting rather than opening a position.";
   const updated = data?.asOf ? new Date(data.asOf).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }) : "Waiting for data";
 
   return (
@@ -170,7 +175,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
               <div className="signal-main">
                 <div>
                   <p className="signal-kicker">CURRENT READ</p>
-                  <h2>{actionLabel}</h2>
+                  <div className="decision-help" tabIndex={0} aria-describedby="decision-tooltip"><h2>{actionLabel}</h2><span className="hover-tooltip" id="decision-tooltip" role="tooltip">{actionDescription}</span></div>
                   <p className="signal-subtitle">{signal?.setup === "opening_range" ? "Opening-range continuation" : "No qualified setup yet"}</p>
                 </div>
                 <Confidence score={signal?.confidence ?? 0} />
@@ -239,7 +244,7 @@ function MarketCard({ label, value, detail, icon, tone = "" }: { label: string; 
 }
 
 function Confidence({ score }: { score: number }) {
-  return <div className="confidence" style={{ "--score": `${score * 3.6}deg` } as React.CSSProperties}><div><strong>{score}</strong><span>CONFIDENCE</span></div></div>;
+  return <div className="confidence-help" tabIndex={0} aria-describedby="confidence-tooltip"><div className="confidence" style={{ "--score": `${score * 3.6}deg` } as React.CSSProperties}><div><strong>{score}</strong><span>CONFIDENCE</span></div></div><span className="hover-tooltip confidence-tooltip" id="confidence-tooltip" role="tooltip">This score measures chart confluence and the selected contract&apos;s relative liquidity. It is not a probability of profit or an AI forecast.</span></div>;
 }
 
 function ContractSpotlight({ contract }: { contract: Contract }) {
