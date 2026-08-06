@@ -42,6 +42,7 @@ interface PaperState {
   positions?:unknown[]; orders?:unknown[];
 }
 interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; brokerPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; unmanagedPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; error?:string }
+interface RobinhoodState {connected:boolean;executionReady?:boolean;error?:string}
 interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;read_at:string|null;created_at:string}
 interface AlertState{alerts:AlertItem[];unread:number}
 
@@ -52,6 +53,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [paper, setPaper] = useState<PaperState | null>(null);
   const [manager, setManager] = useState<ManagerState | null>(null);
+  const [robinhood,setRobinhood]=useState<RobinhoodState|null>(null);
   const [alerts,setAlerts]=useState<AlertState>({alerts:[],unread:0});
   const [alertsOpen,setAlertsOpen]=useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -60,8 +62,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [selectedDte, setSelectedDte] = useState<0|1|2>(0);
 
   const refreshPaper = useCallback(async () => {
-    const [paperResponse,managerResponse,alertResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"})]);
-    setPaper(await paperResponse.json()); setManager(await managerResponse.json());if(alertResponse.ok)setAlerts(await alertResponse.json());
+    const [paperResponse,managerResponse,alertResponse,robinhoodResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"}),fetch("/api/brokers/robinhood/status",{cache:"no-store"})]);
+    setPaper(await paperResponse.json()); setManager(await managerResponse.json());if(alertResponse.ok)setAlerts(await alertResponse.json());setRobinhood(await robinhoodResponse.json());
   }, []);
   const markAlertsRead=useCallback(async(id?:string)=>{await fetch("/api/alerts",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(id?{id}:{all:true})});await refreshPaper();},[refreshPaper]);
   const setKillSwitch = useCallback(async (killSwitch:boolean) => {
@@ -175,6 +177,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div><span>MAX CONTRACT DEBIT</span><strong>${money(paper?.rules?.maxTradeDebit,0)}</strong></div>
             <div><span>OPEN POSITIONS / ORDERS</span><strong>{paper?.positions?.length ?? 0} / {paper?.orders?.length ?? 0}</strong></div>
             <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
+            <div className={`connection-state robinhood-state ${robinhood?.connected ? "connected" : ""}`}><i/><span>{robinhood?.connected?(robinhood.executionReady?"ROBINHOOD LIVE READY":"ROBINHOOD CONNECTED"):<a href="/api/brokers/robinhood/connect">CONNECT ROBINHOOD</a>}</span></div>
           </section>
           <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"KILL SWITCH ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume paper exits":"Emergency stop"}</button></section>
 
