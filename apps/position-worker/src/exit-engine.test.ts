@@ -13,3 +13,12 @@ describe("automatic paper exit engine", () => {
   it("forces the time exit at 3:10 p.m. ET", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:at("19:10") })).toBe("mandatory_time_exit"));
   it("closes an overnight position when the next session opens", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:new Date("2026-08-07T13:30:00Z") })).toBe("mandatory_time_exit"));
 });
+
+const swing:ManagedPosition = { ...base, openedAt:Date.parse("2026-08-06T19:46:00Z") }; // 15:46 ET
+describe("swing exit handling", () => {
+  it("does not force-flat a swing entry before the close", () => expect(evaluateExit({ position:swing, bid:4, underlyingPrice:771, now:at("19:55") })).toBe(null));
+  it("skips the ten-minute follow-through test for swing entries", () => expect(evaluateExit({ position:{...swing,peakBid:4.1}, bid:3.9, underlyingPrice:771, now:at("19:57") })).toBe(null));
+  it("holds a swing position through the next open", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T13:35:00Z") })).toBe(null));
+  it("stops out a swing position on a gap down at the open", () => expect(evaluateExit({ position:swing, bid:2.5, underlyingPrice:771, now:new Date("2026-08-07T13:31:00Z") })).toBe("premium_stop"));
+  it("force-sells a swing position by 10:30 the next morning", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T14:30:00Z") })).toBe("mandatory_time_exit"));
+});

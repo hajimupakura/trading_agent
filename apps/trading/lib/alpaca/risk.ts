@@ -52,7 +52,10 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if (tradesToday >= settings.maxTradesPerDay) errors.push(`Maximum ${settings.maxTradesPerDay} entries per day reached`);
   if (positions.length >= settings.maxOpenPositions) errors.push(`Maximum ${settings.maxOpenPositions} open option positions reached`);
   if (orders.some(order => ["new","accepted","pending_new","partially_filled"].includes(order.status))) errors.push("An Alpaca order is already open");
-  if (["Sat","Sun"].includes(clock.weekday) || clock.minutes < settings.entryStartMinutes || clock.minutes > settings.entryEndMinutes) errors.push("Current time is outside the configured ET entry window");
+  const inDayWindow = clock.minutes >= settings.entryStartMinutes && clock.minutes <= settings.entryEndMinutes;
+  const inSwingWindow = settings.swingTradingEnabled && clock.minutes >= settings.swingEntryStartMinutes && clock.minutes <= settings.swingEntryEndMinutes;
+  if (["Sat","Sun"].includes(clock.weekday) || (!inDayWindow && !inSwingWindow)) errors.push("Current time is outside the configured ET entry window");
+  if (inSwingWindow && !inDayWindow && contract.dte < 1) errors.push("0DTE contracts expire at today's close and cannot be held overnight; swing entries require 1-2 DTE");
   if (account.status !== "ACTIVE") errors.push(`Alpaca paper account is ${account.status}`);
   return { allowed:errors.length === 0, errors, equity, dayPnl:equity - lastEquity, debit, quantity };
 }

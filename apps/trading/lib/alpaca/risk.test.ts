@@ -26,7 +26,7 @@ describe("paper-entry risk gate", () => {
     const result = validatePaperEntry({ signal, contract, account, positions:[], orders:[], tradesToday:0, now:new Date("2026-08-06T19:00:00.000Z") });
     expect(result.errors).toContain("Current time is outside the configured ET entry window");
   });
-  it("enforces a tighter saved debit limit",()=>{const result=validatePaperEntry({signal,contract,account,positions:[],orders:[],tradesToday:0,now:inWindow,settings:{maxOptionAsk:8,maxTradeDebit:500,maxDailyLoss:500,maxTradesPerDay:3,allowedUnderlyings:["SPY","SPX"],allowedDte:[0,1,2],minContractVolume:100,maxSpreadPct:10,maxOpenPositions:1,entryStartMinutes:585,entryEndMinutes:885,paperTradingEnabled:true,aiReviewEnabled:false,riskPerTradePct:.005,maxContractsPerTrade:5,deltaTarget:.45}});expect(result.errors).toContain("Total debit (1 contract) exceeds the $500 per-trade limit");});
+  it("enforces a tighter saved debit limit",()=>{const result=validatePaperEntry({signal,contract,account,positions:[],orders:[],tradesToday:0,now:inWindow,settings:{maxOptionAsk:8,maxTradeDebit:500,maxDailyLoss:500,maxTradesPerDay:3,allowedUnderlyings:["SPY","SPX"],allowedDte:[0,1,2],minContractVolume:100,maxSpreadPct:10,maxOpenPositions:1,entryStartMinutes:585,entryEndMinutes:885,paperTradingEnabled:true,aiReviewEnabled:false,riskPerTradePct:.005,maxContractsPerTrade:5,deltaTarget:.45,swingTradingEnabled:false,swingEntryStartMinutes:945,swingEntryEndMinutes:958}});expect(result.errors).toContain("Total debit (1 contract) exceeds the $500 per-trade limit");});
 });
 
 describe("position sizing", () => {
@@ -46,5 +46,22 @@ describe("position sizing", () => {
     const result = validatePaperEntry({ signal, contract:cheap, account, positions:[], orders:[], tradesToday:0, now:inWindow, quantity:2 });
     expect(result.debit).toBe(1000);
     expect(result.errors).toContain("Total debit (2 contracts) exceeds the $800 per-trade limit");
+  });
+});
+
+describe("swing entry window", () => {
+  const swingSettings = { ...DEFAULT_RISK_SETTINGS, swingTradingEnabled:true };
+  const lateDay = new Date("2026-08-06T19:50:00.000Z"); // 15:50 ET, inside the 15:45-15:58 window
+  it("rejects 0DTE contracts in the swing window", () => {
+    const result = validatePaperEntry({ signal, contract, account, positions:[], orders:[], tradesToday:0, now:lateDay, settings:swingSettings });
+    expect(result.errors).toContain("0DTE contracts expire at today's close and cannot be held overnight; swing entries require 1-2 DTE");
+  });
+  it("allows a 1DTE swing entry in the window", () => {
+    const overnight = { ...contract, dte:1 as const, expirationDate:"2026-08-07" };
+    expect(validatePaperEntry({ signal, contract:overnight, account, positions:[], orders:[], tradesToday:0, now:lateDay, settings:swingSettings }).allowed).toBe(true);
+  });
+  it("still rejects the late-day window when swing mode is off", () => {
+    const result = validatePaperEntry({ signal, contract:{ ...contract, dte:1 as const }, account, positions:[], orders:[], tradesToday:0, now:lateDay });
+    expect(result.errors).toContain("Current time is outside the configured ET entry window");
   });
 });

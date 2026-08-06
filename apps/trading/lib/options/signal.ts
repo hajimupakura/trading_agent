@@ -1,7 +1,8 @@
 import type { Contract, MarketState, Signal } from "./types";
 
-export function generateSignal(market: MarketState, contracts: Contract[], options?: { deltaTarget?: number }): Signal {
-  const eligible = contracts.filter(contract => contract.eligible);
+export function generateSignal(market: MarketState, contracts: Contract[], options?: { deltaTarget?: number; minDte?: number }): Signal {
+  const minDte = options?.minDte ?? 0;
+  const eligible = contracts.filter(contract => contract.eligible && contract.dte >= minDte);
   const deltaTarget = options?.deltaTarget ?? .45;
   // Deliberate contract choice: nearest |delta| to the target (missing delta = worst),
   // liquidity score breaks ties — instead of "whichever contract ranked first".

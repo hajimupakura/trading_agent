@@ -24,7 +24,11 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const contracts = chainResult.status === "fulfilled" ? chainResult.value : [];
   const spotPrice=market?.displayPrice??contracts.find(contract=>contract.underlyingPrice!=null)?.underlyingPrice??null;
   const errors = [marketResult, chainResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
-  const signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget }) : null;
+  // Inside the late-day swing window, only 1-2 DTE contracts are candidates (0DTE dies at the close).
+  const etParts = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date());
+  const etMinutes = Number(etParts.find(part=>part.type==="hour")?.value)*60 + Number(etParts.find(part=>part.type==="minute")?.value);
+  const inSwingWindow = settings.swingTradingEnabled && etMinutes >= settings.swingEntryStartMinutes && etMinutes <= settings.swingEntryEndMinutes;
+  const signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget, minDte:inSwingWindow ? 1 : 0 }) : null;
   const contractsByDte = ([0,1,2] as const).flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
   const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:contractsByDte, signal, errors };
   const admin = createAdminClient();
