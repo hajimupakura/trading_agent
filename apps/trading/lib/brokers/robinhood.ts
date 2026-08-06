@@ -1,11 +1,11 @@
 import "server-only";
 import {createHash,randomBytes} from "node:crypto";
+import {auth,type OAuthClientProvider} from "@modelcontextprotocol/sdk/client/auth.js";
+import type {OAuthClientInformationMixed,OAuthTokens} from "@modelcontextprotocol/sdk/shared/auth.js";
 import {createAdminClient} from "@/lib/supabase/admin";
 import {decryptBrokerSecret,encryptBrokerSecret} from "@/lib/brokers/token-crypto";
 
 const MCP_URL="https://agent.robinhood.com/mcp/trading";
-const REGISTER_URL="https://agent.robinhood.com/oauth/trading/register";
-const AUTHORIZE_URL="https://robinhood.com/oauth";
 const TOKEN_URL="https://api.robinhood.com/oauth2/token/";
 const RESOURCE=MCP_URL;
 const hash=(value:string)=>createHash("sha256").update(value).digest("base64url");
@@ -15,18 +15,54 @@ type TokenPayload={access_token:string;refresh_token?:string;expires_in?:number;
 type ConnectionRow={user_id:string;oauth_client_id:string;access_token_ciphertext:string;refresh_token_ciphertext:string|null;token_expires_at:string|null;status:string};
 
 async function checkedJson<T>(response:Response,label:string):Promise<T>{const body=await response.json().catch(()=>null);if(!response.ok)throw new Error(`${label} failed (${response.status})${body?.error_description?`: ${body.error_description}`:body?.error?`: ${body.error}`:""}`);return body as T;}
+
+function oauthProvider(input:{redirectUri:string;state?:string;clientInformation?:OAuthClientInformationMixed;codeVerifier?:string}){
+  let clientInformation=input.clientInformation;
+  let codeVerifier=input.codeVerifier;
+  let authorizationUrl:URL|undefined;
+  let tokens:OAuthTokens|undefined;
+  const provider:OAuthClientProvider={
+    redirectUrl:input.redirectUri,
+    clientMetadata:{
+      client_name:"Velocity Options Desk",
+      client_uri:new URL(input.redirectUri).origin,
+      redirect_uris:[input.redirectUri],
+      grant_types:["authorization_code","refresh_token"],
+      response_types:["code"],
+      token_endpoint_auth_method:"none",
+      scope:"internal"
+    },
+    state:()=>input.state??random(),
+    clientInformation:()=>clientInformation,
+    saveClientInformation:value=>{clientInformation=value;},
+    tokens:()=>undefined,
+    saveTokens:value=>{tokens=value;},
+    redirectToAuthorization:url=>{authorizationUrl=url;},
+    saveCodeVerifier:value=>{codeVerifier=value;},
+    codeVerifier:()=>{if(!codeVerifier)throw new Error("Robinhood PKCE verifier is missing");return codeVerifier;}
+  };
+  return {provider,result:()=>({clientInformation,codeVerifier,authorizationUrl,tokens})};
+}
+
 export async function beginRobinhoodOAuth(input:{userId:string;origin:string}){
   const redirectUri=`${input.origin}/api/brokers/robinhood/callback`;
-  const registration=await checkedJson<{client_id:string}>(await fetch(REGISTER_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_name:"Velocity Options Desk",redirect_uris:[redirectUri],grant_types:["authorization_code","refresh_token"],response_types:["code"],token_endpoint_auth_method:"none"}),signal:AbortSignal.timeout(12_000)}),"Robinhood client registration");
-  if(!registration.client_id)throw new Error("Robinhood registration did not return a client ID");
-  const state=random();const verifier=random();const challenge=hash(verifier);const admin=createAdminClient();
+  const state=random();
+  const flow=oauthProvider({redirectUri,state});
+  const result=await auth(flow.provider,{serverUrl:MCP_URL,scope:"internal"});
+  const oauth=flow.result();
+  if(result!=="REDIRECT"||!oauth.authorizationUrl)throw new Error("Robinhood did not start an authorization redirect");
+  if(!oauth.clientInformation?.client_id)throw new Error("Robinhood registration did not return a client ID");
+  if(!oauth.codeVerifier)throw new Error("Robinhood did not create a PKCE verifier");
+  const admin=createAdminClient();
   await admin.from("broker_oauth_states").delete().eq("user_id",input.userId).eq("broker","robinhood");
-  const {error}=await admin.from("broker_oauth_states").insert({state_hash:hash(state),user_id:input.userId,broker:"robinhood",oauth_client_id:registration.client_id,code_verifier_ciphertext:encryptBrokerSecret(verifier),redirect_uri:redirectUri,expires_at:new Date(Date.now()+10*60_000).toISOString()});if(error)throw error;
-  const url=new URL(AUTHORIZE_URL);url.searchParams.set("response_type","code");url.searchParams.set("client_id",registration.client_id);url.searchParams.set("state",state);url.searchParams.set("code_challenge",challenge);url.searchParams.set("code_challenge_method","S256");url.searchParams.set("redirect_uri",redirectUri);url.searchParams.set("scope","internal");url.searchParams.set("resource",RESOURCE);return url.toString();
+  const {error}=await admin.from("broker_oauth_states").insert({state_hash:hash(state),user_id:input.userId,broker:"robinhood",oauth_client_id:oauth.clientInformation.client_id,code_verifier_ciphertext:encryptBrokerSecret(oauth.codeVerifier),redirect_uri:redirectUri,expires_at:new Date(Date.now()+10*60_000).toISOString()});if(error)throw error;
+  return oauth.authorizationUrl.toString();
 }
 export async function completeRobinhoodOAuth(input:{state:string;code:string}){const admin=createAdminClient();const {data:pending,error}=await admin.from("broker_oauth_states").select("user_id,oauth_client_id,code_verifier_ciphertext,redirect_uri,expires_at").eq("state_hash",hash(input.state)).eq("broker","robinhood").maybeSingle();if(error)throw error;if(!pending||Date.parse(pending.expires_at)<Date.now())throw new Error("Robinhood authorization request expired or is invalid");
-  const form=new URLSearchParams({grant_type:"authorization_code",code:input.code,redirect_uri:pending.redirect_uri,client_id:pending.oauth_client_id,code_verifier:decryptBrokerSecret(pending.code_verifier_ciphertext),resource:RESOURCE});
-  const token=await checkedJson<TokenPayload>(await fetch(TOKEN_URL,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:form,signal:AbortSignal.timeout(12_000)}),"Robinhood token exchange");if(!token.access_token)throw new Error("Robinhood did not return an access token");
+  const flow=oauthProvider({redirectUri:pending.redirect_uri,clientInformation:{client_id:pending.oauth_client_id},codeVerifier:decryptBrokerSecret(pending.code_verifier_ciphertext)});
+  const result=await auth(flow.provider,{serverUrl:MCP_URL,authorizationCode:input.code,scope:"internal"});
+  const token=flow.result().tokens;
+  if(result!=="AUTHORIZED"||!token?.access_token)throw new Error("Robinhood did not return an access token");
   const {error:upsertError}=await admin.from("broker_connections").upsert({user_id:pending.user_id,broker:"robinhood",status:"connected",oauth_client_id:pending.oauth_client_id,access_token_ciphertext:encryptBrokerSecret(token.access_token),refresh_token_ciphertext:token.refresh_token?encryptBrokerSecret(token.refresh_token):null,token_expires_at:token.expires_in?new Date(Date.now()+token.expires_in*1000).toISOString():null,last_error:null,updated_at:new Date().toISOString()},{onConflict:"user_id,broker"});if(upsertError)throw upsertError;await admin.from("broker_oauth_states").delete().eq("state_hash",hash(input.state));return pending.user_id as string;}
 
 async function connection(userId:string){const {data,error}=await createAdminClient().from("broker_connections").select("user_id,oauth_client_id,access_token_ciphertext,refresh_token_ciphertext,token_expires_at,status").eq("user_id",userId).eq("broker","robinhood").maybeSingle();if(error)throw error;return data as ConnectionRow|null;}
