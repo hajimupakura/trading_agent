@@ -18,7 +18,7 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const authenticated = Boolean(data?.claims?.sub);
   const path = request.nextUrl.pathname;
-  const isPublic = path === "/login" || path.startsWith("/api/cron/");
+  const isPublic = path === "/login" || path.startsWith("/api/cron/") || path === "/api/brokers/robinhood/callback";
   if (!authenticated && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
