@@ -116,3 +116,6 @@ screenshots/
 
 # Production environment
 .env.production
+
+# Local Vercel project link
+/.vercel/
