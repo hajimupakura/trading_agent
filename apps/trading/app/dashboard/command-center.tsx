@@ -14,6 +14,7 @@ import {
   TrendingDown,
   TrendingUp,
   Zap,
+  LineChart,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
@@ -118,6 +119,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           <Link className="nav-item active" href="/dashboard"><BarChart3 size={16} /> Command center</Link>
           <span className="nav-item"><Crosshair size={16} /> Setups <em>Live</em></span>
           <Link className="nav-item" href="/dashboard/replay"><Activity size={16} /> Replay lab <em>Ready</em></Link>
+          <Link className="nav-item" href="/dashboard/analytics"><LineChart size={16} /> Analytics</Link>
           <span className="nav-item"><BrainCircuit size={16} /> AI review <small>Soon</small></span>
         </nav>
           <div className="sidebar-note">
