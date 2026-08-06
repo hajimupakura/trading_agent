@@ -9,15 +9,16 @@ cd "$(dirname "$0")/.."
 
 APP_URL="${VELOCITY_APP_URL:-https://trading-agent-mocha.vercel.app}"
 
-# CRON_SECRET is pullable from the Development environment.
-if [ ! -f .env.local ] || ! grep -q '^CRON_SECRET=' .env.local || grep -q '^CRON_SECRET="\[SENSITIVE\]"' .env.local; then
-  echo "Pulling environment variables from Vercel (development)..."
-  vercel env pull .env.local --environment=development
+# CRON_SECRET lives in .env.morning.local (git-ignored). The Vercel team policy
+# marks all Production env vars sensitive, so `vercel env pull` cannot export it.
+if [ ! -f .env.morning.local ]; then
+  echo "Missing .env.morning.local — create it with the same CRON_SECRET set on Vercel:" >&2
+  echo "  echo 'CRON_SECRET=<value>' > .env.morning.local && chmod 600 .env.morning.local" >&2
+  exit 1
 fi
-CRON_SECRET=$(grep '^CRON_SECRET=' .env.local | head -1 | cut -d= -f2- | tr -d '"')
-if [ -z "$CRON_SECRET" ] || [ "$CRON_SECRET" = "[SENSITIVE]" ]; then
-  echo "CRON_SECRET is not available locally. Add it to the Vercel Development environment:" >&2
-  echo "  vercel env add CRON_SECRET development" >&2
+CRON_SECRET=$(grep '^CRON_SECRET=' .env.morning.local | head -1 | cut -d= -f2- | tr -d '"')
+if [ -z "$CRON_SECRET" ]; then
+  echo "CRON_SECRET is empty in .env.morning.local" >&2
   exit 1
 fi
 
