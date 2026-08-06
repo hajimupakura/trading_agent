@@ -217,7 +217,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
 
           <section className="analysis-grid">
             <article className="chart-card">
-              <div className="section-heading"><div><span>PRICE ACTION · {underlying === "SPX" ? "MASSIVE INDEX DATA" : "ALPACA IEX"}</span><strong>{underlying} · 1 MINUTE</strong></div><div className="chart-legend"><i /> Price <i className="reference" /> {market?.referenceLabel ?? "Reference"}</div></div>
+              <div className="section-heading"><div><span>PRICE ACTION · {underlying === "SPX" ? "INDEX DATA · CHAIN-SAMPLED FALLBACK" : "ALPACA IEX"}</span><strong>{underlying} · 1 MINUTE</strong></div><div className="chart-legend"><i /> Price <i className="reference" /> {market?.referenceLabel ?? "Reference"}</div></div>
               <PriceChart bars={market?.bars ?? []} reference={market?.referencePrice ?? null} />
             </article>
             <article className="technicals-card">

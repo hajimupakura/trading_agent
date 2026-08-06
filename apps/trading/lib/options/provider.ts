@@ -1,6 +1,7 @@
 import "server-only";
 import { calculateTechnicals } from "./indicators";
 import { rankContracts } from "./ranker";
+import { getSampledSpxBars } from "./spx-bars";
 import type { Bar, Contract, MarketState, Side, Underlying } from "./types";
 import type { RiskSettings } from "@/lib/settings/config";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
@@ -53,11 +54,21 @@ async function getSpyMarketState(): Promise<MarketState> {
 
 async function getSpxMarketState():Promise<MarketState> {
   const date=dateEt();
-  let payload:{results?:Array<{t:number;o:number;h:number;l:number;c:number}>};
-  try{payload=await massive(`/v2/aggs/ticker/I:SPX/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);}catch(error){if(error instanceof Error&&error.message.includes("403"))throw new Error("Live SPX index bars are not included in the current Massive entitlement; SPX spot is still shown from the option-chain snapshot");throw error;}
-  const inRegularSession=(timestamp:number)=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(timestamp));const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);return minutes>=570&&minutes<960;};
-  const bars:Bar[]=(payload.results??[]).filter(item=>inRegularSession(item.t)).map(item=>({timestamp:item.t,open:item.o,high:item.h,low:item.l,close:item.c,volume:0,vwap:null}));
-  if(!bars.length)throw new Error("No Massive I:SPX one-minute bars returned; verify live index-data access");
+  let bars:Bar[];
+  try{
+    const payload:{results?:Array<{t:number;o:number;h:number;l:number;c:number}>}=await massive(`/v2/aggs/ticker/I:SPX/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);
+    const inRegularSession=(timestamp:number)=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(timestamp));const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);return minutes>=570&&minutes<960;};
+    bars=(payload.results??[]).filter(item=>inRegularSession(item.t)).map(item=>({timestamp:item.t,open:item.o,high:item.h,low:item.l,close:item.c,volume:0,vwap:null}));
+    if(!bars.length)throw new Error("No Massive I:SPX one-minute bars returned; verify live index-data access");
+  }catch(massiveError){
+    // Entitlement (or any index-data) failure: fall back to bars self-sampled every minute
+    // from the SPX option chain by the cron (lib/options/spx-bars.ts).
+    bars=await getSampledSpxBars();
+    if(!bars.length){
+      if(massiveError instanceof Error&&massiveError.message.includes("403"))throw new Error("Live SPX index bars are not included in the current Massive entitlement; chain-sampled SPX bars will accumulate while the market is open");
+      throw massiveError;
+    }
+  }
   const current=bars.at(-1)!;const opening=bars.slice(0,15);
   const openingRangeHigh=Math.max(...opening.map(bar=>bar.high));const openingRangeLow=Math.min(...opening.map(bar=>bar.low));
   const referencePrice=bars.reduce((sum,bar)=>sum+bar.close,0)/bars.length;

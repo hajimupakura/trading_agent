@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getMarketState, getOptionChain } from "./provider";
+import { recordSpxSample } from "./spx-bars";
 import { generateSignal } from "./signal";
 import type { CommandCenter, Underlying } from "./types";
 import type { RiskSettings } from "@/lib/settings/config";
@@ -9,7 +10,16 @@ import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 export async function refreshCommandCenter(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<CommandCenter> {
   if (!process.env.MASSIVE_API_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["MASSIVE_API_KEY is not configured"] };
   if(!settings.allowedUnderlyings.includes(underlying))return {configured:true,asOf:Date.now(),market:null,spotPrice:null,contracts:[],signal:null,errors:[`${underlying} is disabled in risk settings`]};
-  const [marketResult, chainResult] = await Promise.allSettled([getMarketState(underlying), getOptionChain(underlying,settings)]);
+  // SPX: fetch the chain first and record a spot sample so the market state
+  // (which may be built from chain-sampled bars) includes the current minute.
+  let marketResult:PromiseSettledResult<Awaited<ReturnType<typeof getMarketState>>>, chainResult:PromiseSettledResult<Awaited<ReturnType<typeof getOptionChain>>>;
+  if (underlying === "SPX") {
+    [chainResult] = await Promise.allSettled([getOptionChain(underlying,settings)]);
+    if (chainResult.status === "fulfilled") await recordSpxSample(chainResult.value).catch(error => console.error("SPX sample failed", error));
+    [marketResult] = await Promise.allSettled([getMarketState(underlying)]);
+  } else {
+    [marketResult, chainResult] = await Promise.allSettled([getMarketState(underlying), getOptionChain(underlying,settings)]);
+  }
   const market = marketResult.status === "fulfilled" ? marketResult.value : null;
   const contracts = chainResult.status === "fulfilled" ? chainResult.value : [];
   const spotPrice=market?.displayPrice??contracts.find(contract=>contract.underlyingPrice!=null)?.underlyingPrice??null;
