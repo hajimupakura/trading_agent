@@ -53,7 +53,8 @@ async function getSpyMarketState(): Promise<MarketState> {
 
 async function getSpxMarketState():Promise<MarketState> {
   const date=dateEt();
-  const payload=await massive<{results?:Array<{t:number;o:number;h:number;l:number;c:number}>}>(`/v2/aggs/ticker/I:SPX/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);
+  let payload:{results?:Array<{t:number;o:number;h:number;l:number;c:number}>};
+  try{payload=await massive(`/v2/aggs/ticker/I:SPX/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);}catch(error){if(error instanceof Error&&error.message.includes("403"))throw new Error("Live SPX index bars are not included in the current Massive entitlement; SPX spot is still shown from the option-chain snapshot");throw error;}
   const inRegularSession=(timestamp:number)=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(timestamp));const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);return minutes>=570&&minutes<960;};
   const bars:Bar[]=(payload.results??[]).filter(item=>inRegularSession(item.t)).map(item=>({timestamp:item.t,open:item.o,high:item.h,low:item.l,close:item.c,volume:0,vwap:null}));
   if(!bars.length)throw new Error("No Massive I:SPX one-minute bars returned; verify live index-data access");

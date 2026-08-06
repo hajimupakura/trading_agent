@@ -26,5 +26,5 @@ export interface Signal {
   contract: Contract | null; market: Omit<MarketState, "bars">;
 }
 export interface CommandCenter {
-  configured: boolean; asOf: number; market: MarketState | null; contracts: Contract[]; signal: Signal | null; errors: string[];
+  configured: boolean; asOf: number; market: MarketState | null; spotPrice: number | null; contracts: Contract[]; signal: Signal | null; errors: string[];
 }
