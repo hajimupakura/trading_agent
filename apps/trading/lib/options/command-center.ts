@@ -1,15 +1,15 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getMarketState, getOptionChain } from "./provider";
+import { getHorizonChains, getMarketState, getOptionChain } from "./provider";
 import { recordSpxSample } from "./spx-bars";
 import { generateSignal } from "./signal";
 import type { CommandCenter, Underlying } from "./types";
 import type { RiskSettings } from "@/lib/settings/config";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 
-export async function refreshCommandCenter(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<CommandCenter> {
+export async function refreshCommandCenter(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS,options?:{includeLongHorizons?:boolean}): Promise<CommandCenter> {
   if (!process.env.MASSIVE_API_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["MASSIVE_API_KEY is not configured"] };
-  if(!settings.allowedUnderlyings.includes(underlying))return {configured:true,asOf:Date.now(),market:null,spotPrice:null,contracts:[],signal:null,errors:[`${underlying} is disabled in risk settings`]};
+  if((settings.allowedUnderlyings as readonly string[]).includes(underlying)===false&&(["SPY","SPX"] as readonly string[]).includes(underlying))return {configured:true,asOf:Date.now(),market:null,spotPrice:null,contracts:[],signal:null,errors:[`${underlying} is disabled in risk settings`]};
   // SPX: fetch the chain first and record a spot sample so the market state
   // (which may be built from chain-sampled bars) includes the current minute.
   let marketResult:PromiseSettledResult<Awaited<ReturnType<typeof getMarketState>>>, chainResult:PromiseSettledResult<Awaited<ReturnType<typeof getOptionChain>>>;
@@ -30,8 +30,19 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const inSwingWindow = settings.swingTradingEnabled && etMinutes >= settings.swingEntryStartMinutes && etMinutes <= settings.swingEntryEndMinutes;
   const signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget, minDte:inSwingWindow ? 1 : 0 }) : null;
   const contractsByDte = ([0,1,2] as const).flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
-  const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:contractsByDte, signal, errors };
   const admin = createAdminClient();
+  // Long-dated (3M/6M/9M/1Y) monitoring contracts: fetched only when the cron asks
+  // (every ~15 minutes); otherwise carried over from the previous snapshot. They are
+  // NEVER passed to generateSignal — the 0-2 DTE strategy stays untouched.
+  let longContracts:typeof contracts = [];
+  if (options?.includeLongHorizons) {
+    const [longResult] = await Promise.allSettled([getHorizonChains(underlying,["3M","6M","9M","1Y"],settings)]);
+    if (longResult.status === "fulfilled") longContracts = longResult.value; else errors.push(`Long-horizon chain: ${String(longResult.reason)}`);
+  } else {
+    const { data:previous } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying",underlying).maybeSingle();
+    longContracts = ((previous?.payload as CommandCenter|undefined)?.contracts ?? []).filter(contract => contract.dte > 7);
+  }
+  const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:[...contractsByDte, ...longContracts.slice(0,320)], signal, errors };
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {

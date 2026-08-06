@@ -1,8 +1,19 @@
 import { refreshCommandCenter } from "@/lib/options/command-center";
+import { refreshWatchSnapshot } from "@/lib/options/watchlist";
+import { WATCH_UNDERLYINGS } from "@/lib/options/types";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
   if (!process.env.CRON_SECRET || request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) return new Response("Unauthorized", { status:401 });
-  const results = await Promise.allSettled([refreshCommandCenter("SPY"), refreshCommandCenter("SPX")]);
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX"], at:new Date().toISOString() });
+  const minute = new Date().getMinutes();
+  // SPY/SPX every minute; their long-dated (3M-1Y) chains refresh on the quarter-hour.
+  // Watch-list tickers rotate: two per minute, so each refreshes every five minutes.
+  const includeLongHorizons = minute % 15 === 0;
+  const watchGroup = WATCH_UNDERLYINGS.filter((_, index) => index % 5 === minute % 5);
+  const results = await Promise.allSettled([
+    refreshCommandCenter("SPY", undefined, { includeLongHorizons }),
+    refreshCommandCenter("SPX", undefined, { includeLongHorizons }),
+    ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
+  ]);
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, at:new Date().toISOString() });
 }

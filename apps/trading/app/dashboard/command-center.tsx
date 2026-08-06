@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
+import { TRADE_UNDERLYINGS, WATCH_UNDERLYINGS } from "@/lib/options/types";
 import { logout } from "@/app/login/actions";
 import Link from "next/link";
 
@@ -59,7 +60,13 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
-  const [selectedDte, setSelectedDte] = useState<0|1|2>(0);
+  type HorizonTab = 0|1|2|"NEAR"|"3M"|"6M"|"9M"|"1Y";
+  const isWatch = (WATCH_UNDERLYINGS as readonly string[]).includes(underlying);
+  const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
+  useEffect(() => { setSelectedHorizon(current => isWatch ? (typeof current === "number" ? "NEAR" : current) : current === "NEAR" ? 0 : current); }, [isWatch]);
+  const horizonRange = (tab: HorizonTab): [number, number] => tab === 0 ? [0,0] : tab === 1 ? [1,1] : tab === 2 ? [2,2] : tab === "NEAR" ? [0,7] : tab === "3M" ? [8,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
+  const horizonLabel = (tab: HorizonTab) => typeof tab === "number" ? `${tab}DTE` : tab;
+  const horizonTabs: HorizonTab[] = isWatch ? ["NEAR","3M","6M","9M","1Y"] : [0,1,2,"3M","6M","9M","1Y"];
 
   const refreshPaper = useCallback(async () => {
     const [paperResponse,managerResponse,alertResponse,robinhoodResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"}),fetch("/api/brokers/robinhood/status",{cache:"no-store"})]);
@@ -112,7 +119,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const market = data?.market;
   const technicals = market?.technicals;
   const eligible = data?.contracts.filter((contract) => contract.eligible) ?? [];
-  const selectedContracts = data?.contracts.filter(contract => contract.dte === selectedDte) ?? [];
+  const [horizonLo, horizonHi] = horizonRange(selectedHorizon);
+  const selectedContracts = data?.contracts.filter(contract => contract.dte >= horizonLo && contract.dte <= horizonHi) ?? [];
   const actionTone = signal?.action === "enter_call" ? "call" : signal?.action === "enter_put" ? "put" : "wait";
   const actionLabel = signal?.action === "enter_call" ? "CALL SETUP" : signal?.action === "enter_put" ? "PUT SETUP" : "STAND ASIDE";
   const actionDescription = signal?.action === "enter_call"
@@ -153,13 +161,13 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
         <main className="dashboard">
           <section className="control-strip">
             <div className="symbol-switch" aria-label="Select underlying">
-              {(["SPY", "SPX"] as Underlying[]).map((symbol) => (
+              {([...TRADE_UNDERLYINGS, ...WATCH_UNDERLYINGS] as Underlying[]).map((symbol) => (
                 <button key={symbol} className={underlying === symbol ? "selected" : ""} onClick={() => setUnderlying(symbol)}>{symbol}</button>
               ))}
             </div>
             <div className="instrument-copy">
-              <strong>{underlying === "SPX" ? "S&P 500 Index Options" : "SPDR S&P 500 ETF Options"}</strong>
-              <span>{underlying === "SPX" ? "Cash-settled · confirm SPXW series" : "Physically settled · American style"}</span>
+              <strong>{underlying === "SPX" ? "S&P 500 Index Options" : underlying === "SPY" ? "SPDR S&P 500 ETF Options" : `${underlying} Equity Options`}</strong>
+              <span>{underlying === "SPX" ? "Cash-settled · confirm SPXW series" : underlying === "SPY" ? "Physically settled · American style" : "Monitor only · snapshot refreshes every ~5 minutes"}</span>
             </div>
             <button className="refresh-button" onClick={() => void refresh()} disabled={loading}>
               <RefreshCw size={15} className={loading ? "spin" : ""} /> {loading ? "Scanning" : "Refresh scan"}
@@ -208,7 +216,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <article className="contract-card">
               <div className="card-heading"><span>BEST EXECUTABLE CONTRACT</span><span className="price-cap">ASK ≤ $8.00</span></div>
               {signal?.contract ? <><ContractSpotlight contract={signal.contract} />
-                <button className="approve-button" disabled={underlying === "SPX" || !signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{underlying === "SPX" ? "SPX analysis only" : signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
+                <button className="approve-button" disabled={underlying !== "SPY" || !signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{underlying === "SPX" ? "SPX analysis only" : underlying !== "SPY" ? "Monitor only" : signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
               </> : (
                 <div className="empty-contract"><Clock3 size={26} /><strong>No contract selected</strong><span>The scanner is waiting for directional confirmation and executable liquidity.</span></div>
               )}
@@ -237,11 +245,11 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           </section>
 
           <section className="contracts-card">
-            <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {selectedDte}DTE CONTRACTS</strong></div><p>Rejected rows are dimmed · hover for reason</p></div>
-            <div className="dte-tabs" role="tablist" aria-label="Filter contracts by days to expiration">{([0,1,2] as const).map(dte => <button key={dte} role="tab" aria-selected={selectedDte === dte} className={selectedDte === dte ? "selected":""} onClick={()=>setSelectedDte(dte)}>{dte}DTE <span>{data?.contracts.filter(contract => contract.dte === dte).length ?? 0}</span></button>)}</div>
+            <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {horizonLabel(selectedHorizon)} CONTRACTS</strong></div><p>Rejected rows are dimmed · hover for reason</p></div>
+            <div className="dte-tabs" role="tablist" aria-label="Filter contracts by expiration horizon">{horizonTabs.map(tab => { const [lo,hi] = horizonRange(tab); const count = data?.contracts.filter(contract => contract.dte >= lo && contract.dte <= hi).length ?? 0; return <button key={String(tab)} role="tab" aria-selected={selectedHorizon === tab} className={selectedHorizon === tab ? "selected":""} onClick={()=>setSelectedHorizon(tab)}>{horizonLabel(tab)} <span>{count}</span></button>; })}</div>
             <div className="table-wrap"><table>
               <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
-              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} />) : <tr><td className="empty-dte" colSpan={12}>No {selectedDte}DTE contracts returned in this scan.</td></tr>}</tbody>
+              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts returned in this scan.</td></tr>}</tbody>
             </table></div>
           </section>
 

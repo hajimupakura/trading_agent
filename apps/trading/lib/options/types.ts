@@ -1,5 +1,12 @@
-export type Underlying = "SPY" | "SPX";
+export const TRADE_UNDERLYINGS = ["SPY", "SPX"] as const;
+export const WATCH_UNDERLYINGS = ["NVDA", "SPCX", "TSLA", "AAPL", "GOOGL", "META", "MSFT", "MU", "ASTS", "SKHY"] as const;
+export type TradeUnderlying = typeof TRADE_UNDERLYINGS[number];
+export type WatchUnderlying = typeof WATCH_UNDERLYINGS[number];
+export type Underlying = TradeUnderlying | WatchUnderlying;
 export type Side = "call" | "put";
+// Long-dated monitoring horizons and their target days-to-expiry.
+export const LONG_HORIZONS = { "3M": 91, "6M": 182, "9M": 273, "1Y": 365 } as const;
+export type LongHorizon = keyof typeof LONG_HORIZONS;
 
 export interface Bar { timestamp: number; open: number; high: number; low: number; close: number; volume: number; vwap: number | null }
 export interface Technicals {

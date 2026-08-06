@@ -2,7 +2,8 @@ import "server-only";
 import { calculateTechnicals } from "./indicators";
 import { rankContracts } from "./ranker";
 import { getSampledSpxBars } from "./spx-bars";
-import type { Bar, Contract, MarketState, Side, Underlying } from "./types";
+import type { Bar, Contract, LongHorizon, MarketState, Side, Underlying } from "./types";
+import { LONG_HORIZONS } from "./types";
 import type { RiskSettings } from "@/lib/settings/config";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 
@@ -21,18 +22,18 @@ async function massive<T>(pathOrUrl: string): Promise<T> {
 }
 export async function getMarketState(underlying: Underlying): Promise<MarketState> {
   if (underlying === "SPX") return getSpxMarketState();
-  return getSpyMarketState();
+  return getEquityMarketState(underlying);
 }
 
-async function getSpyMarketState(): Promise<MarketState> {
+async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<MarketState> {
   const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
   if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
   const date = dateEt();
-  const url = new URL(`${ALPACA_BASE}/v2/stocks/SPY/bars`);
+  const url = new URL(`${ALPACA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
   url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", date); url.searchParams.set("feed", "iex");
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
   const response = await fetch(url, { headers:{ "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret }, cache:"no-store", signal:AbortSignal.timeout(12_000) });
-  if (!response.ok) throw new Error(`Alpaca SPY bars ${response.status}`);
+  if (!response.ok) throw new Error(`Alpaca ${symbol} bars ${response.status}`);
   const payload = await response.json() as { bars?: Array<{ t:string;o:number;h:number;l:number;c:number;v?:number;vw?:number }> };
   const inRegularSession = (timestamp: string) => {
     const parts = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(new Date(timestamp));
@@ -40,16 +41,16 @@ async function getSpyMarketState(): Promise<MarketState> {
     const minutes = hour * 60 + minute; return minutes >= 570 && minutes < 960;
   };
   const bars: Bar[] = (payload.bars ?? []).filter(item => inRegularSession(item.t)).map(item => ({ timestamp:Date.parse(item.t), open:item.o, high:item.h, low:item.l, close:item.c, volume:item.v ?? 0, vwap:item.vw ?? null }));
-  if (!bars.length) throw new Error("No Alpaca IEX SPY bars returned");
+  if (!bars.length) throw new Error(`No Alpaca IEX ${symbol} bars returned`);
   const current = bars.at(-1)!; const opening = bars.slice(0, 15);
   const openingRangeHigh = Math.max(...opening.map(bar => bar.high)); const openingRangeLow = Math.min(...opening.map(bar => bar.low));
   const totalVolume = bars.reduce((sum, bar) => sum + bar.volume, 0);
   const referencePrice = totalVolume
     ? bars.reduce((sum, bar) => sum + (bar.vwap ?? bar.close) * bar.volume, 0) / totalVolume
     : bars.reduce((sum, bar) => sum + bar.close, 0) / bars.length;
-  const technicals = calculateTechnicals(bars, "SPY", openingRangeHigh, openingRangeLow);
+  const technicals = calculateTechnicals(bars, symbol, openingRangeHigh, openingRangeLow);
   const regime = bars.length < 15 ? "opening" : current.close > referencePrice && technicals.ema8 > technicals.ema21 ? "uptrend" : current.close < referencePrice && technicals.ema8 < technicals.ema21 ? "downtrend" : "range";
-  return { symbol:"SPY", chartSymbol:"SPY", asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
+  return { symbol, chartSymbol:symbol, asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
 }
 
 async function getSpxMarketState():Promise<MarketState> {
@@ -96,6 +97,45 @@ export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
   }).map(item => ({ timestamp:Date.parse(item.t), open:item.o, high:item.h, low:item.l, close:item.c, volume:item.v ?? 0, vwap:item.vw ?? null }));
   if (bars.length < 35) throw new Error("Not enough historical SPY bars for a deterministic replay");
   return bars;
+}
+
+// Long-dated monitoring chains: for each horizon, resolve the nearest listed expiration at or
+// after (target - 21 days), then snapshot that expiration. "NEAR" resolves the next listed expiry.
+export async function getHorizonChains(underlying: Underlying, horizons: Array<"NEAR"|LongHorizon>, settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<Contract[]> {
+  const today = dateEt();
+  const expirations = await Promise.all(horizons.map(async horizon => {
+    const targetDays = horizon === "NEAR" ? 0 : LONG_HORIZONS[horizon];
+    const floor = horizon === "NEAR" ? today : addDays(today, Math.max(0, targetDays - 21));
+    const payload = await massive<{ results?: Array<{ expiration_date?: string }> }>(
+      `/v3/reference/options/contracts?underlying_ticker=${encodeURIComponent(underlying)}&expiration_date.gte=${floor}&limit=1&sort=expiration_date&order=asc`,
+    ).catch(() => null);
+    const expiration = payload?.results?.[0]?.expiration_date;
+    return expiration ? { horizon, expiration } : null;
+  }));
+  const unique = [...new Map(expirations.filter((item): item is {horizon:"NEAR"|LongHorizon;expiration:string} => item != null).map(item => [item.expiration, item])).values()];
+  const dteOf = (expiration: string) => Math.max(0, Math.round((Date.parse(`${expiration}T16:00:00-04:00`) - Date.now()) / 86_400_000));
+  const buckets = await Promise.all(unique.map(async ({ expiration }) => {
+    const rows: Parameters<typeof rankContracts>[0] = [];
+    let next: string | undefined = `${BASE}/v3/snapshot/options/${underlying}?expiration_date=${expiration}&limit=250&sort=strike_price`; let pages = 0;
+    while (next && pages++ < 2) {
+      const payload: any = await massive<any>(next);
+      for (const item of payload.results ?? []) {
+        const details = item.details ?? {}; const quote = item.last_quote ?? {}; const day = item.day ?? item.session ?? {};
+        const side = details.contract_type as Side; const expirationDate = String(details.expiration_date ?? "");
+        if (!expirationDate || !["call","put"].includes(side)) continue;
+        const bid = Number(quote.bid ?? 0); const ask = Number(quote.ask ?? 0); const midpoint = Number(quote.midpoint ?? (bid && ask ? (bid + ask) / 2 : 0));
+        const volume = Number(day.volume ?? 0); const openInterest = Number(item.open_interest ?? 0);
+        rows.push({ ticker:String(details.ticker ?? item.ticker ?? ""), underlying, expirationDate, dte:dteOf(expirationDate),
+          side, strike:Number(details.strike_price ?? 0), exerciseStyle:String(details.exercise_style ?? "unknown"), bid, ask, midpoint,
+          spreadPct:midpoint ? (ask - bid) / midpoint * 100 : 999, quoteUpdatedAt:quote.last_updated == null ? null : Math.floor(Number(quote.last_updated) / 1_000_000),
+          volume, openInterest, volumeToOpenInterest:openInterest ? volume / openInterest : volume ? 5 : 0, impliedVolatility:item.implied_volatility == null ? null : Number(item.implied_volatility),
+          delta:item.greeks?.delta == null ? null : Number(item.greeks.delta), gamma:item.greeks?.gamma == null ? null : Number(item.greeks.gamma), theta:item.greeks?.theta == null ? null : Number(item.greeks.theta), underlyingPrice:item.underlying_asset?.price == null ? null : Number(item.underlying_asset.price) });
+      }
+      next = payload.next_url;
+    }
+    return rankContracts(rows, settings, { monitorOnly:true });
+  }));
+  return buckets.flat();
 }
 
 export async function getOptionChain(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<Contract[]> {

@@ -42,7 +42,7 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   const debit = contract.ask * 100 * quantity;
   if (!signal.action.startsWith("enter_")) errors.push("The current engine decision is not an entry");
   if(!settings.paperTradingEnabled)errors.push("Paper entries are disabled in risk settings");
-  if(!settings.allowedUnderlyings.includes(contract.underlying))errors.push(`${contract.underlying} is disabled in risk settings`);
+  if(!(settings.allowedUnderlyings as readonly string[]).includes(contract.underlying))errors.push(`${contract.underlying} is disabled in risk settings`);
   if (!contract.eligible || !settings.allowedDte.includes(contract.dte as 0|1|2)) errors.push("Contract DTE is disabled or ineligible");
   if (contract.ask <= 0 || contract.ask > settings.maxOptionAsk) errors.push(`Contract ask exceeds the $${settings.maxOptionAsk.toFixed(2)} limit`);
   if(debit>settings.maxTradeDebit)errors.push(`Total debit (${quantity} contract${quantity===1?"":"s"}) exceeds the $${settings.maxTradeDebit.toFixed(0)} per-trade limit`);
