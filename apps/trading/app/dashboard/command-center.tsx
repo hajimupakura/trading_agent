@@ -107,9 +107,9 @@ export function CommandCenterView() {
           ) : null}
 
           <section className="market-grid">
-            <MarketCard label={`${underlying} LAST`} value={`$${money(market?.price)}`} detail={`${market?.regime ?? "waiting"} regime`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
-            <MarketCard label={market?.referenceLabel ?? "VWAP"} value={`$${money(market?.referencePrice)}`} detail={market && market.price >= market.referencePrice ? "Price above reference" : "Price below reference"} icon={<Crosshair />} />
-            <MarketCard label="OPENING RANGE" value={`${money(market?.openingRangeLow)} – ${money(market?.openingRangeHigh)}`} detail={market ? `${money(market.openingRangeHigh - market.openingRangeLow)} pts wide` : "Waiting"} icon={<BarChart3 />} />
+            <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice)}`} detail={`${market?.regime ?? "waiting"} regime${underlying === "SPX" ? " · SPY proxy" : ""}`} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
+            <MarketCard label={`${underlying === "SPX" ? "SPY PROXY · " : ""}${market?.referenceLabel ?? "VWAP"}`} value={`$${money(market?.referencePrice)}`} detail={market && market.price >= market.referencePrice ? "Price above reference" : "Price below reference"} icon={<Crosshair />} />
+            <MarketCard label={`${underlying === "SPX" ? "SPY PROXY · " : ""}OPENING RANGE`} value={`${money(market?.openingRangeLow)} – ${money(market?.openingRangeHigh)}`} detail={market ? `${money(market.openingRangeHigh - market.openingRangeLow)} pts wide` : "Waiting"} icon={<BarChart3 />} />
             <MarketCard label="ELIGIBLE CONTRACTS" value={eligible.length.toString()} detail={`${data?.contracts.length ?? 0} contracts scanned`} icon={<CircleDollarSign />} />
           </section>
 
@@ -140,7 +140,7 @@ export function CommandCenterView() {
 
           <section className="analysis-grid">
             <article className="chart-card">
-              <div className="section-heading"><div><span>PRICE ACTION</span><strong>{underlying} · 1 MINUTE</strong></div><div className="chart-legend"><i /> Price <i className="reference" /> {market?.referenceLabel ?? "Reference"}</div></div>
+              <div className="section-heading"><div><span>PRICE ACTION · ALPACA IEX</span><strong>{underlying === "SPX" ? "SPY DIRECTIONAL PROXY" : "SPY"} · 1 MINUTE</strong></div><div className="chart-legend"><i /> Price <i className="reference" /> {market?.referenceLabel ?? "Reference"}</div></div>
               <PriceChart bars={market?.bars ?? []} reference={market?.referencePrice ?? null} />
             </article>
             <article className="technicals-card">

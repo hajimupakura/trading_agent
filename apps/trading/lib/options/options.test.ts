@@ -4,7 +4,7 @@ import { generateSignal } from "./signal";
 import type { Contract, MarketState } from "./types";
 
 const raw = (overrides:Record<string,unknown> = {}) => ({ ticker:"O:SPY260806C00650000", underlying:"SPY" as const, expirationDate:"2026-08-06", dte:0, side:"call" as const, strike:650, exerciseStyle:"american", bid:1.9, ask:2, midpoint:1.95, spreadPct:5.1, quoteUpdatedAt:Date.now(), volume:10_000, openInterest:2_000, volumeToOpenInterest:5, impliedVolatility:.2, delta:.45, gamma:.1, theta:-.2, underlyingPrice:650, ...overrides });
-const market = (overrides:Partial<MarketState> = {}):MarketState => ({ symbol:"SPY", asOf:Date.now(), price:651, referencePrice:649.5, referenceLabel:"VWAP", openingRangeHigh:650.5, openingRangeLow:647, regime:"uptrend", bars:[], technicals:{ ema8:650.5, ema21:649.5, rsi14:62, atr14:1.2, macd:.4, macdSignal:.25, bollingerPosition:.7, breakoutAtr:.42, volumeConfirmation:true, candlePattern:"none" }, ...overrides });
+const market = (overrides:Partial<MarketState> = {}):MarketState => ({ symbol:"SPY", chartSymbol:"SPY", asOf:Date.now(), price:651, displayPrice:651, referencePrice:649.5, referenceLabel:"VWAP", openingRangeHigh:650.5, openingRangeLow:647, regime:"uptrend", bars:[], technicals:{ ema8:650.5, ema21:649.5, rsi14:62, atr14:1.2, macd:.4, macdSignal:.25, bollingerPosition:.7, breakoutAtr:.42, volumeConfirmation:true, candlePattern:"none" }, ...overrides });
 
 describe("focused options engine", () => {
   it("rejects an option above the configured $8 quote ceiling", () => {

@@ -9,10 +9,10 @@ export function generateSignal(market: MarketState, contracts: Contract[]): Sign
   const call = eligible.find(contract => contract.side === "call") ?? null; const put = eligible.find(contract => contract.side === "put") ?? null;
   let action: Signal["action"] = eligible.length ? "watch" : "no_trade"; let contract = eligible[0] ?? null; let invalidation: string | null = null; const reasons: string[] = [];
   if (market.regime === "uptrend" && market.price > market.openingRangeHigh && callMomentum && call) {
-    action = "enter_call"; contract = call; invalidation = `${market.symbol} below ${market.referenceLabel} ${market.referencePrice.toFixed(2)} or OR high ${market.openingRangeHigh.toFixed(2)}`;
+    action = "enter_call"; contract = call; invalidation = `${market.chartSymbol}${market.symbol === "SPX" ? " proxy" : ""} below ${market.referenceLabel} ${market.referencePrice.toFixed(2)} or OR high ${market.openingRangeHigh.toFixed(2)}`;
     reasons.push("Trend, opening-range breakout, RSI and MACD align bullishly");
   } else if (market.regime === "downtrend" && market.price < market.openingRangeLow && putMomentum && put) {
-    action = "enter_put"; contract = put; invalidation = `${market.symbol} above ${market.referenceLabel} ${market.referencePrice.toFixed(2)} or OR low ${market.openingRangeLow.toFixed(2)}`;
+    action = "enter_put"; contract = put; invalidation = `${market.chartSymbol}${market.symbol === "SPX" ? " proxy" : ""} above ${market.referenceLabel} ${market.referencePrice.toFixed(2)} or OR low ${market.openingRangeLow.toFixed(2)}`;
     reasons.push("Trend, opening-range breakout, RSI and MACD align bearishly");
   } else reasons.push(eligible.length ? "A liquid contract exists, but chart confluence is incomplete" : "No contract passes price and liquidity controls");
   if (contract) reasons.push(`${contract.ticker} is ranked ${contract.liquidityScore}/100 and asks $${contract.ask.toFixed(2)}`);

@@ -4,6 +4,7 @@ import { rankContracts } from "./ranker";
 import type { Bar, Contract, MarketState, Side, Underlying } from "./types";
 
 const BASE = "https://api.massive.com";
+const ALPACA_BASE = "https://data.alpaca.markets";
 const dateEt = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 function addDays(value: string, count: number) { const date = new Date(`${value}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + count); return date.toISOString().slice(0, 10); }
 async function massive<T>(pathOrUrl: string): Promise<T> {
@@ -16,19 +17,31 @@ async function massive<T>(pathOrUrl: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 export async function getMarketState(underlying: Underlying): Promise<MarketState> {
-  const date = dateEt(); const ticker = underlying === "SPX" ? "I:SPX" : "SPY";
-  const payload = await massive<{ results?: Array<{ t:number;o:number;h:number;l:number;c:number;v?:number;vw?:number }> }>(`/v2/aggs/ticker/${ticker}/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);
-  const bars: Bar[] = (payload.results ?? []).map(item => ({ timestamp:item.t, open:item.o, high:item.h, low:item.l, close:item.c, volume:item.v ?? 0, vwap:item.vw ?? null }));
-  if (!bars.length) throw new Error(`No ${underlying} bars returned`);
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
+  const date = dateEt();
+  const url = new URL(`${ALPACA_BASE}/v2/stocks/SPY/bars`);
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", date); url.searchParams.set("feed", "iex");
+  url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
+  const response = await fetch(url, { headers:{ "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret }, cache:"no-store", signal:AbortSignal.timeout(12_000) });
+  if (!response.ok) throw new Error(`Alpaca SPY bars ${response.status}`);
+  const payload = await response.json() as { bars?: Array<{ t:string;o:number;h:number;l:number;c:number;v?:number;vw?:number }> };
+  const inRegularSession = (timestamp: string) => {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(new Date(timestamp));
+    const hour = Number(parts.find(part => part.type === "hour")?.value); const minute = Number(parts.find(part => part.type === "minute")?.value);
+    const minutes = hour * 60 + minute; return minutes >= 570 && minutes < 960;
+  };
+  const bars: Bar[] = (payload.bars ?? []).filter(item => inRegularSession(item.t)).map(item => ({ timestamp:Date.parse(item.t), open:item.o, high:item.h, low:item.l, close:item.c, volume:item.v ?? 0, vwap:item.vw ?? null }));
+  if (!bars.length) throw new Error("No Alpaca IEX SPY bars returned");
   const current = bars.at(-1)!; const opening = bars.slice(0, 15);
   const openingRangeHigh = Math.max(...opening.map(bar => bar.high)); const openingRangeLow = Math.min(...opening.map(bar => bar.low));
   const totalVolume = bars.reduce((sum, bar) => sum + bar.volume, 0);
-  const referencePrice = underlying === "SPY" && totalVolume
+  const referencePrice = totalVolume
     ? bars.reduce((sum, bar) => sum + (bar.vwap ?? bar.close) * bar.volume, 0) / totalVolume
     : bars.reduce((sum, bar) => sum + bar.close, 0) / bars.length;
   const technicals = calculateTechnicals(bars, underlying, openingRangeHigh, openingRangeLow);
   const regime = bars.length < 15 ? "opening" : current.close > referencePrice && technicals.ema8 > technicals.ema21 ? "uptrend" : current.close < referencePrice && technicals.ema8 < technicals.ema21 ? "downtrend" : "range";
-  return { symbol:underlying, asOf:current.timestamp, price:current.close, referencePrice, referenceLabel:underlying === "SPY" ? "VWAP" : "SESSION_MEAN", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
+  return { symbol:underlying, chartSymbol:"SPY", asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
 }
 export async function getOptionChain(underlying: Underlying): Promise<Contract[]> {
   const today = dateEt(); const end = addDays(today, 2);
