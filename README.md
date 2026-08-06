@@ -1,5 +1,17 @@
 # SPX / SPY Options Research Command Center
 
+The active product is now the clean Next.js application in [`apps/trading`](apps/trading). The former Vite/Express application remains in the repository only as a rollback reference and is not part of the intended Vercel deployment.
+
+```bash
+pnpm install
+pnpm dev:trading
+pnpm check:trading
+pnpm test:trading
+pnpm build:trading
+```
+
+For Vercel, set the project Root Directory to `apps/trading`. The application uses Supabase Auth and does not require the legacy `DATABASE_URL`, `JWT_SECRET`, Express server, or MySQL schema.
+
 The primary interface is a paper-only 0–2 DTE SPX/SPY research system. It monitors each underlying's own one-minute chart, filters the option chain for executable contracts, and ranks eligible contracts with volume as the largest component. It does not place live orders.
 
 ## Current decision flow
@@ -18,9 +30,9 @@ Apply [the Supabase migration](supabase/migrations/20260806040123_create_options
 
 ```env
 MASSIVE_API_KEY=...
-SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://wgjyeddedsnbrqcbatwz.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 SUPABASE_SECRET_KEY=sb_secret_...
-JWT_SECRET=...
 CRON_SECRET=...
 AI_OPTIONS_REVIEW_ENABLED=false
 ```
