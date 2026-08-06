@@ -44,8 +44,12 @@ function oauthProvider(input:{redirectUri:string;state?:string;clientInformation
   return {provider,result:()=>({clientInformation,codeVerifier,authorizationUrl,tokens})};
 }
 
-export async function beginRobinhoodOAuth(input:{userId:string;origin:string}){
-  const redirectUri=`${input.origin}/api/brokers/robinhood/callback`;
+export async function beginRobinhoodOAuth(input:{userId:string}){
+  // Robinhood's authorize endpoint only issues codes to allowlisted redirect URIs
+  // (localhost + major agent platforms) — a deployed origin is rejected with
+  // "Mismatching Redirect URI". The browser hits localhost, where a forwarder
+  // (scripts/robinhood-oauth-forwarder.mjs) bounces the callback to this app.
+  const redirectUri=process.env.ROBINHOOD_OAUTH_REDIRECT_URI??"http://localhost:3000/api/brokers/robinhood/callback";
   const state=random();
   const flow=oauthProvider({redirectUri,state});
   const result=await auth(flow.provider,{serverUrl:MCP_URL,scope:"internal"});

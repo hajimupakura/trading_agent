@@ -1,34 +1,51 @@
 #!/usr/bin/env bash
-# Morning routine: verify the Robinhood MCP connection; if it's dead, launch the
-# localhost reconnect flow (Robinhood only allows the OAuth redirect via localhost).
+# Morning routine: ask the deployed app whether its Robinhood connection is healthy
+# (it auto-refreshes tokens itself). If dead, run the localhost reconnect flow:
+# a tiny forwarder receives Robinhood's localhost-only OAuth redirect and bounces
+# it to the deployed app, which completes the token exchange with its own secrets.
+# Nothing secret is needed on this machine except CRON_SECRET to call the health API.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Keep env fresh (needed for Supabase + token decryption keys).
-# The Development environment holds pullable copies of BROKER_TOKEN_ENCRYPTION_KEY and
-# SUPABASE_SECRET_KEY (same values as Production, whose vars are sensitive-locked).
-if [ ! -f .env.local ] || ! grep -q '^BROKER_TOKEN_ENCRYPTION_KEY=' .env.local || [ -n "$(find .env.local -mtime +7 2>/dev/null)" ]; then
+APP_URL="${VELOCITY_APP_URL:-https://trading-agent-mocha.vercel.app}"
+
+# CRON_SECRET is pullable from the Development environment.
+if [ ! -f .env.local ] || ! grep -q '^CRON_SECRET=' .env.local || grep -q '^CRON_SECRET="\[SENSITIVE\]"' .env.local; then
   echo "Pulling environment variables from Vercel (development)..."
   vercel env pull .env.local --environment=development
 fi
+CRON_SECRET=$(grep '^CRON_SECRET=' .env.local | head -1 | cut -d= -f2- | tr -d '"')
+if [ -z "$CRON_SECRET" ] || [ "$CRON_SECRET" = "[SENSITIVE]" ]; then
+  echo "CRON_SECRET is not available locally. Add it to the Vercel Development environment:" >&2
+  echo "  vercel env add CRON_SECRET development" >&2
+  exit 1
+fi
 
-if node scripts/robinhood-morning-check.mjs; then
+check() { curl -sS -m 30 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/robinhood-health"; }
+
+result=$(check || echo '{"connected":false,"reason":"health_endpoint_unreachable"}')
+if [ "$(printf '%s' "$result" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).connected' 2>/dev/null)" = "true" ]; then
+  echo "✓ Robinhood connection healthy: $result"
   echo "Nothing else to do — the deployed Velocity app can trade all day."
   exit 0
 fi
 
-status=$?
-if [ "$status" -ne 2 ]; then
-  echo "Health check hit an unexpected error (see above)." >&2
-  exit "$status"
-fi
+echo "✗ Robinhood needs a reconnect: $result"
+echo ""
+echo "Starting the localhost OAuth forwarder and opening Velocity settings..."
+echo "  1. In the browser tab that opens, log in and click 'Connect Robinhood'."
+echo "  2. Approve the push notification in your Robinhood mobile app."
+echo "  3. This finishes automatically once Robinhood redirects back."
+echo ""
+( sleep 2 && open "$APP_URL/dashboard/settings" ) &
+VELOCITY_APP_URL="$APP_URL" node scripts/robinhood-oauth-forwarder.mjs
 
-echo ""
-echo "Reconnect needed. Starting Velocity locally..."
-echo "  1. Log in to Velocity in the browser tab that opens."
-echo "  2. Go to Settings -> Connect Robinhood."
-echo "  3. Approve the push notification in your Robinhood mobile app."
-echo "  4. When settings shows 'connected', Ctrl+C here to stop the dev server."
-echo ""
-( sleep 4 && open "http://localhost:3000/dashboard/settings" ) &
-pnpm dev
+sleep 3
+result=$(check || true)
+if [ "$(printf '%s' "$result" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).connected' 2>/dev/null)" = "true" ]; then
+  echo "✓ Reconnected: $result"
+else
+  echo "Still not healthy: $result"
+  echo "Check $APP_URL/dashboard/settings for the connection status/error."
+  exit 1
+fi
