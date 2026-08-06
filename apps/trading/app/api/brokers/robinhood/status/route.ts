@@ -1,0 +1,6 @@
+import {getAuthenticatedUser} from "@/lib/supabase/auth";
+import {disconnectRobinhood,listRobinhoodTools,robinhoodConnectionStatus} from "@/lib/brokers/robinhood";
+export const dynamic="force-dynamic";
+const required=["get_accounts","get_portfolio","get_indexes","get_index_quotes","get_option_chains","get_option_quotes","get_option_positions","get_option_orders","review_option_order","place_option_order","cancel_option_order"];
+export async function GET(){const user=await getAuthenticatedUser();if(!user)return Response.json({error:"Unauthorized"},{status:401});try{const status=await robinhoodConnectionStatus(user.id);if(!status.connected)return Response.json(status);const tools=await listRobinhoodTools(user.id);const names=tools.map(tool=>tool.name);return Response.json({...status,capabilities:required.map(name=>({name,available:names.includes(name)})),executionReady:required.every(name=>names.includes(name))},{headers:{"Cache-Control":"no-store"}});}catch(error){return Response.json({connected:false,error:error instanceof Error?error.message:"Robinhood unavailable"},{status:502});}}
+export async function DELETE(){const user=await getAuthenticatedUser();if(!user)return Response.json({error:"Unauthorized"},{status:401});await disconnectRobinhood(user.id);return Response.json({connected:false});}
