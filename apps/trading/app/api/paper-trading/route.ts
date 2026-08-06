@@ -5,6 +5,7 @@ import { getPaperTradingState, submitPaperOptionOrder } from "@/lib/alpaca/paper
 import { PAPER_RULES, validatePaperEntry } from "@/lib/alpaca/risk";
 import { refreshCommandCenter } from "@/lib/options/command-center";
 import {loadRiskSettings} from "@/lib/settings/risk-settings";
+import {createAlert} from "@/lib/alerts/server";
 
 export const dynamic = "force-dynamic";
 const requestSchema = z.object({ underlying:z.enum(["SPY","SPX"]), contractTicker:z.string().min(10), signalId:z.string().min(10) });
@@ -51,6 +52,7 @@ export async function POST(request:Request) {
     if (!risk.allowed) return Response.json({ error:"Order blocked by risk controls", reasons:risk.errors }, { status:422 });
     const clientOrderId = `velocity-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
     const order = await submitPaperOptionOrder({ symbol:contract.ticker, limitPrice:contract.ask, clientOrderId });
+    await createAlert({userId:user.id,signalId:signal.id,eventKey:`paper-entry-${order.id}`,severity:"success",title:"Paper entry submitted",body:`BUY 1 ${contract.ticker} at a $${contract.ask.toFixed(2)} limit · maximum debit $${risk.debit.toFixed(0)}`,metadata:{orderId:order.id,contractTicker:contract.ticker,limitPrice:contract.ask,maxDebit:risk.debit,status:order.status}}).catch(error=>console.error("Entry alert failed",error));
     const { error:journalError } = await createAdminClient().from("paper_trade_orders").insert({
       user_id:user.id, signal_id:signal.id, alpaca_order_id:order.id, client_order_id:order.client_order_id,
       action:"buy_to_open", underlying:parsed.data.underlying, contract_ticker:contract.ticker,

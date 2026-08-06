@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getAuthenticatedUser } from "@/lib/supabase/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {createAlert} from "@/lib/alerts/server";
 
 export const dynamic = "force-dynamic";
 async function state() {
@@ -14,8 +15,8 @@ async function state() {
   return { control,status,online:Boolean(status?.healthy && heartbeatAge<30_000),heartbeatAgeMs:Number.isFinite(heartbeatAge)?heartbeatAge:null };
 }
 export async function GET() {
-  if (!await getAuthenticatedUser()) return Response.json({error:"Unauthorized"},{status:401});
-  try { return Response.json(await state(),{headers:{"Cache-Control":"no-store"}}); }
+  const user=await getAuthenticatedUser();if (!user) return Response.json({error:"Unauthorized"},{status:401});
+  try { const result=await state();if(!result.online)await createAlert({userId:user.id,eventKey:`manager-offline-${user.id}-${new Date().toISOString().slice(0,10)}`,severity:"critical",title:"Automatic exit manager offline",body:`Railway is not reporting a healthy heartbeat${result.status?.last_error?`: ${result.status.last_error}`:". Manage any open Alpaca positions manually."}`,metadata:{heartbeatAgeMs:result.heartbeatAgeMs,lastHeartbeat:result.status?.last_heartbeat??null,lastError:result.status?.last_error??null}});return Response.json(result,{headers:{"Cache-Control":"no-store"}}); }
   catch(error){ return Response.json({error:error instanceof Error?error.message:"Manager unavailable"},{status:503}); }
 }
 export async function POST(request:Request) {

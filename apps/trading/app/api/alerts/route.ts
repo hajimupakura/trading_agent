@@ -1,0 +1,7 @@
+import {z} from "zod";
+import {getAuthenticatedUser} from "@/lib/supabase/auth";
+import {createClient} from "@/lib/supabase/server";
+
+export const dynamic="force-dynamic";
+export async function GET(){const user=await getAuthenticatedUser();if(!user)return Response.json({error:"Unauthorized"},{status:401});const supabase=await createClient();const {data,error}=await supabase.from("alerts").select("id,severity,title,body,metadata,read_at,created_at").eq("user_id",user.id).eq("channel","in_app").order("created_at",{ascending:false}).limit(20);if(error)return Response.json({error:error.message},{status:500});return Response.json({alerts:data??[],unread:(data??[]).filter(alert=>!alert.read_at).length},{headers:{"Cache-Control":"no-store"}});}
+export async function PATCH(request:Request){const user=await getAuthenticatedUser();if(!user)return Response.json({error:"Unauthorized"},{status:401});const parsed=z.object({id:z.string().uuid().optional(),all:z.boolean().optional()}).refine(value=>value.id||value.all).safeParse(await request.json().catch(()=>null));if(!parsed.success)return Response.json({error:"Invalid alert update"},{status:400});const supabase=await createClient();let query=supabase.from("alerts").update({read_at:new Date().toISOString()}).eq("user_id",user.id).is("read_at",null);if(parsed.data.id)query=query.eq("id",parsed.data.id);const {error}=await query;if(error)return Response.json({error:error.message},{status:500});return Response.json({ok:true});}

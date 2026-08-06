@@ -25,10 +25,12 @@ export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask
   const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,updated_at:new Date().toISOString() });
   if (error) throw error;
 }
-export async function markMissingPositions(openTickers:string[]) {
-  const { data,error } = await db.from("paper_position_monitors").select("contract_ticker").in("status",["monitoring","closing","error"]);
-  if (error) throw error; const missing = (data ?? []).map(row=>row.contract_ticker).filter(ticker=>!openTickers.includes(ticker));
-  if (missing.length) { const {error:updateError}=await db.from("paper_position_monitors").update({status:"closed",updated_at:new Date().toISOString()}).in("contract_ticker",missing); if(updateError) throw updateError; }
+export async function markMissingPositions(openTickers:string[],orders:AlpacaOrder[]) {
+  const { data,error } = await db.from("paper_position_monitors").select("contract_ticker,user_id,signal_id,close_order_id,entry_price").in("status",["monitoring","closing","error"]);
+  if (error) throw error; const missing = (data ?? []).filter(row=>!openTickers.includes(row.contract_ticker));
+  if (missing.length) { const tickers=missing.map(row=>row.contract_ticker);const {error:updateError}=await db.from("paper_position_monitors").update({status:"closed",updated_at:new Date().toISOString()}).in("contract_ticker",tickers); if(updateError) throw updateError;
+    for(const row of missing){const symbol=String(row.contract_ticker).replace(/^O:/,"");const filled=orders.find(order=>order.symbol===symbol&&order.side==="sell"&&order.status==="filled");if(!filled)continue;const fill=Number(filled.filled_avg_price??filled.limit_price??0);const {error:orderError}=await db.from("paper_trade_orders").update({status:filled.status,limit_price:fill||Number(filled.limit_price),broker_response:filled,updated_at:new Date().toISOString()}).eq("alpaca_order_id",filled.id);if(orderError)throw orderError;await createWorkerAlert({userId:row.user_id,signalId:row.signal_id,eventKey:`paper-exit-filled-${filled.id}`,severity:"success",title:"Paper exit filled",body:`SELL ${filled.qty} ${symbol} filled near $${fill.toFixed(2)}. The position is closed.`,metadata:{orderId:filled.id,contractTicker:row.contract_ticker,fillPrice:fill,entryPrice:Number(row.entry_price)}});}
+  }
 }
 export async function journalExit(position:ManagedPosition,order:AlpacaOrder,limitPrice:number,reason:string) {
   const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:position.ticker.startsWith("O:SPX")?"SPX":"SPY",contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order },{onConflict:"alpaca_order_id"});
@@ -37,4 +39,8 @@ export async function journalExit(position:ManagedPosition,order:AlpacaOrder,lim
 export async function heartbeat(input:{healthy:boolean;positions:number;lastError:string|null}) {
   const { error } = await db.from("position_manager_status").upsert({ id:config.MANAGER_INSTANCE_ID,enabled:config.exitsEnabled,healthy:input.healthy,managed_positions:input.positions,last_error:input.lastError,last_heartbeat:new Date().toISOString(),updated_at:new Date().toISOString() });
   if (error) throw error;
+}
+export async function createWorkerAlert(input:{userId:string;signalId?:string|null;eventKey:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;metadata?:Record<string,unknown>}) {
+  const {error}=await db.from("alerts").insert({user_id:input.userId,signal_id:input.signalId??null,channel:"in_app",event_key:input.eventKey,severity:input.severity,title:input.title,body:input.body,metadata:input.metadata??{}});
+  if(error&&error.code!=="23505")throw error;
 }

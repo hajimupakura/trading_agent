@@ -16,6 +16,9 @@ import {
   Zap,
   LineChart,
   Settings,
+  Bell,
+  Check,
+  AlertTriangle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
@@ -39,6 +42,8 @@ interface PaperState {
   positions?:unknown[]; orders?:unknown[];
 }
 interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; error?:string }
+interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;read_at:string|null;created_at:string}
+interface AlertState{alerts:AlertItem[];unread:number}
 
 export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [underlying, setUnderlying] = useState<Underlying>("SPY");
@@ -47,15 +52,18 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [paper, setPaper] = useState<PaperState | null>(null);
   const [manager, setManager] = useState<ManagerState | null>(null);
+  const [alerts,setAlerts]=useState<AlertState>({alerts:[],unread:0});
+  const [alertsOpen,setAlertsOpen]=useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
   const [selectedDte, setSelectedDte] = useState<0|1|2>(0);
 
   const refreshPaper = useCallback(async () => {
-    const [paperResponse,managerResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"})]);
-    setPaper(await paperResponse.json()); setManager(await managerResponse.json());
+    const [paperResponse,managerResponse,alertResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"})]);
+    setPaper(await paperResponse.json()); setManager(await managerResponse.json());if(alertResponse.ok)setAlerts(await alertResponse.json());
   }, []);
+  const markAlertsRead=useCallback(async(id?:string)=>{await fetch("/api/alerts",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(id?{id}:{all:true})});await refreshPaper();},[refreshPaper]);
   const setKillSwitch = useCallback(async (killSwitch:boolean) => {
     const response=await fetch("/api/position-manager",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({killSwitch})});
     const payload=await response.json(); if(!response.ok){setOrderMessage({tone:"error",text:payload.error??"Control update failed"});return;} setManager(payload);
@@ -81,7 +89,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  useEffect(() => { void refreshPaper(); }, [refreshPaper]);
+  useEffect(() => { void refreshPaper();const timer=window.setInterval(refreshPaper,10_000);return()=>window.clearInterval(timer); }, [refreshPaper]);
 
   const signal = data?.signal;
   const approveOrder = useCallback(async () => {
@@ -137,7 +145,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <p className="eyebrow">INTRADAY OPTIONS INTELLIGENCE</p>
             <h1>0–2 DTE Command Center</h1>
           </div>
-          <div className="topbar-actions"><div className="market-status"><span className="live-dot" /> LIVE DATA <b>{updated}</b></div><form action={logout}><button className="logout-button" title={`Sign out${userEmail ? ` ${userEmail}` : ""}`}><LogOut size={14}/> Sign out</button></form></div>
+          <div className="topbar-actions"><div className="market-status"><span className="live-dot" /> LIVE DATA <b>{updated}</b></div><div className="alert-menu"><button className={`alert-button ${alerts.unread?"has-alerts":""}`} onClick={()=>setAlertsOpen(open=>!open)} title="Trading alerts"><Bell size={15}/>{alerts.unread?<b>{alerts.unread}</b>:null}</button>{alertsOpen?<div className="alert-popover"><div className="alert-popover-head"><strong>TRADING ALERTS</strong>{alerts.unread?<button onClick={()=>void markAlertsRead()}><Check size={12}/> Mark all read</button>:null}</div>{alerts.alerts.length?<div className="alert-list">{alerts.alerts.slice(0,8).map(alert=><button key={alert.id} className={`${alert.severity} ${alert.read_at?"read":""}`} onClick={()=>!alert.read_at&&void markAlertsRead(alert.id)}><i>{alert.severity==="critical"?<AlertTriangle size={13}/>:<Bell size={12}/>}</i><span><strong>{alert.title}</strong><small>{alert.body}</small><em>{new Date(alert.created_at).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</em></span></button>)}</div>:<p>No trading alerts yet.</p>}</div>:null}</div><form action={logout}><button className="logout-button" title={`Sign out${userEmail ? ` ${userEmail}` : ""}`}><LogOut size={14}/> Sign out</button></form></div>
         </header>
 
         <main className="dashboard">
