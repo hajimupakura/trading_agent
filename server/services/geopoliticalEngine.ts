@@ -253,7 +253,8 @@ RULES:
       maxTokens: 1500,
     });
 
-    const text = (result.text || "").trim();
+    const content = result.choices[0]?.message.content;
+    const text = (typeof content === "string" ? content : "").trim();
     // Extract JSON array
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return [];

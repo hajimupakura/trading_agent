@@ -80,13 +80,20 @@ async function executeTool(name: string, _args: Record<string, any>): Promise<st
 }
 
 export async function runGeopoliticalAgent(ctx: AgentContext): Promise<AgentSummary> {
-  return runSpecialist({
-    agentName: "geopolitical_events",
-    systemPrompt: SYSTEM_PROMPT,
-    tools: TOOLS,
+  return runSpecialist(
+    {
+      name: "geopolitical_events",
+      systemPrompt: SYSTEM_PROMPT,
+      tools: TOOLS,
+      maxToolCalls: 6,
+      maxOutputTokens: 1024,
+      timeoutMs: 60_000,
+    },
+    `Assess geopolitical and macro event risk for this portfolio context: ${JSON.stringify({
+      predictions: ctx.predictions.slice(0, 10),
+      watchlistTickers: ctx.watchlistTickers,
+      positions: ctx.portfolio?.positions ?? [],
+    })}`,
     executeTool,
-    maxToolCalls: 6,
-    maxOutputTokens: 1024,
-    ctx,
-  });
+  );
 }

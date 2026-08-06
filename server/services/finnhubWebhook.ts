@@ -61,14 +61,13 @@ export function registerFinnhubWebhook(app: Express) {
 async function handleNewsEvent(items: any[]) {
   if (!Array.isArray(items) || items.length === 0) return;
 
-  const { db } = await import("../db");
-  const { newsArticles } = await import("../../drizzle/schema");
+  const { insertNewsArticle } = await import("../db");
 
   let inserted = 0;
   for (const item of items) {
     if (!item.headline || !item.url) continue;
     try {
-      await db.insert(newsArticles).ignore().values({
+      await insertNewsArticle({
         title: item.headline,
         summary: item.summary || null,
         content: item.summary || item.headline,
