@@ -28,7 +28,7 @@ export interface AlpacaAccount {
   cash: string; buying_power: string; options_buying_power: string; options_approved_level: number;
 }
 export interface AlpacaPosition { symbol:string; asset_class:string; qty:string; market_value:string; cost_basis:string; unrealized_pl:string; unrealized_plpc:string }
-export interface AlpacaOrder { id:string; client_order_id:string; symbol:string; status:string; side:string; qty:string; type:string; limit_price:string | null; filled_qty:string; created_at:string }
+export interface AlpacaOrder { id:string; client_order_id:string; symbol:string; status:string; side:string; qty:string; type:string; limit_price:string | null; filled_qty:string; filled_avg_price?:string|null; filled_at?:string|null; created_at:string }
 
 export const optionSymbolForAlpaca = (ticker: string) => ticker.startsWith("O:") ? ticker.slice(2) : ticker;
 
@@ -47,3 +47,4 @@ export async function submitPaperOptionOrder(input: { symbol:string; limitPrice:
     limit_price:input.limitPrice.toFixed(2), client_order_id:input.clientOrderId, position_intent:"buy_to_open",
   }) });
 }
+export async function getRecentPaperOrders(){return alpaca<AlpacaOrder[]>("/v2/orders?status=all&limit=100&direction=desc&nested=true");}
