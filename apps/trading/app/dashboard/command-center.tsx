@@ -46,6 +46,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
+  const [selectedDte, setSelectedDte] = useState<0|1|2>(0);
 
   const refreshPaper = useCallback(async () => {
     const [paperResponse,managerResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"})]);
@@ -97,12 +98,13 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const market = data?.market;
   const technicals = market?.technicals;
   const eligible = data?.contracts.filter((contract) => contract.eligible) ?? [];
+  const selectedContracts = data?.contracts.filter(contract => contract.dte === selectedDte) ?? [];
   const actionTone = signal?.action === "enter_call" ? "call" : signal?.action === "enter_put" ? "put" : "wait";
   const actionLabel = signal?.action === "enter_call" ? "CALL SETUP" : signal?.action === "enter_put" ? "PUT SETUP" : "STAND ASIDE";
   const actionDescription = signal?.action === "enter_call"
-    ? "Bullish confluence is complete: SPY is above VWAP, EMA 8 is above EMA 21, price cleared the 15-minute opening-range high, momentum confirms, and an eligible call exists. Review only—not a guaranteed winner or automatic entry."
+    ? "Bullish confluence is complete: two SPY closes held above VWAP and the 15-minute range, EMA and VWAP slope rise, RSI/MACD and 1.2× relative volume confirm, the move is not overextended, and an eligible call exists. Review only—not a guaranteed winner or automatic entry."
     : signal?.action === "enter_put"
-      ? "Bearish confluence is complete: SPY is below VWAP, EMA 8 is below EMA 21, price broke the 15-minute opening-range low, momentum confirms, and an eligible put exists. Review only—not a guaranteed winner or automatic entry."
+      ? "Bearish confluence is complete: two SPY closes held below VWAP and the 15-minute range, EMA and VWAP slope fall, RSI/MACD and 1.2× relative volume confirm, the move is not overextended, and an eligible put exists. Review only—not a guaranteed winner or automatic entry."
       : "No qualified entry currently exists. Price structure, momentum, or contract liquidity is incomplete, so the engine recommends waiting rather than opening a position.";
   const updated = data?.asOf ? new Date(data.asOf).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }) : "Waiting for data";
 
@@ -202,7 +204,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
               <PriceChart bars={market?.bars ?? []} reference={market?.referencePrice ?? null} />
             </article>
             <article className="technicals-card">
-              <div className="section-heading"><div><span>CONFLUENCE MATRIX</span><strong>8 FACTOR CHECK</strong></div></div>
+              <div className="section-heading"><div><span>CONFLUENCE MATRIX</span><strong>9 FACTOR CHECK</strong></div></div>
               <div className="technical-list">
                 <Technical label="EMA 8 / 21" value={`${money(technicals?.ema8)} / ${money(technicals?.ema21)}`} state={technicals && technicals.ema8 > technicals.ema21 ? "bull" : "bear"} />
                 <Technical label="RSI 14" value={money(technicals?.rsi14, 1)} state={technicals?.rsi14 && technicals.rsi14 > 55 ? "bull" : technicals?.rsi14 && technicals.rsi14 < 45 ? "bear" : "neutral"} />
@@ -212,15 +214,17 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
                 <Technical label="Bollinger position" value={`${money(technicals?.bollingerPosition)}σ`} state="neutral" />
                 <Technical label="Candle shape" value={technicals?.candlePattern.replace("_", " ") ?? "—"} state={technicals?.candlePattern.includes("bullish") || technicals?.candlePattern === "hammer" ? "bull" : technicals?.candlePattern === "none" ? "neutral" : "bear"} />
                 <Technical label="Volume" value={technicals?.volumeConfirmation == null ? "N/A" : technicals.volumeConfirmation ? "Confirmed" : "Unconfirmed"} state={technicals?.volumeConfirmation ? "bull" : "neutral"} />
+                <Technical label="VWAP slope · 5m" value={money(technicals?.vwapSlope, 3)} state={technicals?.vwapSlope == null ? "neutral" : technicals.vwapSlope > 0 ? "bull" : "bear"} />
               </div>
             </article>
           </section>
 
           <section className="contracts-card">
-            <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED 0–2 DTE CONTRACTS</strong></div><p>Rejected rows are dimmed · hover for reason</p></div>
+            <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {selectedDte}DTE CONTRACTS</strong></div><p>Rejected rows are dimmed · hover for reason</p></div>
+            <div className="dte-tabs" role="tablist" aria-label="Filter contracts by days to expiration">{([0,1,2] as const).map(dte => <button key={dte} role="tab" aria-selected={selectedDte === dte} className={selectedDte === dte ? "selected":""} onClick={()=>setSelectedDte(dte)}>{dte}DTE <span>{data?.contracts.filter(contract => contract.dte === dte).length ?? 0}</span></button>)}</div>
             <div className="table-wrap"><table>
               <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
-              <tbody>{data?.contracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} />)}</tbody>
+              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} />) : <tr><td className="empty-dte" colSpan={12}>No {selectedDte}DTE contracts returned in this scan.</td></tr>}</tbody>
             </table></div>
           </section>
 

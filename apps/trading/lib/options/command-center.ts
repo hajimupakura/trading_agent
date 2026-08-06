@@ -12,7 +12,8 @@ export async function refreshCommandCenter(underlying: Underlying): Promise<Comm
   if (market && underlying === "SPX") market.displayPrice = contracts.find(contract => contract.underlyingPrice != null)?.underlyingPrice ?? market.price;
   const errors = [marketResult, chainResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
   const signal = market ? generateSignal(market, contracts) : null;
-  const snapshot = { configured:true, asOf:Date.now(), market, contracts:contracts.slice(0, 40), signal, errors };
+  const contractsByDte = ([0,1,2] as const).flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
+  const snapshot = { configured:true, asOf:Date.now(), market, contracts:contractsByDte, signal, errors };
   const admin = createAdminClient();
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);

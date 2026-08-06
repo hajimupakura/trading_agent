@@ -44,30 +44,28 @@ export async function getMarketState(underlying: Underlying): Promise<MarketStat
   return { symbol:underlying, chartSymbol:"SPY", asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120) };
 }
 export async function getOptionChain(underlying: Underlying): Promise<Contract[]> {
-  const today = dateEt(); const end = addDays(today, 2);
-  let next: string | undefined = `${BASE}/v3/snapshot/options/${underlying}?expiration_date.gte=${today}&expiration_date.lte=${end}&limit=250&sort=expiration_date`;
-  const raw: Parameters<typeof rankContracts>[0] = []; let pages = 0;
-  while (next && pages++ < 4) {
-    const payload: any = await massive<any>(next);
-    for (const item of payload.results ?? []) {
-      const details = item.details ?? {}; const quote = item.last_quote ?? {}; const day = item.day ?? item.session ?? {};
-      const side = details.contract_type as Side; const expirationDate = String(details.expiration_date ?? "");
-      if (!expirationDate || !["call", "put"].includes(side)) continue;
-      const bid = Number(quote.bid ?? 0); const ask = Number(quote.ask ?? 0); const midpoint = Number(quote.midpoint ?? (bid && ask ? (bid + ask) / 2 : 0));
-      const volume = Number(day.volume ?? 0); const openInterest = Number(item.open_interest ?? 0);
-      raw.push({
-        ticker:String(details.ticker ?? item.ticker ?? ""), underlying, expirationDate,
-        dte:Math.round((Date.parse(`${expirationDate}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86_400_000),
-        side, strike:Number(details.strike_price ?? 0), exerciseStyle:String(details.exercise_style ?? "unknown"),
-        bid, ask, midpoint, spreadPct:midpoint ? (ask - bid) / midpoint * 100 : 999,
-        quoteUpdatedAt:quote.last_updated == null ? null : Math.floor(Number(quote.last_updated) / 1_000_000),
-        volume, openInterest, volumeToOpenInterest:openInterest ? volume / openInterest : volume ? 5 : 0,
-        impliedVolatility:item.implied_volatility == null ? null : Number(item.implied_volatility),
-        delta:item.greeks?.delta == null ? null : Number(item.greeks.delta), gamma:item.greeks?.gamma == null ? null : Number(item.greeks.gamma),
-        theta:item.greeks?.theta == null ? null : Number(item.greeks.theta), underlyingPrice:item.underlying_asset?.price == null ? null : Number(item.underlying_asset.price),
-      });
+  const today = dateEt();
+  const buckets = await Promise.all([0,1,2].map(async dte => {
+    const expiration = addDays(today,dte); const rows: Parameters<typeof rankContracts>[0] = [];
+    let next:string|undefined = `${BASE}/v3/snapshot/options/${underlying}?expiration_date=${expiration}&limit=250&sort=strike_price`; let pages=0;
+    while(next && pages++ < 4) {
+      const payload:any = await massive<any>(next);
+      for(const item of payload.results ?? []) {
+        const details=item.details ?? {}; const quote=item.last_quote ?? {}; const day=item.day ?? item.session ?? {};
+        const side=details.contract_type as Side; const expirationDate=String(details.expiration_date ?? "");
+        if(!expirationDate || !["call","put"].includes(side)) continue;
+        const bid=Number(quote.bid ?? 0); const ask=Number(quote.ask ?? 0); const midpoint=Number(quote.midpoint ?? (bid && ask ? (bid+ask)/2:0));
+        const volume=Number(day.volume ?? 0); const openInterest=Number(item.open_interest ?? 0);
+        rows.push({ ticker:String(details.ticker ?? item.ticker ?? ""),underlying,expirationDate,dte,
+          side,strike:Number(details.strike_price ?? 0),exerciseStyle:String(details.exercise_style ?? "unknown"),bid,ask,midpoint,
+          spreadPct:midpoint ? (ask-bid)/midpoint*100:999,quoteUpdatedAt:quote.last_updated==null?null:Math.floor(Number(quote.last_updated)/1_000_000),
+          volume,openInterest,volumeToOpenInterest:openInterest?volume/openInterest:volume?5:0,impliedVolatility:item.implied_volatility==null?null:Number(item.implied_volatility),
+          delta:item.greeks?.delta==null?null:Number(item.greeks.delta),gamma:item.greeks?.gamma==null?null:Number(item.greeks.gamma),theta:item.greeks?.theta==null?null:Number(item.greeks.theta),underlyingPrice:item.underlying_asset?.price==null?null:Number(item.underlying_asset.price) });
+      }
+      next=payload.next_url;
     }
-    next = payload.next_url;
-  }
+    return rows;
+  }));
+  const raw=buckets.flat();
   return rankContracts(raw);
 }

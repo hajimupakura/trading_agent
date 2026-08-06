@@ -4,7 +4,7 @@ import { generateSignal } from "./signal";
 import type { Contract, MarketState } from "./types";
 
 const raw = (overrides:Record<string,unknown> = {}) => ({ ticker:"O:SPY260806C00650000", underlying:"SPY" as const, expirationDate:"2026-08-06", dte:0, side:"call" as const, strike:650, exerciseStyle:"american", bid:1.9, ask:2, midpoint:1.95, spreadPct:5.1, quoteUpdatedAt:Date.now(), volume:10_000, openInterest:2_000, volumeToOpenInterest:5, impliedVolatility:.2, delta:.45, gamma:.1, theta:-.2, underlyingPrice:650, ...overrides });
-const market = (overrides:Partial<MarketState> = {}):MarketState => ({ symbol:"SPY", chartSymbol:"SPY", asOf:Date.now(), price:651, displayPrice:651, referencePrice:649.5, referenceLabel:"VWAP", openingRangeHigh:650.5, openingRangeLow:647, regime:"uptrend", bars:[], technicals:{ ema8:650.5, ema21:649.5, rsi14:62, atr14:1.2, macd:.4, macdSignal:.25, bollingerPosition:.7, breakoutAtr:.42, volumeConfirmation:true, candlePattern:"none" }, ...overrides });
+const market = (overrides:Partial<MarketState> = {}):MarketState => ({ symbol:"SPY", chartSymbol:"SPY", asOf:Date.now(), price:651, displayPrice:651, referencePrice:649.5, referenceLabel:"VWAP", openingRangeHigh:650.5, openingRangeLow:647, regime:"uptrend", bars:[{timestamp:1,open:650.4,high:651.1,low:650.3,close:650.8,volume:200,vwap:650.7},{timestamp:2,open:650.8,high:651.2,low:650.7,close:651,volume:250,vwap:650.9}], technicals:{ ema8:650.5, ema21:649.5, rsi14:62, atr14:1.2, macd:.4, macdSignal:.25, bollingerPosition:.7, breakoutAtr:.42, volumeConfirmation:true, vwapSlope:.08, candlePattern:"none" }, ...overrides });
 
 describe("focused options engine", () => {
   it("rejects an option above the configured $8 quote ceiling", () => {
@@ -23,5 +23,15 @@ describe("focused options engine", () => {
     const [contract] = rankContracts([raw()]); const base = market();
     const signal = generateSignal(market({ technicals:{ ...base.technicals, rsi14:82 } }), [contract as Contract]);
     expect(signal.action).toBe("watch");
+  });
+  it("rejects a one-candle false breakout", () => {
+    const [contract] = rankContracts([raw()]); const base = market();
+    const signal = generateSignal(market({ bars:[base.bars[0]!,{...base.bars[1]!,close:650.4}] }), [contract as Contract]);
+    expect(signal.action).toBe("watch"); expect(signal.reasons.join(" ")).toContain("two closes");
+  });
+  it("requires relative volume confirmation", () => {
+    const [contract] = rankContracts([raw()]); const base = market();
+    const signal = generateSignal(market({ technicals:{...base.technicals,volumeConfirmation:false} }), [contract as Contract]);
+    expect(signal.action).toBe("watch"); expect(signal.reasons.join(" ")).toContain("1.2×");
   });
 });

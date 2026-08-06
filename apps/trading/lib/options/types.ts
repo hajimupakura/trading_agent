@@ -5,7 +5,7 @@ export interface Bar { timestamp: number; open: number; high: number; low: numbe
 export interface Technicals {
   ema8: number; ema21: number; rsi14: number | null; atr14: number | null;
   macd: number | null; macdSignal: number | null; bollingerPosition: number | null;
-  breakoutAtr: number | null; volumeConfirmation: boolean | null;
+  breakoutAtr: number | null; volumeConfirmation: boolean | null; vwapSlope: number | null;
   candlePattern: "bullish_engulfing" | "bearish_engulfing" | "hammer" | "shooting_star" | "none";
 }
 export interface MarketState {

@@ -51,11 +51,17 @@ export function calculateTechnicals(bars: Bar[], underlying: Underlying, opening
   const distance = current.close > openingHigh ? current.close - openingHigh : current.close < openingLow ? openingLow - current.close : 0;
   const volumes = bars.slice(-21, -1).map(bar => bar.volume).filter(Boolean);
   const averageVolume = volumes.reduce((sum, value) => sum + value, 0) / Math.max(1, volumes.length);
+  let cumulativeVolume = 0; let cumulativeValue = 0;
+  const sessionVwap = bars.map(bar => {
+    cumulativeVolume += bar.volume; cumulativeValue += (bar.vwap ?? bar.close) * bar.volume;
+    return cumulativeVolume ? cumulativeValue / cumulativeVolume : bar.close;
+  });
+  const vwapSlope = sessionVwap.length >= 6 ? sessionVwap.at(-1)! - sessionVwap.at(-6)! : null;
   return {
     ema8: ema(closes.slice(-30), 8), ema21: ema(closes.slice(-30), 21), rsi14: rsi(closes), atr14, macd, macdSignal,
     bollingerPosition: last20.length >= 20 && deviation ? (current.close - mean) / (2 * deviation) : null,
     breakoutAtr: atr14 ? distance / atr14 : null,
-    volumeConfirmation: underlying === "SPY" && volumes.length >= 5 ? current.volume >= averageVolume * 1.2 : null,
+    volumeConfirmation: volumes.length >= 5 ? current.volume >= averageVolume * 1.2 : null, vwapSlope,
     candlePattern: pattern(bars),
   };
 }
