@@ -30,7 +30,10 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const etMinutes = Number(etParts.find(part=>part.type==="hour")?.value)*60 + Number(etParts.find(part=>part.type==="minute")?.value);
   const inSwingWindow = settings.swingTradingEnabled && etMinutes >= settings.swingEntryStartMinutes && etMinutes <= settings.swingEntryEndMinutes;
   const signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget, minDte:inSwingWindow ? 1 : 0, trendDayEnabled:settings.trendDayEntriesEnabled }) : null;
-  const contractsByDte = ([0,1,2] as const).flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
+  // Cap per expiration session actually present — on Fridays the short chain carries
+  // Fri/Mon/Tue as dte 0/3/4, not 0/1/2 (weekends have no expirations).
+  const shortDtes = [...new Set(contracts.map(contract => contract.dte))].sort((a, b) => a - b).slice(0, 3);
+  const contractsByDte = shortDtes.flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
   const admin = createAdminClient();
   // Long-dated (3M/6M/9M/1Y) monitoring contracts: fetched only when the cron asks
   // (every ~15 minutes); otherwise carried over from the previous snapshot. They are
