@@ -65,6 +65,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [ticket, setTicket] = useState({ quantity:"1", limitPrice:"" });
   const [ticketBusy, setTicketBusy] = useState<"alpaca"|"robinhood"|null>(null);
   const [ticketMessage, setTicketMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
+  const [critique, setCritique] = useState<string | null>(null);
+  const [critiqueBusy, setCritiqueBusy] = useState(false);
   type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
   const horizonRange = (tab: HorizonTab): [number, number] => tab === 0 ? [0,0] : tab === 1 ? [1,1] : tab === 2 ? [2,2] : tab === "1M" ? [3,59] : tab === "3M" ? [60,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
@@ -122,8 +124,23 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const inspect = useCallback((contract: Contract) => {
     setInspected(contract);
     setTicket({ quantity:"1", limitPrice: contract.midpoint > 0 ? contract.midpoint.toFixed(2) : contract.ask > 0 ? contract.ask.toFixed(2) : "" });
-    setTicketMessage(null);
+    setTicketMessage(null); setCritique(null); setCritiqueBusy(false);
   }, []);
+  const critiqueInspected = useCallback(async () => {
+    if (!inspected) return;
+    setCritiqueBusy(true); setCritique(null);
+    try {
+      const quantity = Math.max(1, Math.floor(Number(ticket.quantity) || 1));
+      const limitPrice = Number(ticket.limitPrice) > 0 ? Number(ticket.limitPrice) : inspected.midpoint;
+      const response = await fetch("/api/ai/critique", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({
+        underlying, ticker:inspected.ticker, side:inspected.side, strike:inspected.strike,
+        expirationDate:inspected.expirationDate, dte:inspected.dte, quantity, limitPrice:Number(limitPrice.toFixed(2)),
+      }) });
+      const payload = await response.json();
+      setCritique(response.ok ? payload.critique : `Critique unavailable: ${payload.error ?? response.status}`);
+    } catch { setCritique("Critique unavailable — request failed."); }
+    finally { setCritiqueBusy(false); }
+  }, [inspected, ticket, underlying]);
   const executeInspected = useCallback(async (venue: "alpaca" | "robinhood") => {
     if (!inspected) return;
     setTicketBusy(venue); setTicketMessage(null);
@@ -325,6 +342,10 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           <div><span>Total debit</span><strong>${Number.isFinite(Number(ticket.quantity) * Number(ticket.limitPrice) * 100) ? (Number(ticket.quantity) * Number(ticket.limitPrice) * 100).toFixed(0) : "—"}</strong></div>
         </div>
         {ticketMessage ? <p className={`order-message ${ticketMessage.tone}`}>{ticketMessage.text}</p> : null}
+        <div className="approval-actions" style={{ marginBottom: 8 }}>
+          <button className="cancel-button" disabled={critiqueBusy} onClick={() => void critiqueInspected()} title="LLM devil's advocate — advisory only; risk gates still decide">{critiqueBusy ? "Thinking…" : "AI critique (devil's advocate)"}</button>
+        </div>
+        {critique ? <p className="decision-help" style={{ whiteSpace: "pre-wrap", borderLeft: "2px solid var(--accent, #888)", paddingLeft: 10 }}>{critique}</p> : null}
         <div className="approval-actions">
           <button className="approve-button" disabled={ticketBusy != null || underlying === "SPX"} onClick={() => void executeInspected("alpaca")} title={underlying === "SPX" ? "Alpaca cannot execute SPX index options" : "Paper trade on Alpaca"}><Send size={14}/> {ticketBusy === "alpaca" ? "Submitting…" : underlying === "SPX" ? "Alpaca: SPX N/A" : "Buy on Alpaca (paper)"}</button>
           <button className="approve-button robinhood-execute" disabled={ticketBusy != null || !robinhood?.connected} onClick={() => void executeInspected("robinhood")} title={robinhood?.connected ? "Real order in the Robinhood agentic account" : "Connect Robinhood first"}><Send size={14}/> {ticketBusy === "robinhood" ? "Submitting…" : "Buy on Robinhood (real)"}</button>

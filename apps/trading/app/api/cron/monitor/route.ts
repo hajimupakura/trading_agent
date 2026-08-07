@@ -2,6 +2,7 @@ import { refreshCommandCenter } from "@/lib/options/command-center";
 import { refreshWatchSnapshot } from "@/lib/options/watchlist";
 import { WATCH_UNDERLYINGS } from "@/lib/options/types";
 import { runMarketRadar } from "@/lib/options/market-radar";
+import { maybeRunScheduledReviews } from "@/lib/ai/review";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -17,5 +18,6 @@ export async function GET(request: Request) {
     ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
   ]);
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, at:new Date().toISOString() });
+  const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, aiReviews, at:new Date().toISOString() });
 }
