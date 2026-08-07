@@ -4,6 +4,7 @@ import { WATCH_UNDERLYINGS } from "@/lib/options/types";
 import { runMarketRadar } from "@/lib/options/market-radar";
 import { maybeRunScheduledReviews } from "@/lib/ai/review";
 import { dispatchInstantAlerts } from "@/lib/notify/dispatch";
+import { runConvexityCapture } from "@/lib/options/convexity";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -19,7 +20,8 @@ export async function GET(request: Request) {
     ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
   ]);
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
+  const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
   const notify = await dispatchInstantAlerts().catch(error => { console.error("alert dispatch failed", error); return { sent:0, digestPending:0 }; });
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, aiReviews, notify, at:new Date().toISOString() });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, aiReviews, notify, at:new Date().toISOString() });
 }
