@@ -109,6 +109,10 @@ export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
   if (!response.ok) throw new Error(`Alpaca historical SPY bars ${response.status}`);
   const payload = await response.json() as { bars?: Array<{ t:string;o:number;h:number;l:number;c:number;v?:number;vw?:number }> };
   const bars = (payload.bars ?? []).filter(item=>{
+    // Session isolation: RTH minutes AND the requested ET date only — without the date
+    // check, the next session's bars leak in and contaminate opening range/VWAP/indicators.
+    const sessionDate=new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date(item.t));
+    if(sessionDate!==date) return false;
     const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(item.t));
     const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);
     return minutes>=570&&minutes<960;
