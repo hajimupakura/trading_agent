@@ -179,7 +179,7 @@ async function runPreCloseScan(today: string): Promise<boolean> {
       .filter(contract => contract.side === side && contract.delta != null && Math.abs(contract.delta) >= TRACK_DELTA_MIN && Math.abs(contract.delta) <= TRACK_DELTA_MAX)
       .sort((a, b) => Math.abs(Math.abs(a.delta!) - 0.25) - Math.abs(Math.abs(b.delta!) - 0.25));
     const pool = withDelta.length ? withDelta : candidates
-      .filter(contract => contract.side === side && contract.midpoint >= 1 && contract.midpoint <= MAX_ENTRY)
+      .filter(contract => contract.side === side && contract.midpoint >= 1 && contract.midpoint <= MAX_ENTRY_ASK)
       .sort((a, b) => Math.abs(a.midpoint - 3.5) - Math.abs(b.midpoint - 3.5));
     pool.slice(0, TRACK_PER_SIDE).forEach(contract => trackSet.add(contract.ticker));
   }
