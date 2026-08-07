@@ -12,3 +12,5 @@ const parsed = schema.parse(process.env);
 const supabaseUrl = parsed.SUPABASE_URL ?? parsed.NEXT_PUBLIC_SUPABASE_URL;
 if (!supabaseUrl) throw new Error("SUPABASE_URL is required");
 export const config = { ...parsed, supabaseUrl, exitsEnabled:parsed.PAPER_AUTO_EXITS_ENABLED === "true" };
+
+// Deploys: GitHub-connected — pushes to main matching apps/position-worker/** auto-deploy this service.
