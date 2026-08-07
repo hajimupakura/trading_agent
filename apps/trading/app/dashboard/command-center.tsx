@@ -136,6 +136,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
         <nav className="desk-nav" aria-label="Trading workspace">
           <Link className="nav-item active" href="/dashboard"><BarChart3 size={16} /> Command center</Link>
           <span className="nav-item"><Crosshair size={16} /> Setups <em>Live</em></span>
+          <Link className="nav-item" href="/dashboard/robinhood"><CircleDollarSign size={16}/> Robinhood desk <em>Live</em></Link>
           <Link className="nav-item" href="/dashboard/replay"><Activity size={16} /> Replay lab <em>Ready</em></Link>
           <Link className="nav-item" href="/dashboard/analytics"><LineChart size={16} /> Analytics</Link>
           <Link className="nav-item" href="/dashboard/settings"><Settings size={16} /> Risk settings</Link>
@@ -183,7 +184,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div><span>MAX CONTRACT DEBIT</span><strong>${money(paper?.rules?.maxTradeDebit,0)}</strong></div>
             <div><span>OPEN POSITIONS / ORDERS</span><strong>{paper?.positions?.length ?? 0} / {paper?.orders?.length ?? 0}</strong></div>
             <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
-            <div className={`connection-state robinhood-state ${robinhood?.connected ? "connected" : ""}`}><i/><span>{robinhood?.connected?(robinhood.executionReady?"ROBINHOOD LIVE READY":"ROBINHOOD CONNECTED"):<a href="/api/brokers/robinhood/connect">CONNECT ROBINHOOD</a>}</span></div>
+            <div className={`connection-state robinhood-state ${robinhood?.connected ? "connected" : ""}`}><i/><span>{robinhood?.connected?<Link href="/dashboard/robinhood">{robinhood.executionReady?"ROBINHOOD · TRADE DESK":"ROBINHOOD CONNECTED"}</Link>:<a href="/api/brokers/robinhood/connect">CONNECT ROBINHOOD</a>}</span></div>
           </section>
           <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"ENTRIES HALTED · EXITS ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume entries":"Emergency stop entries"}</button></section>
 
