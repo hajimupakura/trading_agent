@@ -5,35 +5,52 @@ import { callRobinhoodTool } from "./robinhood";
 // connect time and stored in broker_connections.capabilities). Response shapes are
 // parsed defensively — the MCP returns JSON inside text content blocks.
 
-function parseResult(payload: unknown): any {
+// Tool payloads arrive as {content:[{type:"text",text:JSON}], structuredContent?:{...}}
+// where the JSON is {data:{...}, guide:"..."} — `guide` is Robinhood-authored display
+// prose (untrusted); only `data` is consumed.
+export function parseToolData(payload: unknown): any {
+  const structured = (payload as { structuredContent?: { data?: unknown } })?.structuredContent;
+  if (structured && typeof structured === "object" && "data" in structured) return (structured as any).data;
   const blocks = ((payload as { content?: unknown })?.content ?? []) as Array<{ type?: string; text?: string }>;
   const text = Array.isArray(blocks) ? blocks.find(block => block?.type === "text")?.text : undefined;
   if (!text) return payload;
-  try { return JSON.parse(text); } catch { return text; }
+  try { const parsed = JSON.parse(text); return parsed?.data ?? parsed; } catch { return text; }
 }
 
-const asList = (raw: any): any[] => Array.isArray(raw) ? raw : raw?.results ?? raw?.accounts ?? raw?.orders ?? raw?.positions ?? [];
+const asList = (raw: any, key: string): any[] => Array.isArray(raw) ? raw : raw?.[key] ?? raw?.results ?? [];
 
 export async function getRobinhoodAccounts(userId: string) {
-  const raw = parseResult(await callRobinhoodTool(userId, "get_accounts", {}));
-  return asList(raw);
+  const raw = parseToolData(await callRobinhoodTool(userId, "get_accounts", {}));
+  return asList(raw, "accounts");
+}
+
+export async function getRobinhoodOptionUpgradeUrl(userId: string, accountNumber: string): Promise<string | null> {
+  const raw = parseToolData(await callRobinhoodTool(userId, "get_option_level_upgrade_info", { account_number: accountNumber }).catch(() => null));
+  return raw?.upgrade_url ?? null;
 }
 
 export async function getRobinhoodOverview(userId: string, accountNumber: string) {
-  const [portfolio, positions, orders] = await Promise.all([
-    callRobinhoodTool(userId, "get_portfolio", { account_number: accountNumber }).then(parseResult),
-    callRobinhoodTool(userId, "get_option_positions", { account_number: accountNumber, nonzero: true }).then(parseResult).then(asList),
-    callRobinhoodTool(userId, "get_option_orders", { account_number: accountNumber, placed_agent: "agentic" }).then(parseResult).then(asList).catch(() => []),
+  const [portfolioRaw, positionsRaw, ordersRaw] = await Promise.all([
+    callRobinhoodTool(userId, "get_portfolio", { account_number: accountNumber }).then(parseToolData),
+    callRobinhoodTool(userId, "get_option_positions", { account_number: accountNumber, nonzero: true }).then(parseToolData),
+    callRobinhoodTool(userId, "get_option_orders", { account_number: accountNumber }).then(parseToolData).catch(() => null),
   ]);
-  return { portfolio, positions, orders: orders.slice(0, 10) };
+  const portfolio = {
+    totalValue: Number(portfolioRaw?.total_value ?? 0),
+    cash: Number(portfolioRaw?.cash ?? 0),
+    buyingPower: Number(portfolioRaw?.buying_power?.buying_power ?? portfolioRaw?.buying_power ?? 0),
+    optionsValue: Number(portfolioRaw?.options_value ?? 0),
+    currency: String(portfolioRaw?.currency ?? "USD"),
+  };
+  return { portfolio, positions: asList(positionsRaw, "positions"), orders: asList(ordersRaw, "orders").slice(0, 15) };
 }
 
 export async function resolveOptionInstrument(userId: string, input: { chainSymbol: string; expirationDate: string; strike: number; type: "call" | "put" }) {
-  const raw = parseResult(await callRobinhoodTool(userId, "get_option_instruments", {
+  const raw = parseToolData(await callRobinhoodTool(userId, "get_option_instruments", {
     chain_symbol: input.chainSymbol, expiration_dates: input.expirationDate,
     strike_price: input.strike.toFixed(4), type: input.type, state: "active", tradability: "tradable",
   }));
-  const instrument = asList(raw)[0];
+  const instrument = asList(raw, "instruments")[0];
   if (!instrument?.id) throw new Error(`No tradable Robinhood instrument for ${input.chainSymbol} ${input.expirationDate} ${input.strike} ${input.type}`);
   return instrument as { id: string };
 }
@@ -48,7 +65,7 @@ export async function reviewAndPlaceOptionOrder(userId: string, input: {
     quantity: String(Math.max(1, Math.floor(input.quantity))),
     type: "limit", price: input.limitPrice.toFixed(2), time_in_force: "gfd",
   };
-  const review = parseResult(await callRobinhoodTool(userId, "review_option_order", { ...common, chain_symbol: input.chainSymbol, underlying_type: input.underlyingType }));
-  const order = parseResult(await callRobinhoodTool(userId, "place_option_order", { ...common, ref_id: input.refId }));
+  const review = parseToolData(await callRobinhoodTool(userId, "review_option_order", { ...common, chain_symbol: input.chainSymbol, underlying_type: input.underlyingType }));
+  const order = parseToolData(await callRobinhoodTool(userId, "place_option_order", { ...common, ref_id: input.refId }));
   return { review, order };
 }

@@ -86,7 +86,7 @@ export class RobinhoodExitManager {
     const orderOpenedAt = openedAtFromOrders(position, orders);
     const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? now;
     const openedAtExact = monitor?.opened_at_exact ?? orderOpenedAt != null;
-    const quote = fresh(quotes.get(position.occTicker), now) ?? await getSnapshotQuote(snapshotUnderlying(position.chainSymbol) as "SPY" | "SPX", position.occTicker);
+    const quote = fresh(quotes.get(position.occTicker), now) ?? await getSnapshotQuote(snapshotUnderlying(position.chainSymbol), position.occTicker);
     if (!quote || now - quote.timestamp > 30_000) {
       await saveMonitor(position, { status: "error", last_error: "No fresh option quote", opened_at: new Date(openedAt).toISOString(), opened_at_exact: openedAtExact });
       throw new Error(`No fresh option quote for ${position.occTicker}`);
@@ -95,7 +95,7 @@ export class RobinhoodExitManager {
     const managed: ManagedPosition = {
       ticker: position.occTicker, alpacaSymbol: position.occTicker.slice(2), side: position.optionType,
       quantity: position.quantity, entryPrice: position.entryPrice, peakBid,
-      openedAt, signalId: null, userId: "robinhood",
+      openedAt, signalId: "", userId: "robinhood",
       market: { openingRangeHigh: 0, openingRangeLow: 0, referencePrice: 0, chartSymbol: position.chainSymbol },
       closeOrderId: monitor?.close_order_id ?? null,
       closeOrderSubmittedAt: monitor?.close_submitted_at ? Date.parse(monitor.close_submitted_at) : null,

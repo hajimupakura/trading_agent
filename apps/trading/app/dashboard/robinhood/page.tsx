@@ -7,5 +7,5 @@ export const dynamic = "force-dynamic";
 export default async function RobinhoodPage() {
   const user = await getAuthenticatedUser();
   if (!user) redirect("/login");
-  return <RobinhoodDesk />;
+  return <RobinhoodDesk userEmail={user.email ?? null} />;
 }

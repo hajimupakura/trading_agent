@@ -4,6 +4,7 @@ import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { cancelOrder, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
 import { createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
+import { RobinhoodExitManager } from "./robinhood.js";
 import type { AlpacaOrder, OptionQuote } from "./types.js";
 
 const activeOrder = (order:AlpacaOrder) => ["new","accepted","pending_new","partially_filled","accepted_for_bidding"].includes(order.status);
@@ -12,7 +13,7 @@ const fresh = (quote:OptionQuote|null,now:number) => quote && now - quote.timest
 const clientOrderId = (symbol:string,reason:string,now:number) => `velocity-exit-${symbol}-${reason}-${now}`.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,48);
 
 export class PositionManager {
-  readonly quotes = new MassiveQuoteStream(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0;
+  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = [];
   start() { this.quotes.start(); void this.loop(); }
   stop() { this.quotes.stop(); }
   private async loop() {
@@ -26,7 +27,7 @@ export class PositionManager {
     const [positions,orders,control] = await Promise.all([getPositions(),getTodayOrders(),getControl()]);
     const optionPositions = positions.filter(position => position.asset_class === "us_option" && Number(position.qty) > 0);
     const entryOrders = orders.filter(order => order.side === "buy" && activeOrder(order));
-    this.quotes.setSymbols([...optionPositions.map(position => `O:${position.symbol}`), ...entryOrders.map(order => `O:${order.symbol}`)]); this.managedCount = 0;
+    this.quotes.setSymbols([...optionPositions.map(position => `O:${position.symbol}`), ...entryOrders.map(order => `O:${order.symbol}`), ...this.rhSymbols]); this.managedCount = 0;
     await markMissingPositions(optionPositions.map(position => `O:${position.symbol}`),orders);
     if (!marketSession(new Date())) return;
     const cycleErrors:string[] = [];
@@ -50,6 +51,15 @@ export class PositionManager {
         cycleErrors.push(`${brokerPosition.symbol}: ${message}`);
         console.error(JSON.stringify({event:"position_cycle_error",symbol:brokerPosition.symbol,error:message}));
       }
+    }
+    // Robinhood agentic-account exits: same rules and cadence; broker I/O proxied
+    // through the app's rh-exec endpoint. Errors surface without touching Alpaca work.
+    try {
+      const rh = await this.robinhood.cycle(this.quotes);
+      this.rhSymbols = rh.symbols; this.managedCount += this.robinhood.managedCount;
+      cycleErrors.push(...rh.errors);
+    } catch (error) {
+      cycleErrors.push(`robinhood: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (cycleErrors.length) throw new Error(cycleErrors.join(" | "));
   }

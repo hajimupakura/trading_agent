@@ -28,7 +28,7 @@ export function entryCooldownActive(input: { action: Signal["action"]; recentExi
 }
 
 // Fixed-fractional sizing: risk (debit x stop distance) targets riskPerTradePct of equity,
-// bounded by the per-trade debit cap, the 1%-of-equity debit cap, buying power, and the contract cap.
+// bounded by the per-trade debit cap, the configurable equity-percent cap, buying power, and the contract cap.
 export function computePositionSize(input:{ask:number;equity:number;optionsBuyingPower:number;settings:RiskSettings}) {
   const { ask, equity, optionsBuyingPower, settings } = input;
   const perContractDebit = ask * 100;
@@ -37,7 +37,7 @@ export function computePositionSize(input:{ask:number;equity:number;optionsBuyin
   const perContractRisk = perContractDebit * PAPER_RULES.stopLossPct;
   const byRisk = Math.floor(riskBudget / perContractRisk);
   const byTradeDebit = Math.floor(settings.maxTradeDebit / perContractDebit);
-  const byEquityDebit = Math.floor(equity * PAPER_RULES.maxDebitPct / perContractDebit);
+  const byEquityDebit = Math.floor(equity * (settings.maxEquityDebitPct / 100) / perContractDebit);
   const byBuyingPower = Number.isFinite(optionsBuyingPower) ? Math.floor(optionsBuyingPower / perContractDebit) : 0;
   return Math.max(1, Math.min(byRisk, byTradeDebit, byEquityDebit, byBuyingPower, settings.maxContractsPerTrade));
 }
@@ -64,7 +64,7 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if (!contract.eligible || !settings.allowedDte.includes(contract.dte as 0|1|2)) errors.push("Contract DTE is disabled or ineligible");
   if (contract.ask <= 0 || contract.ask > settings.maxOptionAsk) errors.push(`Contract ask exceeds the $${settings.maxOptionAsk.toFixed(2)} limit`);
   if(debit>settings.maxTradeDebit)errors.push(`Total debit (${quantity} contract${quantity===1?"":"s"}) exceeds the $${settings.maxTradeDebit.toFixed(0)} per-trade limit`);
-  if (!Number.isFinite(equity) || debit > equity * PAPER_RULES.maxDebitPct) errors.push("Total debit exceeds 1% of account equity");
+  if (!Number.isFinite(equity) || debit > equity * (settings.maxEquityDebitPct / 100)) errors.push(`Total debit exceeds ${settings.maxEquityDebitPct}% of account equity`);
   if (!Number.isFinite(optionsBuyingPower) || debit > optionsBuyingPower) errors.push("Insufficient options buying power");
   if (Number.isFinite(lastEquity) && equity - lastEquity <= -settings.maxDailyLoss) errors.push(`Daily loss limit of $${settings.maxDailyLoss.toFixed(0)} has been reached`);
   if (tradesToday >= settings.maxTradesPerDay) errors.push(`Maximum ${settings.maxTradesPerDay} entries per day reached`);

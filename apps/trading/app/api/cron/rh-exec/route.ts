@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getRobinhoodAccounts, getRobinhoodOverview, reviewAndPlaceOptionOrder } from "@/lib/brokers/robinhood-trading";
+import { getRobinhoodAccounts, getRobinhoodOverview, parseToolData, reviewAndPlaceOptionOrder } from "@/lib/brokers/robinhood-trading";
 import { callRobinhoodTool } from "@/lib/brokers/robinhood";
 import { createAlert } from "@/lib/alerts/server";
 
@@ -28,14 +28,6 @@ export async function GET(request: Request) {
   try {
     const userId = await connectionUserId();
     if (!userId) return Response.json({ connected:false, positions:[] });
-    if (new URL(request.url).searchParams.get("op") === "debug") {
-      const [portfolio, positions, upgrade] = await Promise.all([
-        callRobinhoodTool(userId, "get_portfolio", { account_number:"527620959" }),
-        callRobinhoodTool(userId, "get_option_positions", { account_number:"527620959", nonzero:true }),
-        callRobinhoodTool(userId, "get_option_level_upgrade_info", { account_number:"527620959" }).catch(error => ({ error:String(error) })),
-      ]);
-      return Response.json({ portfolio, positions, upgrade });
-    }
     const accounts = await getRobinhoodAccounts(userId);
     const agentic = accounts.find((account:any) => account?.agentic_allowed === true || account?.agentic_allowed === "true");
     if (!agentic?.account_number) return Response.json({ connected:true, positions:[], error:"no agentic account" });
@@ -46,11 +38,8 @@ export async function GET(request: Request) {
     const ids = [...new Set(longs.map((position:any) => String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop()).filter(Boolean))];
     let instruments: any[] = [];
     if (ids.length) {
-      const raw = await callRobinhoodTool(userId, "get_option_instruments", { ids: ids.join(",") });
-      const blocks = ((raw as any)?.content ?? []) as Array<{ type?:string; text?:string }>;
-      const text = blocks.find(block => block?.type === "text")?.text;
-      const parsed = text ? JSON.parse(text) : raw;
-      instruments = Array.isArray(parsed) ? parsed : parsed?.results ?? [];
+      const parsed = parseToolData(await callRobinhoodTool(userId, "get_option_instruments", { ids: ids.join(",") }));
+      instruments = Array.isArray(parsed) ? parsed : parsed?.instruments ?? parsed?.results ?? [];
     }
     const enriched = longs.map((position:any) => {
       const optionId = String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop() ?? "";

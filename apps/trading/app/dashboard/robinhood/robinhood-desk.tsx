@@ -2,22 +2,19 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, RefreshCw, Send } from "lucide-react";
+import { Activity, BarChart3, BrainCircuit, CircleDollarSign, FlaskConical, LineChart, LogOut, RefreshCw, Send, Settings, ShieldCheck, Zap } from "lucide-react";
+import { logout } from "@/app/login/actions";
 
-interface AccountState {
-  connected: boolean;
-  accounts?: Array<Record<string, unknown>>;
-  accountNumber?: string | null;
-  overview?: { portfolio?: any; positions?: any[]; orders?: any[] } | null;
-  error?: string;
-}
+interface Overview { portfolio?: { totalValue:number; cash:number; buyingPower:number; optionsValue:number }; positions?: any[]; orders?: any[] }
+interface AccountState { connected:boolean; accountNumber?:string|null; nickname?:string|null; optionLevel?:string; optionsEnabled?:boolean; upgradeUrl?:string|null; overview?:Overview|null; error?:string }
 
 const money = (value: unknown, digits = 2) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toLocaleString("en-US", { minimumFractionDigits:digits, maximumFractionDigits:digits }) : "—";
 };
+const mask = (value: string | null | undefined) => value ? `••••${value.slice(-4)}` : "—";
 
-export function RobinhoodDesk() {
+export function RobinhoodDesk({ userEmail }: { userEmail:string | null }) {
   const [state, setState] = useState<AccountState | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
@@ -38,7 +35,7 @@ export function RobinhoodDesk() {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void refresh(); const timer = window.setInterval(refresh, 20_000); return () => window.clearInterval(timer); }, [refresh]);
+  useEffect(() => { void refresh(); const timer = window.setInterval(refresh, 30_000); return () => window.clearInterval(timer); }, [refresh]);
 
   const submit = useCallback(async () => {
     if (!state?.accountNumber) return;
@@ -54,79 +51,101 @@ export function RobinhoodDesk() {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "Order failed");
-      setMessage({ tone:"success", text:`Order submitted for ${ticket.quantity} ${ticket.chainSymbol.toUpperCase()} ${ticket.strike}${ticket.optionType === "call" ? "C" : "P"}` });
+      setMessage({ tone:"success", text:`Order submitted: ${ticket.side.toUpperCase()} ${ticket.quantity} ${ticket.chainSymbol.toUpperCase()} ${ticket.strike}${ticket.optionType === "call" ? "C" : "P"} @ $${Number(ticket.limitPrice).toFixed(2)}` });
       await refresh();
     } catch (error) {
       setMessage({ tone:"error", text:error instanceof Error ? error.message : "Order failed" });
     } finally { setSubmitting(false); }
   }, [state, ticket, refresh]);
 
-  const portfolio = state?.overview?.portfolio ?? {};
+  const portfolio = state?.overview?.portfolio;
   const positions = state?.overview?.positions ?? [];
   const debit = Number(ticket.quantity) * Number(ticket.limitPrice) * 100;
+  const needsUpgrade = state?.connected && state.accountNumber && state.optionsEnabled === false;
 
   return (
     <div className="terminal-layout">
-      <main className="dashboard" style={{ padding:"24px 32px" }}>
-        <header className="section-heading" style={{ marginBottom:18 }}>
-          <div>
-            <span>ROBINHOOD · AGENTIC ACCOUNT</span>
-            <strong>MANUAL OPTION DESK</strong>
-          </div>
-          <div style={{ display:"flex", gap:12, alignItems:"center" }}>
-            <Link className="nav-item" href="/dashboard"><ArrowLeft size={15}/> Command center</Link>
+      <aside className="sidebar">
+        <div className="brand-mark"><Zap size={17} fill="currentColor"/> VELOCITY</div>
+        <div className="desk-label">OPTIONS DESK</div>
+        <nav className="desk-nav" aria-label="Trading workspace">
+          <Link className="nav-item" href="/dashboard"><BarChart3 size={16}/> Command center</Link>
+          <span className="nav-item"><Activity size={16}/> Setups <em>Live</em></span>
+          <Link className="nav-item active" href="/dashboard/robinhood"><CircleDollarSign size={16}/> Robinhood desk <em>Live</em></Link>
+          <Link className="nav-item" href="/dashboard/replay"><FlaskConical size={16}/> Replay lab</Link>
+          <Link className="nav-item" href="/dashboard/analytics"><LineChart size={16}/> Analytics</Link>
+          <Link className="nav-item" href="/dashboard/settings"><Settings size={16}/> Risk settings</Link>
+          <span className="nav-item"><BrainCircuit size={16}/> AI review <em>Soon</em></span>
+        </nav>
+        <div className="sidebar-note"><ShieldCheck size={17}/><div><strong>Real money</strong><span>Agentic account only · exits managed by the worker</span></div></div>
+      </aside>
+      <div className="workspace">
+        <header className="topbar">
+          <div><p className="eyebrow">ROBINHOOD · AGENTIC ACCOUNT {mask(state?.accountNumber)}</p><h1>Robinhood Trading Desk</h1></div>
+          <div className="topbar-actions">
             <button className="refresh-button" onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} className={loading ? "spin" : ""}/> {loading ? "Loading" : "Refresh"}</button>
+            <form action={logout}><button className="logout-button" title={`Sign out${userEmail ? ` ${userEmail}` : ""}`}><LogOut size={14}/> Sign out</button></form>
           </div>
         </header>
+        <main className="dashboard">
+          {state?.error ? <section className="system-alert">{state.error}</section> : null}
+          {state && !state.connected ? <section className="system-alert">Robinhood is not connected. Run the morning script, then refresh.</section> : null}
+          {needsUpgrade ? (
+            <section className="system-alert">
+              <strong>Options trading is not enabled on the agentic account yet.</strong>{" "}
+              {state?.upgradeUrl
+                ? <>Complete Robinhood&apos;s options application, then refresh: <a href={state.upgradeUrl} target="_blank" rel="noreferrer">Enable options for {mask(state.accountNumber)}</a></>
+                : "Open the Robinhood app → agentic account → settings → enable options trading, then refresh."}
+            </section>
+          ) : null}
 
-        <section className="approval-warning" style={{ marginBottom:18 }}>
-          <AlertTriangle size={14}/> Automatic exit management does not cover Robinhood positions yet. Anything opened here must be closed here (or in the Robinhood app) — the stop-loss and trailing rules only run for Alpaca paper positions.
-        </section>
+          <section className="paper-strip">
+            <div><span>ACCOUNT VALUE</span><strong>${money(portfolio?.totalValue)}</strong></div>
+            <div><span>CASH</span><strong>${money(portfolio?.cash)}</strong></div>
+            <div><span>BUYING POWER</span><strong>${money(portfolio?.buyingPower)}</strong></div>
+            <div><span>OPTIONS VALUE</span><strong>${money(portfolio?.optionsValue)}</strong></div>
+            <div className="connection-state robinhood-state connected"><i/><span>{state?.nickname ? state.nickname.toUpperCase() : "AGENTIC"} · {mask(state?.accountNumber)}</span></div>
+          </section>
 
-        {state?.error ? <p className="empty-dte">{state.error}</p> : null}
-        {state && !state.connected ? <p className="empty-dte">Robinhood is not connected. Run the morning script to authorize.</p> : null}
+          <section className="manager-strip active">
+            <div><span>AUTOMATIC EXITS</span><strong>STOP · TRAIL · 15:10 FLAT</strong><small>The Railway worker manages Robinhood option positions with the same rules as paper: −30% stop, two-stage trailing stop, swing-aware time exits.</small></div>
+          </section>
 
-        <section className="metric-row" style={{ marginBottom:20 }}>
-          <div className="metric-card"><span>ACCOUNT</span><strong>{state?.accountNumber ?? "—"}</strong></div>
-          <div className="metric-card"><span>TOTAL EQUITY</span><strong>${money(portfolio.equity ?? portfolio.total_equity ?? portfolio.market_value)}</strong></div>
-          <div className="metric-card"><span>BUYING POWER</span><strong>${money(portfolio.buying_power ?? portfolio.options_buying_power ?? portfolio.withdrawable_amount)}</strong></div>
-          <div className="metric-card"><span>OPEN OPTION POSITIONS</span><strong>{positions.length}</strong></div>
-        </section>
+          <div className="decision-grid">
+            <section className="signal-card">
+              <div className="section-heading"><div><span>OPEN POSITIONS</span><strong>AGENTIC ACCOUNT</strong></div></div>
+              {positions.length ? (
+                <ul className="reason-list">
+                  {positions.map((position:any, index:number) => (
+                    <li key={position.option_id ?? index}>
+                      {String(position.chain_symbol ?? "?")} · {money(position.quantity, 0)} contract{Number(position.quantity) === 1 ? "" : "s"} · avg ${money(position.average_price)} {position.expiration_date ? `· exp ${position.expiration_date}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="decision-help">No open option positions. Fills appear here and are picked up by the exit engine automatically.</p>}
+            </section>
 
-        <section className="panel" style={{ marginBottom:20 }}>
-          <div className="section-heading"><div><span>OPEN POSITIONS</span><strong>AGENTIC ACCOUNT</strong></div></div>
-          {positions.length ? (
-            <table className="contract-table"><thead><tr><th>Contract</th><th>Type</th><th>Qty</th><th>Avg price</th></tr></thead>
-              <tbody>{positions.map((position:any, index:number) => (
-                <tr key={position.id ?? index}>
-                  <td>{position.chain_symbol ?? position.symbol ?? "—"} {position.strike_price ? `${Number(position.strike_price).toFixed(0)}` : ""} {position.expiration_date ?? ""}</td>
-                  <td>{position.option_type ?? position.type ?? "—"}</td>
-                  <td>{money(position.quantity, 0)}</td>
-                  <td>${money(position.average_price ?? position.average_open_price)}</td>
-                </tr>))}
-              </tbody></table>
-          ) : <p className="empty-dte">No open option positions in the agentic account.</p>}
-        </section>
-
-        <section className="panel">
-          <div className="section-heading"><div><span>NEW ORDER</span><strong>SINGLE-LEG OPTION</strong></div></div>
-          <div className="settings-grid" style={{ gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:14, padding:"6px 0 14px" }}>
-            <label className="settings-field"><span>Underlying</span><input value={ticket.chainSymbol} onChange={event => setTicket(current => ({ ...current, chainSymbol:event.target.value.toUpperCase() }))} placeholder="SPY"/><small>SPY, SPXW, NVDA…</small></label>
-            <label className="settings-field"><span>Underlying type</span><select value={ticket.underlyingType} onChange={event => setTicket(current => ({ ...current, underlyingType:event.target.value as "equity"|"index" }))}><option value="equity">equity</option><option value="index">index</option></select><small>SPXW = index</small></label>
-            <label className="settings-field"><span>Expiration</span><input type="date" value={ticket.expirationDate} onChange={event => setTicket(current => ({ ...current, expirationDate:event.target.value }))}/><small>Contract expiry date</small></label>
-            <label className="settings-field"><span>Strike</span><input type="number" step="1" value={ticket.strike} onChange={event => setTicket(current => ({ ...current, strike:event.target.value }))}/><small>e.g. 770</small></label>
-            <label className="settings-field"><span>Call / Put</span><select value={ticket.optionType} onChange={event => setTicket(current => ({ ...current, optionType:event.target.value as "call"|"put" }))}><option value="call">call</option><option value="put">put</option></select><small>Direction of the bet</small></label>
-            <label className="settings-field"><span>Action</span><select value={`${ticket.side}:${ticket.positionEffect}`} onChange={event => { const [side, positionEffect] = event.target.value.split(":"); setTicket(current => ({ ...current, side:side as "buy"|"sell", positionEffect:positionEffect as "open"|"close" })); }}><option value="buy:open">Buy to open</option><option value="sell:close">Sell to close</option></select><small>Open a new position or close one</small></label>
-            <label className="settings-field"><span>Contracts</span><input type="number" min="1" max="10" value={ticket.quantity} onChange={event => setTicket(current => ({ ...current, quantity:event.target.value }))}/><small>1 contract = 100 shares</small></label>
-            <label className="settings-field"><span>Limit price</span><input type="number" step="0.01" value={ticket.limitPrice} onChange={event => setTicket(current => ({ ...current, limitPrice:event.target.value }))}/><small>Per contract</small></label>
+            <section className="signal-card">
+              <div className="section-heading"><div><span>NEW ORDER</span><strong>SINGLE-LEG OPTION</strong></div></div>
+              <div className="settings-grid" style={{ display:"grid", gridTemplateColumns:"repeat(2, minmax(0,1fr))", gap:12 }}>
+                <label className="settings-field"><span>Underlying</span><input value={ticket.chainSymbol} onChange={event => setTicket(current => ({ ...current, chainSymbol:event.target.value.toUpperCase() }))} placeholder="SPY"/><small>SPY, SPXW, NVDA…</small></label>
+                <label className="settings-field"><span>Type</span><select value={ticket.underlyingType} onChange={event => setTicket(current => ({ ...current, underlyingType:event.target.value as "equity"|"index" }))}><option value="equity">Equity</option><option value="index">Index (SPXW)</option></select><small>SPXW is an index</small></label>
+                <label className="settings-field"><span>Expiration</span><input type="date" value={ticket.expirationDate} onChange={event => setTicket(current => ({ ...current, expirationDate:event.target.value }))}/><small>Contract expiry</small></label>
+                <label className="settings-field"><span>Strike</span><input type="number" step="1" value={ticket.strike} onChange={event => setTicket(current => ({ ...current, strike:event.target.value }))} placeholder="770"/><small>Strike price</small></label>
+                <label className="settings-field"><span>Direction</span><select value={ticket.optionType} onChange={event => setTicket(current => ({ ...current, optionType:event.target.value as "call"|"put" }))}><option value="call">Call (up)</option><option value="put">Put (down)</option></select><small>Your market view</small></label>
+                <label className="settings-field"><span>Action</span><select value={`${ticket.side}:${ticket.positionEffect}`} onChange={event => { const [side, positionEffect] = event.target.value.split(":"); setTicket(current => ({ ...current, side:side as "buy"|"sell", positionEffect:positionEffect as "open"|"close" })); }}><option value="buy:open">Buy to open</option><option value="sell:close">Sell to close</option></select><small>Open or close</small></label>
+                <label className="settings-field"><span>Contracts</span><input type="number" min="1" max="10" value={ticket.quantity} onChange={event => setTicket(current => ({ ...current, quantity:event.target.value }))}/><small>1 = 100 shares</small></label>
+                <label className="settings-field"><span>Limit price</span><input type="number" step="0.01" value={ticket.limitPrice} onChange={event => setTicket(current => ({ ...current, limitPrice:event.target.value }))} placeholder="1.25"/><small>Per contract</small></label>
+              </div>
+              <p className="decision-help">Total {ticket.positionEffect === "open" ? "debit" : "proceeds"}: <strong>${Number.isFinite(debit) && debit > 0 ? debit.toFixed(0) : "—"}</strong> · Robinhood reviews the order (fees included), then places a day limit order in the agentic account.</p>
+              {message ? <p className={`order-message ${message.tone}`}>{message.text}</p> : null}
+              <button className="approve-button" disabled={submitting || Boolean(needsUpgrade) || !state?.accountNumber || !ticket.expirationDate || !ticket.strike || !ticket.limitPrice} onClick={() => void submit()}>
+                <Send size={14}/> {submitting ? "Submitting…" : needsUpgrade ? "Enable options first" : "Review and place order"}
+              </button>
+            </section>
           </div>
-          <p className="approval-warning">Total {ticket.positionEffect === "open" ? "debit" : "proceeds"}: <strong>${Number.isFinite(debit) ? debit.toFixed(0) : "—"}</strong> · Robinhood reviews the order, then it is placed as a day limit order in the agentic account.</p>
-          {message ? <p className={message.tone === "error" ? "empty-dte" : "approval-warning"}>{message.text}</p> : null}
-          <button className="approve-button" disabled={submitting || !state?.accountNumber || !ticket.expirationDate || !ticket.strike || !ticket.limitPrice} onClick={() => void submit()}>
-            <Send size={14}/> {submitting ? "Submitting…" : "Review and place order"}
-          </button>
-        </section>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
