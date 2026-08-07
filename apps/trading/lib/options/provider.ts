@@ -121,14 +121,17 @@ export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
   return bars;
 }
 
-// Long-dated monitoring chains: for each horizon, resolve the nearest listed expiration at or
-// after (target - 21 days), then snapshot that expiration. "NEAR" resolves the next listed expiry.
+// Long-dated monitoring chains. Each horizon tab covers a RANGE of expirations, not just one:
+// several target tenors are resolved to their nearest listed expiries so 1-3 week and
+// 2-month contracts are not silently skipped between the tab anchors.
+const HORIZON_TARGETS: Record<LongHorizon, number[]> = { "1M": [7, 14, 21, 30, 45], "3M": [60, 91, 120], "6M": [150, 182], "9M": [240, 273], "1Y": [330, 365] };
+
 export async function getHorizonChains(underlying: Underlying, horizons: Array<"NEAR"|LongHorizon>, settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<Contract[]> {
   const today = dateEt();
-  const expirations = await Promise.all(horizons.map(async horizon => {
-    const targetDays = horizon === "NEAR" ? 0 : LONG_HORIZONS[horizon];
-    // Floor scales with the horizon so a short target (1M) can't resolve to a near-week expiry.
-    const floor = horizon === "NEAR" ? today : addDays(today, Math.max(0, targetDays - Math.min(21, Math.round(targetDays / 3))));
+  const targets = horizons.flatMap((horizon): Array<{ horizon: "NEAR" | LongHorizon; targetDays: number }> => horizon === "NEAR" ? [{ horizon, targetDays: 0 }] : HORIZON_TARGETS[horizon].map(targetDays => ({ horizon, targetDays })));
+  const expirations = await Promise.all(targets.map(async ({ horizon, targetDays }) => {
+    // Floor scales with the tenor so a short target can't resolve to a near-week expiry.
+    const floor = targetDays === 0 ? today : addDays(today, Math.max(0, targetDays - Math.min(21, Math.round(targetDays / 3))));
     const payload = await massive<{ results?: Array<{ expiration_date?: string }> }>(
       `/v3/reference/options/contracts?underlying_ticker=${encodeURIComponent(underlying)}&expiration_date.gte=${floor}&limit=1&sort=expiration_date&order=asc`,
     ).catch(() => null);
