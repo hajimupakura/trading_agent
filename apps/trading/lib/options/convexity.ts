@@ -86,6 +86,7 @@ function emaSeries(values: number[], period: number): number[] {
 // proxy. Core checks decide qualification; breakout-hold and rejection are advisory
 // (reported, stored, and left for the backtest to weigh). No futures/breadth feeds
 // exist in this stack, so those checklist items are intentionally absent, not faked.
+export type { MinuteBar };
 export function assessQualification(bars: MinuteBar[], prior: { high: number; low: number; close: number } | null): Qualification {
   if (bars.length < 90) return { direction: null, checks: {}, detail: { reason: "insufficient session bars" } };
   const last = bars.at(-1)!;
@@ -232,7 +233,7 @@ async function runBurstRecorder(today: string): Promise<number> {
 
 // ------------------------------------------------ job 3: morning outcome report
 
-interface HarvestMetrics {
+export interface HarvestMetrics {
   entryAsk: number; mfeMult: number; maeMult: number; peakBid: number; peakAtMinutes: number | null;
   finalBid: number; quotes: number;
   holdTo1015Pct: number; ladderPct: number; trailPct: number;
@@ -240,7 +241,7 @@ interface HarvestMetrics {
 
 // Simulated harvest rules against executable bids: hold-to-10:15, thirds ladder at
 // 1.75x/2.5x/3.5x (remainder at final), and a 22% bid trail armed at 1.75x.
-function computeHarvest(entryAsk: number, quotes: Array<{ minutes: number; bid: number }>): HarvestMetrics | null {
+export function computeHarvest(entryAsk: number, quotes: Array<{ minutes: number; bid: number }>): HarvestMetrics | null {
   const bids = quotes.filter(quote => quote.bid > 0);
   if (!bids.length || entryAsk <= 0) return null;
   const peak = bids.reduce((best, quote) => quote.bid > best.bid ? quote : best, bids[0]);

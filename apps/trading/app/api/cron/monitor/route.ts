@@ -5,6 +5,7 @@ import { runMarketRadar } from "@/lib/options/market-radar";
 import { maybeRunScheduledReviews } from "@/lib/ai/review";
 import { dispatchInstantAlerts } from "@/lib/notify/dispatch";
 import { runConvexityCapture } from "@/lib/options/convexity";
+import { runConvexityReplays } from "@/lib/options/convexity-replay";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -25,5 +26,8 @@ export async function GET(request: Request) {
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, aiReviews, notify, at:new Date().toISOString() });
+  // Historical replay backtest: one queued session per tick, on minutes clear of the
+  // heavy refreshes (%15), the digest (:05/:35) and the escalation checks (%5).
+  const replay = minute % 5 === 3 ? await runConvexityReplays().catch(error => { console.error("convexity replay failed", error); return { processed:null, queued:-1, error:String(error) }; }) : null;
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, replay, aiReviews, notify, at:new Date().toISOString() });
 }
