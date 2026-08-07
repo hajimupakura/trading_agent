@@ -16,6 +16,6 @@ export async function GET(request: Request) {
     refreshCommandCenter("SPX", undefined, { includeLongHorizons }),
     ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
   ]);
-  const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return [] as string[]; });
+  const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, at:new Date().toISOString() });
 }

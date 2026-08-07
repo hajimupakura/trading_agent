@@ -52,16 +52,17 @@ async function ownerId(): Promise<string | null> {
   return data?.id ?? null;
 }
 
-export async function runMarketRadar(): Promise<string[]> {
+export async function runMarketRadar(): Promise<{ fired: string[]; errors: string[] }> {
   const clock = et();
-  if (["Sat", "Sun"].includes(clock.weekday)) return [];
-  const fired: string[] = [];
+  const fired: string[] = []; const errors: string[] = [];
+  if (["Sat", "Sun"].includes(clock.weekday)) return { fired, errors };
   const userId = await ownerId();
-  if (!userId) return [];
+  if (!userId) return { fired, errors };
   const today = etDate();
-  const dailies = await getDailyBars();
-  const prior = [...dailies].reverse().find(bar => bar.date < today);
-  if (!prior) return [];
+  let dailies: DailyBar[] = []; let prior: DailyBar | undefined;
+  try { dailies = await getDailyBars(); prior = [...dailies].reverse().find(bar => bar.date < today); }
+  catch (error) { errors.push(`dailies: ${error instanceof Error ? error.message : String(error)}`); }
+  const guard = async (label: string, run: () => Promise<void>) => { try { await run(); } catch (error) { errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`); } };
 
   // 0) Event-risk briefing: pre-market on CPI/NFP days, midday before FOMC decisions.
   const event = todaysEconomicEvent();
