@@ -49,7 +49,7 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const consolidation = market.bars.slice(-10, -1);
     const consHigh = Math.max(...consolidation.map(bar => bar.close));
     const consLow = Math.min(...consolidation.map(bar => bar.close));
-    const tight = consHigh - consLow <= atr * 1.0;
+    const tight = consHigh - consLow <= atr * 1.5;
     const current = market.bars.at(-1)!;
     const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && participationConfirmed;
     const persistentAbove = last30.every(bar => bar.close > market.openingRangeHigh) && current.close > market.referencePrice;
