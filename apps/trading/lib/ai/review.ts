@@ -190,6 +190,48 @@ export async function runNoiseDigest(): Promise<boolean> {
   return true;
 }
 
+// ---------------------------------------------------------------- urgent escalation
+
+// Every-5-minute peek at NEW digest-tier alerts with a deliberately high bar: if
+// something is worth interrupting the trader now (unusually large fresh positioning,
+// a new strong skew tied to SPY/SPX or open exposure, clustered same-direction flow
+// across names), it goes to Telegram immediately instead of waiting for the
+// half-hour sweep. HOLD leaves everything pending for the consolidated digest.
+export async function runUrgentEscalation(): Promise<boolean> {
+  const userId = await ownerId();
+  if (!userId) return false;
+  const clock = etParts();
+  const eventKey = `ai-urgent-${clock.date}-${String(clock.minutes).padStart(4, "0")}`;
+  if (await alertExists(eventKey)) return false;
+
+  const admin = createAdminClient();
+  const { data: pending } = await admin.from("alerts")
+    .select("id,event_key,severity,title,body,created_at")
+    .is("notified_at", null)
+    .order("created_at", { ascending: true })
+    .limit(60);
+  const digestRows = (pending ?? []).filter(row =>
+    !["success", "critical"].includes(String(row.severity))
+    && !String(row.event_key).startsWith("radar-")
+    && !String(row.event_key).startsWith("ai-"));
+  // Only spend an LLM call when something NEW arrived since the last 5-minute check.
+  const hasFresh = digestRows.some(row => Date.now() - new Date(String(row.created_at)).getTime() < 5.5 * 60_000);
+  if (!digestRows.length || !hasFresh) return false;
+
+  const verdict = await chatComplete({
+    system: "You are the interrupt filter for an options trader mid-session. Input: held system alerts (flow skews, unusual contract flow, watchlist events). Decide if ANY of it justifies interrupting the trader RIGHT NOW rather than waiting up to 30 minutes for the routine digest. The bar is high — interrupt ONLY for: unusually large fresh positioning (size and aggression stand out even among unusual-flow alerts), a NEW strong skew in SPY/SPX, clustered same-direction flow across related names, or flow that directly contradicts what a holder of SPY/SPX calls or puts would want to see. Routine single-name flow pings are never worth an interrupt. If nothing qualifies, reply with exactly: HOLD. If something qualifies, reply with ONLY the alert message to send (max 60 words, plain text, lead with the single most important item). Use ONLY the data given; never invent numbers.",
+    user: `Held alerts (oldest first):\n${digestRows.map(row => `[${String(row.created_at).slice(11, 16)}Z ${row.severity}] ${row.title}: ${row.body}`).join("\n")}`,
+    maxTokens: 250,
+  });
+  if (verdict.trim().toUpperCase() === "HOLD") return false;
+
+  // Send the interrupt and mark everything it saw — the half-hour digest then only
+  // covers alerts that arrive after this point, so nothing is reported twice.
+  await createAlert({ userId, eventKey, severity: "warning", title: "Flow interrupt — worth a look now", body: verdict.trim(), metadata: { kind: "ai_urgent", triaged: digestRows.length } });
+  await admin.from("alerts").update({ notified_at: new Date().toISOString() }).in("id", digestRows.map(row => row.id));
+  return true;
+}
+
 // -------------------------------------------------------- cron entry point
 
 // Called by the every-minute cron. Fires the brief in the 9:15-9:29 ET window and the
@@ -207,5 +249,8 @@ export async function maybeRunScheduledReviews(): Promise<string[]> {
   // Noise digest: every 30 minutes from 10:00 through the 16:30 sweep (the 9:30-10:00
   // open is covered by the morning brief and instant radar alerts).
   if (clock.minutes >= 600 && clock.minutes <= 990 && clock.minutes % 30 === 0 && await runNoiseDigest()) ran.push("noise-digest");
+  // Urgent escalation: every 5 minutes between sweeps, high-bar interrupt check on
+  // newly held alerts so genuinely important flow never waits the full half hour.
+  else if (clock.minutes >= 575 && clock.minutes <= 990 && clock.minutes % 5 === 0 && await runUrgentEscalation()) ran.push("urgent-escalation");
   return ran;
 }
