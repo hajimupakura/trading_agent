@@ -55,7 +55,8 @@ export async function markMissingPositions(openTickers:string[],orders:AlpacaOrd
   }
 }
 export async function journalExit(position:ManagedPosition,order:AlpacaOrder,limitPrice:number,reason:string) {
-  const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:position.ticker.startsWith("O:SPX")?"SPX":"SPY",contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order },{onConflict:"alpaca_order_id"});
+  const exitRoot = position.alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"");
+  const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:exitRoot==="SPXW"?"SPX":exitRoot,contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order },{onConflict:"alpaca_order_id"});
   if (error) throw new Error(`db error: ${error.message}`);
 }
 export async function updateEntryJournal(alpacaOrderId:string,fields:{status?:string;limit_price?:number;alpaca_order_id?:string}) {
