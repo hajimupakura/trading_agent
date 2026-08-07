@@ -246,9 +246,10 @@ export async function maybeRunScheduledReviews(): Promise<string[]> {
   const ran: string[] = [];
   if (clock.minutes >= 555 && clock.minutes < 570 && await runMorningBrief()) ran.push("morning-brief");
   if (clock.weekday === "Fri" && clock.minutes >= 1005 && clock.minutes < 1020 && await runWeeklyPostMortem()) ran.push("weekly-postmortem");
-  // Noise digest: every 30 minutes from 10:00 through the 16:30 sweep (the 9:30-10:00
-  // open is covered by the morning brief and instant radar alerts).
-  if (clock.minutes >= 600 && clock.minutes <= 990 && clock.minutes % 30 === 0 && await runNoiseDigest()) ran.push("noise-digest");
+  // Noise digest: every 30 minutes at :05/:35 from 10:05 through the 16:35 sweep.
+  // Deliberately OFF the :00/:30 marks — those are %15 ticks where the cron does its
+  // heaviest chain refreshes and can hit the 60s ceiling before reaching this step.
+  if (clock.minutes >= 605 && clock.minutes <= 995 && clock.minutes % 30 === 5 && await runNoiseDigest()) ran.push("noise-digest");
   // Urgent escalation: every 5 minutes between sweeps, high-bar interrupt check on
   // newly held alerts so genuinely important flow never waits the full half hour.
   else if (clock.minutes >= 575 && clock.minutes <= 990 && clock.minutes % 5 === 0 && await runUrgentEscalation()) ran.push("urgent-escalation");

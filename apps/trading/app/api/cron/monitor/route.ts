@@ -9,6 +9,9 @@ import { runConvexityCapture } from "@/lib/options/convexity";
 export const maxDuration = 60;
 export async function GET(request: Request) {
   if (!process.env.CRON_SECRET || request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) return new Response("Unauthorized", { status:401 });
+  // Telegram dispatch runs FIRST: on heavy ticks the refreshes below can exhaust the
+  // 60s budget, and instant alerts must never be the step that gets cut.
+  const notify = await dispatchInstantAlerts().catch(error => { console.error("alert dispatch failed", error); return { sent:0, digestPending:0 }; });
   const minute = new Date().getMinutes();
   // SPY/SPX every minute; their long-dated (3M-1Y) chains refresh on the quarter-hour.
   // Watch-list tickers rotate: two per minute, so each refreshes every five minutes.
@@ -22,6 +25,5 @@ export async function GET(request: Request) {
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
-  const notify = await dispatchInstantAlerts().catch(error => { console.error("alert dispatch failed", error); return { sent:0, digestPending:0 }; });
   return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, aiReviews, notify, at:new Date().toISOString() });
 }
