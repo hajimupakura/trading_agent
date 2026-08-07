@@ -53,11 +53,21 @@ export async function scanUnusualFlow(underlying: Underlying, contracts: Contrac
     const ratio = callVolume / putVolume;
     if (ratio >= SKEW_RATIO || ratio <= 1 / SKEW_RATIO) {
       const bullish = ratio >= SKEW_RATIO;
+      // Detailed report: the exact contracts driving the skew, by volume.
+      const describe = (contract: Contract) => `${contract.expirationDate.slice(5)} ${contract.strike}${contract.side === "call" ? "C" : "P"}: ${contract.volume.toLocaleString()} vol / ${contract.openInterest.toLocaleString()} OI / ~$${((contract.volume * contract.midpoint * 100) / 1_000_000).toFixed(1)}M premium`;
+      const topOf = (side: "call" | "put") => shortDated.filter(contract => contract.side === side).sort((a, b) => b.volume - a.volume).slice(0, 3);
+      const topCalls = topOf("call"); const topPuts = topOf("put");
+      const detail = shortDated.slice().sort((a, b) => b.volume - a.volume).slice(0, 15).map(contract => ({
+        ticker: contract.ticker, side: contract.side, strike: contract.strike, expirationDate: contract.expirationDate,
+        dte: contract.dte, volume: contract.volume, openInterest: contract.openInterest,
+        premiumTraded: Math.round(contract.volume * contract.midpoint * 100),
+        midpoint: contract.midpoint, delta: contract.delta, impliedVolatility: contract.impliedVolatility,
+      }));
       await createAlert({
         userId, eventKey: `flow-skew-${underlying}-${bullish ? "call" : "put"}-${today}`, severity: "info",
         title: `${underlying} flow skew: ${bullish ? "calls" : "puts"} ${bullish ? ratio.toFixed(1) : (1 / ratio).toFixed(1)}x ${bullish ? "puts" : "calls"}`,
-        body: `Short-dated ${underlying} volume is running ${callVolume.toLocaleString()} calls vs ${putVolume.toLocaleString()} puts. Strong one-sided flow often accompanies trend days in that direction.`,
-        metadata: { underlying, callVolume, putVolume, ratio },
+        body: `Short-dated ${underlying}: ${callVolume.toLocaleString()} call vol vs ${putVolume.toLocaleString()} put vol. Top calls — ${topCalls.map(describe).join(" · ") || "none"}. Top puts — ${topPuts.map(describe).join(" · ") || "none"}. Search any strike in the leaderboard and click the row for full detail and a trade ticket.`,
+        metadata: { underlying, callVolume, putVolume, ratio, topContracts: detail },
       }).catch(() => undefined);
     }
   }
