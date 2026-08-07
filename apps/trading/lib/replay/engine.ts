@@ -6,9 +6,16 @@ const dummy = (underlying:Underlying, side:Side):Contract => ({ ticker:`REPLAY-$
 
 export interface ReplayTrigger { timestamp:number; side:Side; reasons:string[]; spot:number; openingRangeHigh:number; openingRangeLow:number }
 
+const ENTRY_WINDOW={start:9*60+45,end:14*60+45} as const; // production ET entry window (risk.ts defaults)
+const etMinutes=(timestamp:number)=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(timestamp));return Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);};
+
 export function findReplayTriggers(underlying:Underlying, bars:Bar[], maximum=3, options?:{trendDayEnabled?:boolean}):ReplayTrigger[] {
   const triggers:ReplayTrigger[]=[]; let previous:"call"|"put"|null=null;
   for(let index=35; index<bars.length; index++) {
+    // Only bars inside the production entry window can trigger — late-day signals could
+    // never be approved live, and post-15:10 entries also invert the exit-quote window.
+    const minutes=etMinutes(bars[index]!.timestamp);
+    if(minutes<ENTRY_WINDOW.start||minutes>ENTRY_WINDOW.end){previous=null;continue;}
     const window=bars.slice(0,index+1); const market=marketStateAt(underlying,window);
     const signal=generateSignal(market,[dummy(underlying,"call"),dummy(underlying,"put")],{trendDayEnabled:options?.trendDayEnabled});
     const side=signal.action === "enter_call" ? "call" : signal.action === "enter_put" ? "put" : null;
