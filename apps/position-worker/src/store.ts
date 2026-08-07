@@ -21,7 +21,8 @@ export async function adoptBrokerPosition(alpacaSymbol:string,entryPrice:number,
     quantity, order_type:"limit", limit_price:entryPrice, max_debit:entryPrice*quantity*100,
     status:"filled", risk_snapshot:{ adopted:true }, broker_response:{ adopted:true },
   });
-  if (error) throw error;
+  // Postgrest errors are plain objects — wrap them so cycle logs carry the message.
+  if (error) throw new Error(`adoption insert failed: ${error.message ?? JSON.stringify(error)}`);
   return owner.id;
 }
 export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,orders:AlpacaOrder[]):Promise<ManagedPosition|null> {
