@@ -2,10 +2,11 @@ import "server-only";
 
 // OpenRouter chat-completion client for the AI review layer. The LLM interprets and
 // narrates; signals, sizing, and exits stay deterministic — nothing here places orders.
-// Model is configurable via OPENROUTER_MODEL. Default: Claude Sonnet 4.6 — the best
-// quality-per-dollar tier for market reasoning at this call volume (a few calls a day).
+// Model is configurable via OPENROUTER_MODEL. Default: Claude Sonnet 5 — the best
+// quality-per-dollar tier for market reasoning at this call volume (a few calls a day);
+// $2/$10 per MTok intro through 2026-08-31, $3/$15 after.
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-4.6";
+const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 
 export function aiConfigured(): boolean {
   return Boolean(process.env.OPENROUTER_API_KEY);

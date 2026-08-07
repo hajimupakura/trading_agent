@@ -93,7 +93,7 @@ export async function runMorningBrief(): Promise<boolean> {
     maxTokens: 700,
   });
 
-  await createAlert({ userId, eventKey, severity: "info", title: "Morning brief — today's tape & playbook", body: brief, metadata: { kind: "ai_brief", model: process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-4.6" } });
+  await createAlert({ userId, eventKey, severity: "info", title: "Morning brief — today's tape & playbook", body: brief, metadata: { kind: "ai_brief", model: process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-5" } });
   return true;
 }
 
