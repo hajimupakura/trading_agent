@@ -170,13 +170,18 @@ async function runPreCloseScan(today: string): Promise<boolean> {
   const expiryDate = candidates[0].expirationDate;
 
   // Track the harvest-study set: nearest-to-0.25 |delta| per side within the band.
+  // The SPX snapshot carries no greeks for SPXW, so when delta is absent fall back to
+  // premium proximity (~$3.5 mid ≈ the 0.25Δ zone on next-day SPXW) — without this the
+  // tracker selects nothing and the morning burst recorder has nothing to record.
   const trackSet = new Set<string>();
   for (const side of ["call", "put"] as const) {
-    candidates
+    const withDelta = candidates
       .filter(contract => contract.side === side && contract.delta != null && Math.abs(contract.delta) >= TRACK_DELTA_MIN && Math.abs(contract.delta) <= TRACK_DELTA_MAX)
-      .sort((a, b) => Math.abs(Math.abs(a.delta!) - 0.25) - Math.abs(Math.abs(b.delta!) - 0.25))
-      .slice(0, TRACK_PER_SIDE)
-      .forEach(contract => trackSet.add(contract.ticker));
+      .sort((a, b) => Math.abs(Math.abs(a.delta!) - 0.25) - Math.abs(Math.abs(b.delta!) - 0.25));
+    const pool = withDelta.length ? withDelta : candidates
+      .filter(contract => contract.side === side && contract.midpoint >= 1 && contract.midpoint <= MAX_ENTRY)
+      .sort((a, b) => Math.abs(a.midpoint - 3.5) - Math.abs(b.midpoint - 3.5));
+    pool.slice(0, TRACK_PER_SIDE).forEach(contract => trackSet.add(contract.ticker));
   }
 
   const rows = candidates.map(contract => ({
