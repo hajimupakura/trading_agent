@@ -29,8 +29,12 @@ export async function GET(request: Request) {
     const userId = await connectionUserId();
     if (!userId) return Response.json({ connected:false, positions:[] });
     if (new URL(request.url).searchParams.get("op") === "debug") {
-      const raw = await callRobinhoodTool(userId, "get_accounts", {});
-      return Response.json({ raw });
+      const [portfolio, positions, upgrade] = await Promise.all([
+        callRobinhoodTool(userId, "get_portfolio", { account_number:"527620959" }),
+        callRobinhoodTool(userId, "get_option_positions", { account_number:"527620959", nonzero:true }),
+        callRobinhoodTool(userId, "get_option_level_upgrade_info", { account_number:"527620959" }).catch(error => ({ error:String(error) })),
+      ]);
+      return Response.json({ portfolio, positions, upgrade });
     }
     const accounts = await getRobinhoodAccounts(userId);
     const agentic = accounts.find((account:any) => account?.agentic_allowed === true || account?.agentic_allowed === "true");
