@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getMarketState, getOptionChain, getHorizonChains } from "./provider";
+import { scanUnusualFlow } from "./flow-scan";
 import type { CommandCenter, WatchUnderlying } from "./types";
 
 // Watch-list tickers are MONITOR-ONLY: no signals are generated and nothing here can
@@ -21,6 +22,7 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<Com
   const contracts = [...contractsByDte, ...longContracts];
   const spotPrice = market?.displayPrice ?? contracts.find(contract => contract.underlyingPrice != null)?.underlyingPrice ?? null;
   const errors = [marketResult, shortResult, longResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
+  await scanUnusualFlow(symbol, shortContracts).catch(error => console.error("flow scan failed", error));
   const snapshot: CommandCenter = { configured:true, asOf:Date.now(), market, spotPrice, contracts, signal:null, errors };
   const { error } = await createAdminClient().from("options_monitor_snapshots").upsert({ underlying:symbol, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);

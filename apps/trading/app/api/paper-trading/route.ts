@@ -7,6 +7,7 @@ import { refreshCommandCenter } from "@/lib/options/command-center";
 import { TRADE_UNDERLYINGS, type TradeUnderlying } from "@/lib/options/types";
 import {loadRiskSettings} from "@/lib/settings/risk-settings";
 import {createAlert} from "@/lib/alerts/server";
+import { activeEconomicGuard } from "@/lib/options/economic-calendar";
 
 export const dynamic = "force-dynamic";
 const requestSchema = z.object({
@@ -108,6 +109,10 @@ async function manualOrder(userId:string, input:{ underlying:string; contractTic
     const minutes = Number(value.hour) * 60 + Number(value.minute);
     if (["Sat","Sun"].includes(String(value.weekday)) || minutes < 570 || minutes >= 960) {
       return Response.json({ error:"Manual orders are limited to regular market hours (09:30-16:00 ET)." }, { status:422 });
+    }
+    if (settings.economicGuardEnabled) {
+      const guard = activeEconomicGuard();
+      if (guard) return Response.json({ error:`Economic event guard: ${guard.name} (${guard.releaseLabel}) — entries resume ${guard.resumesAt}. Disable the guard in Settings to override.` }, { status:422 });
     }
     const quantity = Math.max(1, Math.floor(input.quantity ?? 1));
     const limitPrice = Number((input.limitPrice ?? contract.midpoint ?? contract.ask).toFixed(2));

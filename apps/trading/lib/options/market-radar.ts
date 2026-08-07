@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
+import { todaysEconomicEvent } from "./economic-calendar";
 
 // Deterministic early-warning radar, run by the every-minute cron. These are NOT
 // predictions — they are conditions that historically precede outsized moves, surfaced
@@ -61,6 +62,22 @@ export async function runMarketRadar(): Promise<string[]> {
   const dailies = await getDailyBars();
   const prior = [...dailies].reverse().find(bar => bar.date < today);
   if (!prior) return [];
+
+  // 0) Event-risk briefing: pre-market on CPI/NFP days, midday before FOMC decisions.
+  const event = todaysEconomicEvent();
+  if (event) {
+    const morningWindow = clock.minutes >= 420 && clock.minutes < 570 && event.guardStartMinutes === 0;
+    const fomcWindow = clock.minutes >= 750 && clock.minutes < 810 && event.guardStartMinutes > 0;
+    if (morningWindow || fomcWindow) {
+      await createAlert({
+        userId, eventKey: `radar-event-${today}`, severity: "critical",
+        title: `Event risk today: ${event.name} at ${event.releaseLabel}`,
+        body: `${event.name} lands at ${event.releaseLabel}. These releases gap markets through stops in seconds; the engine blocks new entries ${event.guardStartMinutes === 0 ? "until 10:00 AM ET" : "from 1:30 PM until 3:00 PM ET"} (toggle in Settings). Review open positions and swing exposure before the release.`,
+        metadata: { event: event.name },
+      });
+      fired.push("event");
+    }
+  }
 
   // 1) Gap radar: pre-market 7:00-9:29 ET.
   if (clock.minutes >= 420 && clock.minutes < 570) {

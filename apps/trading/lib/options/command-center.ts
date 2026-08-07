@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getHorizonChains, getMarketState, getOptionChain } from "./provider";
 import { recordSpxSample } from "./spx-bars";
+import { scanUnusualFlow } from "./flow-scan";
 import { generateSignal } from "./signal";
 import type { CommandCenter, Underlying } from "./types";
 import type { RiskSettings } from "@/lib/settings/config";
@@ -42,7 +43,8 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
     const { data:previous } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying",underlying).maybeSingle();
     longContracts = ((previous?.payload as CommandCenter|undefined)?.contracts ?? []).filter(contract => contract.dte > 7);
   }
-  const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:[...contractsByDte, ...longContracts.slice(0,400)], signal, errors };
+  await scanUnusualFlow(underlying, contracts).catch(error => console.error("flow scan failed", error));
+  const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:[...contractsByDte, ...longContracts.slice(0,900)], signal, errors };
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {

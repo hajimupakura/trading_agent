@@ -2,6 +2,7 @@ import type { Contract, Signal } from "@/lib/options/types";
 import type { AlpacaAccount, AlpacaOrder, AlpacaPosition } from "./paper";
 import type { RiskSettings } from "@/lib/settings/config";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
+import { activeEconomicGuard } from "@/lib/options/economic-calendar";
 
 export const PAPER_RULES = {
   maxPremium: 8, maxDebitPct: .01, dailyLossPct: .01, maxTradesPerDay: 3, maxOpenPositions: 1,
@@ -75,5 +76,9 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if (["Sat","Sun"].includes(clock.weekday) || (!inDayWindow && !inSwingWindow)) errors.push("Current time is outside the configured ET entry window");
   if (inSwingWindow && !inDayWindow && contract.dte < 1) errors.push("0DTE contracts expire at today's close and cannot be held overnight; swing entries require 1-2 DTE");
   if (account.status !== "ACTIVE") errors.push(`Alpaca paper account is ${account.status}`);
+  if (settings.economicGuardEnabled) {
+    const guard = activeEconomicGuard(input.now ?? new Date());
+    if (guard) errors.push(`Economic event guard: ${guard.name} (${guard.releaseLabel}) — entries resume ${guard.resumesAt}`);
+  }
   return { allowed:errors.length === 0, errors, equity, dayPnl:equity - lastEquity, debit, quantity };
 }

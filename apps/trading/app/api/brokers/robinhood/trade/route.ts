@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "@/lib/brokers/robinhood-trading";
 import { createAlert } from "@/lib/alerts/server";
+import { activeEconomicGuard } from "@/lib/options/economic-calendar";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -38,6 +39,10 @@ export async function POST(request: Request) {
       if (controlError) throw new Error(`Manager control unavailable: ${controlError.message}`);
       if (control.kill_switch) return Response.json({ error:"Emergency stop is active — new entries are disabled." }, { status:422 });
       const settings = await loadRiskSettings(user.id);
+      if (settings.economicGuardEnabled) {
+        const guard = activeEconomicGuard();
+        if (guard) return Response.json({ error:`Economic event guard: ${guard.name} (${guard.releaseLabel}) — entries resume ${guard.resumesAt}. Disable the guard in Settings to override.` }, { status:422 });
+      }
       const debit = ticket.quantity * ticket.limitPrice * 100;
       if (debit > settings.maxTradeDebit) return Response.json({ error:`Total debit $${debit.toFixed(0)} exceeds the $${settings.maxTradeDebit.toFixed(0)} per-trade limit` }, { status:422 });
     }
