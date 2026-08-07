@@ -167,8 +167,18 @@ export async function getHorizonChains(underlying: Underlying, horizons: Array<"
 
 export async function getOptionChain(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS,options?:{monitorOnly?:boolean}): Promise<Contract[]> {
   const today = dateEt();
-  const buckets = await Promise.all([0,1,2].map(async dte => {
-    const expiration = addDays(today,dte); const rows: Parameters<typeof rankContracts>[0] = [];
+  // The next three expiration SESSIONS, not calendar days: weekend dates carry no listed
+  // expirations, so a Friday fetch covers Fri (0), Mon (3), Tue (4) — otherwise the
+  // scanner asks Massive for Saturday/Sunday chains and "1DTE/2DTE" go empty all weekend.
+  const sessions: Array<{ expiration: string; dte: number }> = [];
+  for (let offset = 0; sessions.length < 3 && offset <= 6; offset++) {
+    const candidate = addDays(today, offset);
+    const weekday = new Date(`${candidate}T12:00:00Z`).getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    sessions.push({ expiration: candidate, dte: offset });
+  }
+  const buckets = await Promise.all(sessions.map(async ({ expiration, dte }) => {
+    const rows: Parameters<typeof rankContracts>[0] = [];
     let next:string|undefined = `${BASE}/v3/snapshot/options/${underlying}?expiration_date=${expiration}&limit=250&sort=strike_price`; let pages=0;
     while(next && pages++ < 4) {
       const payload:any = await massive<any>(next);

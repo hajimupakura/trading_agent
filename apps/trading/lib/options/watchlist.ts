@@ -18,7 +18,9 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<Com
   const market = marketResult.status === "fulfilled" ? marketResult.value : null;
   const shortContracts = shortResult.status === "fulfilled" ? shortResult.value : [];
   const longContracts = longResult.status === "fulfilled" ? longResult.value : [];
-  const contractsByDte = ([0,1,2] as const).flatMap(dte => shortContracts.filter(contract => contract.dte === dte).slice(0,40));
+  // Cap per expiration session actually present (Fridays fetch Fri/Mon/Tue, dte 0/3/4).
+  const shortDtes = [...new Set(shortContracts.map(contract => contract.dte))].sort((a, b) => a - b).slice(0, 3);
+  const contractsByDte = shortDtes.flatMap(dte => shortContracts.filter(contract => contract.dte === dte).slice(0,40));
   const contracts = [...contractsByDte, ...longContracts];
   const spotPrice = market?.displayPrice ?? contracts.find(contract => contract.underlyingPrice != null)?.underlyingPrice ?? null;
   const errors = [marketResult, shortResult, longResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
