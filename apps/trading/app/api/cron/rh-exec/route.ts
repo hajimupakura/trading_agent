@@ -29,10 +29,8 @@ export async function GET(request: Request) {
     const userId = await connectionUserId();
     if (!userId) return Response.json({ connected:false, positions:[] });
     if (new URL(request.url).searchParams.get("op") === "debug") {
-      const rawAccounts = await getRobinhoodAccounts(userId);
-      const first = (rawAccounts[0] as any)?.account_number;
-      const rawOverview = first ? await getRobinhoodOverview(userId, String(first)) : null;
-      return Response.json({ rawAccounts, rawOverview });
+      const raw = await callRobinhoodTool(userId, "get_accounts", {});
+      return Response.json({ raw });
     }
     const accounts = await getRobinhoodAccounts(userId);
     const agentic = accounts.find((account:any) => account?.agentic_allowed === true || account?.agentic_allowed === "true");
