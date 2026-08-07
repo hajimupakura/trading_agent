@@ -152,6 +152,44 @@ export async function runWeeklyPostMortem(): Promise<boolean> {
   return true;
 }
 
+// ---------------------------------------------------------------- noise digest
+
+// Sweeps digest-tier alerts (flow skews, unusual-flow hits, watchlist chatter) that
+// the instant dispatcher left pending, and turns them into ONE triaged Telegram
+// message — or silence, when nothing is decision-relevant. Pending rows are marked
+// notified either way so noise never piles up for a re-send.
+export async function runNoiseDigest(): Promise<boolean> {
+  const userId = await ownerId();
+  if (!userId) return false;
+  const clock = etParts();
+  const eventKey = `ai-digest-${clock.date}-${String(clock.minutes).padStart(4, "0")}`;
+  if (await alertExists(eventKey)) return false;
+
+  const admin = createAdminClient();
+  const { data: pending } = await admin.from("alerts")
+    .select("id,event_key,severity,title,body,created_at")
+    .is("notified_at", null)
+    .order("created_at", { ascending: true })
+    .limit(60);
+  const digestRows = (pending ?? []).filter(row =>
+    !["success", "critical"].includes(String(row.severity))
+    && !String(row.event_key).startsWith("radar-")
+    && !String(row.event_key).startsWith("ai-"));
+  if (!digestRows.length) return false;
+
+  const summary = await chatComplete({
+    system: "You triage notification noise for an options trader mid-session. Input: system alerts (flow skews, unusual contract flow, watchlist events) accumulated over the last ~30 minutes. Write ONE compact digest (max 100 words, plain text): lead with anything decision-relevant — NEW one-sided skews, unusually large fresh positioning, clustering across related names, anything contradicting the current book — then compress or drop routine repeats (say 'plus N routine flow pings' rather than listing them). Use ONLY the data given; never invent numbers. If nothing is decision-relevant, reply with exactly: SKIP",
+    user: `Pending alerts (oldest first):\n${digestRows.map(row => `[${String(row.created_at).slice(11, 16)}Z ${row.severity}] ${row.title}: ${row.body}`).join("\n")}`,
+    maxTokens: 350,
+  });
+
+  const now = new Date().toISOString();
+  await admin.from("alerts").update({ notified_at: now }).in("id", digestRows.map(row => row.id));
+  if (summary.trim().toUpperCase() === "SKIP") return false;
+  await createAlert({ userId, eventKey, severity: "info", title: `Flow digest — ${digestRows.length} alerts triaged`, body: summary, metadata: { kind: "ai_digest", triaged: digestRows.length } });
+  return true;
+}
+
 // -------------------------------------------------------- cron entry point
 
 // Called by the every-minute cron. Fires the brief in the 9:15-9:29 ET window and the
@@ -166,5 +204,8 @@ export async function maybeRunScheduledReviews(): Promise<string[]> {
   const ran: string[] = [];
   if (clock.minutes >= 555 && clock.minutes < 570 && await runMorningBrief()) ran.push("morning-brief");
   if (clock.weekday === "Fri" && clock.minutes >= 1005 && clock.minutes < 1020 && await runWeeklyPostMortem()) ran.push("weekly-postmortem");
+  // Noise digest: every 30 minutes from 10:00 through the 16:30 sweep (the 9:30-10:00
+  // open is covered by the morning brief and instant radar alerts).
+  if (clock.minutes >= 600 && clock.minutes <= 990 && clock.minutes % 30 === 0 && await runNoiseDigest()) ran.push("noise-digest");
   return ran;
 }
