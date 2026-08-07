@@ -124,3 +124,21 @@ button { cursor: pointer; }
 @media (max-width:680px){.replay-control{grid-template-columns:1fr}.run-replay{justify-self:stretch}.replay-summary{grid-template-columns:1fr 1fr}}
 @media (max-width:680px){.analytics-kpis{grid-template-columns:1fr 1fr}.analytics-grid{grid-template-columns:1fr}.breakdown-head,.breakdown-row{grid-template-columns:1fr .35fr .7fr .8fr}.breakdown-head span:nth-child(5),.breakdown-head span:nth-child(6),.breakdown-row span:nth-child(5),.breakdown-row span:nth-child(6){display:none}.sample-comparison{grid-template-columns:1fr}.sample-arrow{transform:rotate(90deg);justify-self:center}}
 @media (max-width:680px){.settings-grid{grid-template-columns:1fr}.settings-card:last-child{grid-column:auto}.save-settings{justify-self:stretch;justify-content:center}.broker-card{grid-template-columns:1fr}.broker-connect,.broker-disconnect{text-align:center}}
+
+/* Contract inspect & leaderboard tools */
+.table-tools { display:flex; align-items:center; gap:14px; }
+.table-tools p { margin:0; font-size:11px; color:rgba(148,163,184,.7); }
+.contract-search { background:rgba(148,163,184,.08); border:1px solid rgba(148,163,184,.22); border-radius:8px; color:inherit; font:inherit; font-size:12px; padding:7px 12px; width:210px; outline:none; }
+.contract-search:focus { border-color:rgba(94,234,212,.5); }
+.contract-table tbody tr.clickable { cursor:pointer; }
+.contract-table tbody tr.clickable:hover td { background:rgba(148,163,184,.07); }
+.contract-inspect { max-width:640px; }
+.inspect-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 16px; margin:16px 0; }
+.inspect-grid div { display:flex; flex-direction:column; gap:3px; }
+.inspect-grid span { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:rgba(148,163,184,.7); }
+.inspect-grid strong { font-size:14px; }
+.inspect-grid strong.call { color:#34d399; }
+.inspect-grid strong.put { color:#f87171; }
+.ticket-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.ticket-grid input { background:rgba(148,163,184,.08); border:1px solid rgba(148,163,184,.25); border-radius:8px; color:inherit; font:inherit; padding:7px 10px; width:100%; }
+.approve-button.robinhood-execute { background:linear-gradient(135deg,#0f9d58,#0b7a44); }

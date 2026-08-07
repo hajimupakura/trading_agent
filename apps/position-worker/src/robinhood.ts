@@ -102,7 +102,8 @@ export class RobinhoodExitManager {
     };
     // Manual Robinhood entries carry no opening-range context -> underlying invalidation is
     // disabled (underlyingPrice null). No-follow-through only applies with an exact open time.
-    let reason = evaluateExit({ position: managed, bid: quote.bid, underlyingPrice: null });
+    const dte = Math.max(0, Math.round((Date.parse(`${position.expirationDate}T16:00:00-04:00`) - now) / 86_400_000));
+    let reason = evaluateExit({ position: managed, bid: quote.bid, underlyingPrice: null, longDated: dte > 2 });
     if (reason === "no_follow_through" && !openedAtExact) reason = null;
     const base = { opened_at: new Date(openedAt).toISOString(), opened_at_exact: openedAtExact, peak_bid: peakBid, latest_bid: quote.bid };
     if (!reason) { await saveMonitor(position, { ...base, status: "monitoring", last_error: null }); return; }

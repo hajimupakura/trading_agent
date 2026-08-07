@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getAuthenticatedUser } from "@/lib/supabase/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
-import { resolveOptionInstrument, reviewAndPlaceOptionOrder } from "@/lib/brokers/robinhood-trading";
+import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "@/lib/brokers/robinhood-trading";
 import { createAlert } from "@/lib/alerts/server";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export const maxDuration = 30;
 // NOTE: Robinhood positions are NOT yet covered by the automatic exit engine —
 // the UI must (and does) say so.
 const schema = z.object({
-  accountNumber: z.string().min(4).max(30),
+  accountNumber: z.string().min(4).max(30).optional(),
   chainSymbol: z.string().min(1).max(8),
   underlyingType: z.enum(["equity", "index"]),
   expirationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -41,10 +41,16 @@ export async function POST(request: Request) {
       const debit = ticket.quantity * ticket.limitPrice * 100;
       if (debit > settings.maxTradeDebit) return Response.json({ error:`Total debit $${debit.toFixed(0)} exceeds the $${settings.maxTradeDebit.toFixed(0)} per-trade limit` }, { status:422 });
     }
+    let accountNumber = ticket.accountNumber;
+    if (!accountNumber) {
+      const accounts = await getRobinhoodAccounts(user.id);
+      accountNumber = accounts.find((account:any) => account?.agentic_allowed === true)?.account_number;
+      if (!accountNumber) return Response.json({ error:"No agentic-enabled Robinhood account found" }, { status:409 });
+    }
     const instrument = await resolveOptionInstrument(user.id, { chainSymbol:ticket.chainSymbol, expirationDate:ticket.expirationDate, strike:ticket.strike, type:ticket.optionType });
     const refId = crypto.randomUUID();
     const { review, order } = await reviewAndPlaceOptionOrder(user.id, {
-      accountNumber:ticket.accountNumber, optionId:instrument.id, side:ticket.side, positionEffect:ticket.positionEffect,
+      accountNumber:String(accountNumber), optionId:instrument.id, side:ticket.side, positionEffect:ticket.positionEffect,
       quantity:ticket.quantity, limitPrice:ticket.limitPrice, chainSymbol:ticket.chainSymbol, underlyingType:ticket.underlyingType, refId,
     });
     await createAlert({

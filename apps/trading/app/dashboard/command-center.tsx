@@ -60,6 +60,11 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
+  const [contractQuery, setContractQuery] = useState("");
+  const [inspected, setInspected] = useState<Contract | null>(null);
+  const [ticket, setTicket] = useState({ quantity:"1", limitPrice:"" });
+  const [ticketBusy, setTicketBusy] = useState<"alpaca"|"robinhood"|null>(null);
+  const [ticketMessage, setTicketMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
   type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
   const horizonRange = (tab: HorizonTab): [number, number] => tab === 0 ? [0,0] : tab === 1 ? [1,1] : tab === 2 ? [2,2] : tab === "1M" ? [3,59] : tab === "3M" ? [60,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
@@ -114,11 +119,44 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
     } finally { setSubmitting(false); }
   }, [signal, underlying, refresh, refreshPaper]);
 
+  const inspect = useCallback((contract: Contract) => {
+    setInspected(contract);
+    setTicket({ quantity:"1", limitPrice: contract.midpoint > 0 ? contract.midpoint.toFixed(2) : contract.ask > 0 ? contract.ask.toFixed(2) : "" });
+    setTicketMessage(null);
+  }, []);
+  const executeInspected = useCallback(async (venue: "alpaca" | "robinhood") => {
+    if (!inspected) return;
+    setTicketBusy(venue); setTicketMessage(null);
+    try {
+      const quantity = Number(ticket.quantity); const limitPrice = Number(ticket.limitPrice);
+      if (!Number.isFinite(quantity) || quantity < 1 || !Number.isFinite(limitPrice) || limitPrice <= 0) throw new Error("Enter a valid quantity and limit price");
+      let response: Response;
+      if (venue === "alpaca") {
+        response = await fetch("/api/paper-trading", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ underlying, contractTicker:inspected.ticker, manual:true, quantity, limitPrice }) });
+      } else {
+        const occ = inspected.ticker.replace(/^O:/, "");
+        const root = occ.replace(/\d{6}[CP]\d{8}$/, "");
+        response = await fetch("/api/brokers/robinhood/trade", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({
+          chainSymbol:root, underlyingType:root === "SPX" || root === "SPXW" ? "index" : "equity",
+          expirationDate:inspected.expirationDate, strike:inspected.strike, optionType:inspected.side,
+          side:"buy", positionEffect:"open", quantity, limitPrice,
+        }) });
+      }
+      const payload = await response.json();
+      if (!response.ok) throw new Error([payload.error, ...(payload.reasons ?? [])].filter(Boolean).join(" · "));
+      setTicketMessage({ tone:"success", text:`${venue === "alpaca" ? "Alpaca paper" : "Robinhood"} order submitted: BUY ${quantity} × ${inspected.ticker} @ $${limitPrice.toFixed(2)}` });
+      await refreshPaper();
+    } catch (error) {
+      setTicketMessage({ tone:"error", text:error instanceof Error ? error.message : "Order failed" });
+    } finally { setTicketBusy(null); }
+  }, [inspected, ticket, underlying, refreshPaper]);
   const market = data?.market;
   const technicals = market?.technicals;
   const eligible = data?.contracts.filter((contract) => contract.eligible) ?? [];
   const [horizonLo, horizonHi] = horizonRange(selectedHorizon);
-  const selectedContracts = data?.contracts.filter(contract => contract.dte >= horizonLo && contract.dte <= horizonHi) ?? [];
+  const query = contractQuery.trim().toLowerCase();
+  const selectedContracts = (data?.contracts.filter(contract => contract.dte >= horizonLo && contract.dte <= horizonHi) ?? [])
+    .filter(contract => !query || `${contract.ticker} ${contract.strike} ${contract.side} ${contract.expirationDate}`.toLowerCase().includes(query));
   const actionTone = signal?.action === "enter_call" ? "call" : signal?.action === "enter_put" ? "put" : "wait";
   const actionLabel = signal?.action === "enter_call" ? "CALL SETUP" : signal?.action === "enter_put" ? "PUT SETUP" : "STAND ASIDE";
   const actionDescription = signal?.action === "enter_call"
@@ -244,11 +282,11 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           </section>
 
           <section className="contracts-card">
-            <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {horizonLabel(selectedHorizon)} CONTRACTS</strong></div><p>Rejected rows are dimmed · hover for reason</p></div>
+            <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {horizonLabel(selectedHorizon)} CONTRACTS</strong></div><div className="table-tools"><input className="contract-search" placeholder="Search strike, C/P, expiry…" value={contractQuery} onChange={event => setContractQuery(event.target.value)} aria-label="Search contracts"/><p>Click a row to inspect &amp; trade</p></div></div>
             <div className="dte-tabs" role="tablist" aria-label="Filter contracts by expiration horizon">{horizonTabs.map(tab => { const [lo,hi] = horizonRange(tab); const count = data?.contracts.filter(contract => contract.dte >= lo && contract.dte <= hi).length ?? 0; return <button key={String(tab)} role="tab" aria-selected={selectedHorizon === tab} className={selectedHorizon === tab ? "selected":""} onClick={()=>setSelectedHorizon(tab)}>{horizonLabel(tab)} <span>{count}</span></button>; })}</div>
             <div className="table-wrap"><table>
               <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
-              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts returned in this scan.</td></tr>}</tbody>
+              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} onSelect={inspect} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts {query ? "match the search" : "returned in this scan"}.</td></tr>}</tbody>
             </table></div>
           </section>
 
@@ -262,6 +300,37 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
         <p className="approval-warning">The server will rescan the market, size the order from your risk-per-trade setting, and re-check the 1% debit limit, your configured daily-loss limit, trading window, open positions and duplicate orders before submission. The Railway manager handles exits only when it is online and enabled; otherwise close the position manually in Alpaca.</p>
         {orderMessage?.tone === "error" ? <div className="auth-alert error">{orderMessage.text}</div> : null}
         <div className="approval-actions"><button className="cancel-button" onClick={() => setApprovalOpen(false)} disabled={submitting}>Cancel</button><button className="confirm-button" onClick={() => void approveOrder()} disabled={submitting}>{submitting ? "Checking risk…" : "Approve paper order"}</button></div>
+      </section></div> : null}
+      {inspected ? <div className="approval-backdrop" role="presentation" onMouseDown={() => !ticketBusy && setInspected(null)}><section className="approval-modal contract-inspect" role="dialog" aria-modal="true" aria-labelledby="inspect-title" onMouseDown={event => event.stopPropagation()}>
+        <p className="eyebrow">CONTRACT DETAIL · {inspected.dte}DTE</p>
+        <h2 id="inspect-title" className="mono">{inspected.ticker}</h2>
+        <div className="inspect-grid">
+          <div><span>Side</span><strong className={inspected.side}>{inspected.side.toUpperCase()}</strong></div>
+          <div><span>Strike</span><strong>${money(inspected.strike)}</strong></div>
+          <div><span>Expires</span><strong>{inspected.expirationDate}</strong></div>
+          <div><span>Bid / Ask</span><strong>${money(inspected.bid)} / ${money(inspected.ask)}</strong></div>
+          <div><span>Midpoint</span><strong>${money(inspected.midpoint)}</strong></div>
+          <div><span>Spread</span><strong>{money(inspected.spreadPct, 1)}%</strong></div>
+          <div><span>Volume</span><strong>{inspected.volume.toLocaleString()}</strong></div>
+          <div><span>Open interest</span><strong>{inspected.openInterest.toLocaleString()}</strong></div>
+          <div><span>IV</span><strong>{inspected.impliedVolatility == null ? "—" : `${money(inspected.impliedVolatility * 100, 1)}%`}</strong></div>
+          <div><span>Delta</span><strong>{money(inspected.delta)}</strong></div>
+          <div><span>Theta</span><strong>{money(inspected.theta)}</strong></div>
+          <div><span>Liquidity</span><strong>{inspected.liquidityScore}/100</strong></div>
+        </div>
+        {inspected.rejectionReasons.length ? <p className="approval-warning">Screened out for execution: {inspected.rejectionReasons.join(" · ")}. Manual orders bypass the scanner screens but not the risk caps.</p> : null}
+        <div className="inspect-grid ticket-grid">
+          <div><span>Contracts</span><input type="number" min="1" max="10" value={ticket.quantity} onChange={event => setTicket(current => ({ ...current, quantity:event.target.value }))}/></div>
+          <div><span>Limit price</span><input type="number" step="0.01" value={ticket.limitPrice} onChange={event => setTicket(current => ({ ...current, limitPrice:event.target.value }))}/></div>
+          <div><span>Total debit</span><strong>${Number.isFinite(Number(ticket.quantity) * Number(ticket.limitPrice) * 100) ? (Number(ticket.quantity) * Number(ticket.limitPrice) * 100).toFixed(0) : "—"}</strong></div>
+        </div>
+        {ticketMessage ? <p className={`order-message ${ticketMessage.tone}`}>{ticketMessage.text}</p> : null}
+        <div className="approval-actions">
+          <button className="approve-button" disabled={ticketBusy != null || underlying === "SPX"} onClick={() => void executeInspected("alpaca")} title={underlying === "SPX" ? "Alpaca cannot execute SPX index options" : "Paper trade on Alpaca"}><Send size={14}/> {ticketBusy === "alpaca" ? "Submitting…" : underlying === "SPX" ? "Alpaca: SPX N/A" : "Buy on Alpaca (paper)"}</button>
+          <button className="approve-button robinhood-execute" disabled={ticketBusy != null || !robinhood?.connected} onClick={() => void executeInspected("robinhood")} title={robinhood?.connected ? "Real order in the Robinhood agentic account" : "Connect Robinhood first"}><Send size={14}/> {ticketBusy === "robinhood" ? "Submitting…" : "Buy on Robinhood (real)"}</button>
+          <button className="cancel-button" onClick={() => setInspected(null)} disabled={ticketBusy != null}>Close</button>
+        </div>
+        <p className="decision-help">Alpaca paper entries are exit-managed automatically. Robinhood real orders go to the agentic account and are exit-managed by the worker (stop and trailing rules; long-dated contracts skip the intraday time exits).</p>
       </section></div> : null}
     </div>
   );
@@ -302,6 +371,6 @@ function PriceChart({ bars, reference }: { bars: Bar[]; reference: number | null
   return <div className="price-chart"><svg viewBox="0 0 1000 300" preserveAspectRatio="none" role="img" aria-label="Recent one-minute price chart"><defs><linearGradient id="price-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#63e6be" stopOpacity=".25"/><stop offset="100%" stopColor="#63e6be" stopOpacity="0"/></linearGradient></defs><g className="grid-lines"><line x1="0" x2="1000" y1="40" y2="40"/><line x1="0" x2="1000" y1="113" y2="113"/><line x1="0" x2="1000" y1="186" y2="186"/><line x1="0" x2="1000" y1="260" y2="260"/></g>{chart.referenceY != null ? <line className="reference-line" x1="0" x2="1000" y1={chart.referenceY} y2={chart.referenceY}/> : null}<polygon className="price-area" points={chart.area}/><polyline className="price-line" points={chart.points}/></svg><span className="chart-high">{money(chart.max)}</span><span className="chart-low">{money(chart.min)}</span></div>;
 }
 
-function ContractRow({ contract, rank }: { contract: Contract; rank: number }) {
-  return <tr className={contract.eligible ? "" : "rejected"} title={contract.rejectionReasons.join(", ")}><td><span className="rank">{rank}</span></td><td className="mono contract-ticker">{contract.ticker}</td><td>{contract.dte}</td><td><span className={`side-pill ${contract.side}`}>{contract.side.toUpperCase()}</span></td><td>{money(contract.strike)}</td><td>{money(contract.bid)} / {money(contract.ask)}</td><td className="debit">${money(contract.ask * 100, 0)}</td><td>{money(contract.spreadPct, 1)}%</td><td>{contract.volume.toLocaleString()}</td><td>{money(contract.volumeToOpenInterest)}</td><td>{money(contract.delta)}</td><td>{contract.impliedVolatility == null ? "—" : `${money(contract.impliedVolatility * 100, 1)}%`}</td></tr>;
+function ContractRow({ contract, rank, onSelect }: { contract: Contract; rank: number; onSelect?: (contract: Contract) => void }) {
+  return <tr className={`${contract.eligible ? "" : "rejected"} clickable`} title={contract.rejectionReasons.length ? contract.rejectionReasons.join(", ") : "Click to inspect and trade"} onClick={() => onSelect?.(contract)}><td><span className="rank">{rank}</span></td><td className="mono contract-ticker">{contract.ticker}</td><td>{contract.dte}</td><td><span className={`side-pill ${contract.side}`}>{contract.side.toUpperCase()}</span></td><td>{money(contract.strike)}</td><td>{money(contract.bid)} / {money(contract.ask)}</td><td className="debit">${money(contract.ask * 100, 0)}</td><td>{money(contract.spreadPct, 1)}%</td><td>{contract.volume.toLocaleString()}</td><td>{money(contract.volumeToOpenInterest)}</td><td>{money(contract.delta)}</td><td>{contract.impliedVolatility == null ? "—" : `${money(contract.impliedVolatility * 100, 1)}%`}</td></tr>;
 }

@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { evaluateExit, easternClock } from "./exit-engine.js";
+import { dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { cancelOrder, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
@@ -94,7 +94,8 @@ export class PositionManager {
     if (!quote || now - quote.timestamp > 30_000) { await saveMonitor(position,{bid:0,ask:0,quoteAt:now,status:"error",error:"No fresh option quote"});await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`quote-stale-${position.userId}-${position.ticker}-${position.openedAt}`,severity:"critical",title:"Option quote is stale",body:`Automatic exits cannot price ${position.ticker}. Check Alpaca and manage the position manually until data recovers.`,metadata:{contractTicker:position.ticker,openedAt:position.openedAt}}); throw new Error(`No fresh option quote for ${position.ticker}`); }
     const quoteState = {bid:quote.bid,ask:quote.ask,quoteAt:quote.timestamp};
     position.peakBid = Math.max(position.peakBid,quote.bid);
-    const reason = evaluateExit({position,bid:quote.bid,underlyingPrice});
+    const dte = dteFromOcc(position.alpacaSymbol);
+    const reason = evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2});
     const symbolOrders = orders.filter(order => order.symbol === position.alpacaSymbol && order.side === "sell");
     const openClose = symbolOrders.find(activeOrder); const recentlyFilled = symbolOrders.find(order => order.status === "filled" && order.filled_at && now-Date.parse(order.filled_at)<30_000);
     if (!reason) { await saveMonitor(position,{...quoteState,status:"monitoring"}); return; }

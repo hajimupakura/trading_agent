@@ -24,3 +24,9 @@ describe("swing exit handling", () => {
   it("keeps holding into the next afternoon while no sell criterion is met", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T18:00:00Z") })).toBe(null));
   it("goes flat at 15:10 on the day after entry to beat expiry", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T19:10:00Z") })).toBe("mandatory_time_exit"));
 });
+
+describe("long-dated position handling", () => {
+  it("does not force-flat long-dated positions at 15:10", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, longDated:true, now:at("19:10") })).toBe(null));
+  it("keeps the 30% stop for long-dated positions", () => expect(evaluateExit({ position:base, bid:2.7, underlyingPrice:771, longDated:true, now:at("19:10") })).toBe("premium_stop"));
+  it("keeps the trailing stop for long-dated positions", () => expect(evaluateExit({ position:{...base,peakBid:8}, bid:6.7, underlyingPrice:771, longDated:true, now:at("14:05") })).toBe("trailing_stop"));
+});
