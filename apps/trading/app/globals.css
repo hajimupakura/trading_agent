@@ -1,20 +1,20 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-  color-scheme: dark;
-  --bg: #07090d;
-  --surface: #0d1118;
-  --surface-raised: #111722;
-  --line: #202733;
-  --line-soft: #171d27;
-  --muted: #7c8899;
-  --text: #eef2f6;
-  --green: #63e6be;
-  --green-deep: #102c27;
-  --red: #ff7185;
-  --red-deep: #321820;
-  --amber: #f4bd62;
-  --blue: #77a7ff;
+  color-scheme: light;
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --surface-raised: #f8fafc;
+  --line: #cbd3dc;
+  --line-soft: #e1e6eb;
+  --muted: #596779;
+  --text: #17212f;
+  --green: #087f5b;
+  --green-deep: #dff5ec;
+  --red: #c43d53;
+  --red-deep: #fde8ec;
+  --amber: #9a5c00;
+  --blue: #2563a8;
 }
 
 * { box-sizing: border-box; }
@@ -142,3 +142,124 @@ button { cursor: pointer; }
 .ticket-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
 .ticket-grid input { background:rgba(148,163,184,.08); border:1px solid rgba(148,163,184,.25); border-radius:8px; color:inherit; font:inherit; padding:7px 10px; width:100%; }
 .approve-button.robinhood-execute { background:linear-gradient(135deg,#0f9d58,#0b7a44); }
+
+/* Light command-center theme: high-contrast data on neutral grey-white surfaces. */
+.sidebar { background:#f8fafb; box-shadow:2px 0 12px rgba(23,33,47,.04); }
+.desk-label, .eyebrow, .market-status, .paper-strip span, .manager-strip span,
+.market-card-top, .market-card p, .card-heading, .section-heading, .signal-kicker,
+.contract-symbol p, .contract-price p, .contract-price span, .contract-stats span,
+.technical div span, .table-heading p, .chart-high, .chart-low, .risk-footer,
+.replay-control label, .replay-summary span, .analytics-kpi span,
+.breakdown-head, .diagnostic-list span, .sample-side span, .settings-field small,
+.toggle-setting small, .broker-card-title span, .broker-status span,
+.approval-symbol span, .approval-grid span, .auth-copy, .auth-security {
+  color:#596779;
+}
+.nav-item { color:#526173; }
+.nav-item:hover { color:#17212f; background:#eef2f5; }
+.nav-item.active { color:#10251f; background:#e3f3ed; }
+.nav-item small { color:#667587; }
+.sidebar-note, .manager-strip.active, .settings-warning, .evidence-banner.credible,
+.order-message, .price-cap, .dte-tabs button.selected, .choice-row button.selected,
+.auth-alert { border-color:#91c8b5; background:#e8f6f1; color:#086c4f; }
+.sidebar-note strong { color:#153f34; }
+.sidebar-note span, .settings-warning span { color:#3e6d60; }
+.topbar { background:rgba(248,250,251,.94); box-shadow:0 1px 9px rgba(23,33,47,.04); }
+.market-status b { color:#3e4b5b; }
+.logout-button, .alert-button, .refresh-button, .export-report, .cancel-button,
+.symbol-switch, .dte-tabs button, .choice-row button {
+  border-color:#c4cdd7;
+  background:#f7f9fb;
+  color:#3f4d5e;
+}
+.logout-button:hover, .refresh-button:hover { color:#17212f; border-color:#8f9cab; background:#fff; }
+.alert-popover { border-color:#b9c4cf; background:#fff; box-shadow:0 18px 55px rgba(23,33,47,.18); }
+.alert-popover-head>strong, .alert-list strong { color:#263344; }
+.alert-popover>p, .alert-list small, .alert-list em { color:#596779; }
+.alert-list>button { background:#fff; color:#334155; }
+.alert-list>button:hover { background:#f2f5f7; }
+.alert-list>button.read { opacity:.68; }
+.alert-list>button>i { background:#e9eef3; color:#526173; }
+.alert-list>button.critical>i { background:#fde8ec; }
+.alert-list>button.warning>i { background:#fff1d5; }
+.alert-list>button.success>i { background:#dff5ec; }
+.symbol-switch button { color:#526173; }
+.symbol-switch button.selected { color:#fff; background:var(--green); box-shadow:0 3px 14px rgba(8,127,91,.18); }
+.system-alert, .evidence-banner { border-color:#dfbd7c; background:#fff5df; color:#754700; }
+.order-message.error, .auth-alert.error { border-color:#e0a3ae; background:#fff0f2; color:#9d273b; }
+.paper-strip { background:var(--line); }
+.paper-strip > div { background:#fff; }
+.robinhood-state a { color:#a82f45; }
+.robinhood-state a:hover { color:#7f1d31; }
+.manager-strip { border-color:#e0a3ae; background:#fff2f4; }
+.manager-strip small { color:#596779; }
+.kill-manager, .broker-disconnect { border-color:#d78e9a; background:#fff0f2; color:#a82f45; }
+.resume-manager, .approve-button, .broker-connect, .save-settings, .run-replay {
+  border-color:#087f5b; background:#087f5b; color:#fff;
+}
+.approve-button:hover:not(:disabled) { background:#066b4d; }
+.market-card, .signal-card, .contract-card, .chart-card, .technicals-card,
+.contracts-card, .replay-control, .replay-summary article, .replay-report,
+.analytics-kpi, .analytics-card, .sample-card, .settings-card, .broker-card {
+  background:#fff;
+  box-shadow:0 1px 3px rgba(23,33,47,.045);
+}
+.signal-card.call { border-color:#91c8b5; background:linear-gradient(135deg,#eef9f5 0,#fff 62%); }
+.signal-card.put { border-color:#e4aab4; background:linear-gradient(135deg,#fff2f4 0,#fff 62%); }
+.engine-tag { border-color:#c7d0d9; background:#f2f5f7; color:#526173; }
+.hover-tooltip { border-color:#9ba8b5; background:#fff; color:#263344; box-shadow:0 12px 30px rgba(23,33,47,.16); }
+.hover-tooltip::before { border-color:#9ba8b5; background:#fff; }
+.signal-subtitle, .reason-list div, .empty-contract, .empty-contract span { color:#526173; }
+.confidence { background:conic-gradient(var(--green) var(--score),#dbe2e8 var(--score)); }
+.confidence::after { background:#fff; }
+.confidence span { color:#596779; }
+.invalidation { background:#fff0f2; }
+.invalidation span { color:#7f4550; }
+.empty-contract strong, .section-heading strong { color:#334155; }
+.grid-lines line { stroke:#d9e0e6; }
+.chart-empty { color:#596779; }
+.state-dot { background:#8794a3; }
+.dte-tabs span, .rank { background:#e8edf2; color:#405064; }
+th { background:#f3f6f8; color:#465568; }
+td { color:#354255; }
+tbody tr:hover { background:#f2f7f5; }
+.rejected { opacity:.72; }
+.rejected:hover { opacity:1; }
+.contract-ticker, .debit { color:#263344; }
+.replay-control input, .settings-field input, .number-input, .ticket-grid input,
+.auth-form input, .field, .contract-search {
+  border-color:#b8c3ce; background:#fff; color:#17212f; color-scheme:light;
+}
+.replay-disclosure { border-color:#b8c9d9; background:#eef5fb; color:#3f5870; }
+.replay-empty { border-color:#b9c4cf; color:#596779; }
+.replay-empty h2, .replay-summary strong, .analytics-kpi strong { color:#263344; }
+.replay-notes strong, .replay-limitations strong, .settings-card-title,
+.broker-card-title strong, .broker-status strong { color:#465568; }
+.replay-limitations p, .sample-card>p { color:#596779; }
+.evidence-banner span { color:#5d6876; }
+.breakdown-head { color:#596779; }
+.breakdown-row strong { color:#2e3c4e; }
+.breakdown-row span { color:#526173; }
+.sample-arrow { color:#7d8996; }
+.sample-side { border-color:#d5dce3; background:#f8fafb; }
+.sample-side>strong { color:#465568; }
+.settings-field>span, .toggle-setting strong { color:#344255; }
+.number-input i { color:#526173; }
+.toggle-setting>i { background:#cbd4dc; }
+.toggle-setting>i:after { background:#fff; box-shadow:0 1px 3px rgba(23,33,47,.2); }
+.toggle-setting input:checked+i { background:#087f5b; }
+.toggle-setting input:checked+i:after { background:#fff; }
+.approval-backdrop { background:rgba(30,41,55,.38); }
+.approval-modal { border-color:#aeb9c4; background:#fff; box-shadow:0 24px 90px rgba(23,33,47,.26); }
+.approval-grid { background:#d5dce3; }
+.approval-grid div, .approval-warning { background:#f5f7f9; }
+.approval-warning { color:#526173; }
+.confirm-button { border-color:#087f5b; background:#087f5b; color:#fff; }
+.auth-shell { background:radial-gradient(circle at 50% 20%,#dff4ec 0,transparent 38%),var(--bg); }
+.auth-card { border-color:#bdc7d1; background:rgba(255,255,255,.96); box-shadow:0 28px 80px rgba(23,33,47,.14); }
+.auth-form label { color:#465568; }
+.auth-form input:focus, .contract-search:focus { border-color:#087f5b; box-shadow:0 0 0 3px rgba(8,127,91,.12); }
+.auth-form button { border-color:#087f5b; background:#087f5b; color:#fff; }
+.contract-table tbody tr.clickable:hover td { background:#eef7f3; }
+.table-tools p, .inspect-grid span { color:#596779; }
+.approve-button.robinhood-execute { background:linear-gradient(135deg,#087f5b,#066b4d); color:#fff; }
