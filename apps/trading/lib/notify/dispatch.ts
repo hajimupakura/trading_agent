@@ -26,17 +26,21 @@ const ICON: Record<string, string> = { info: "ℹ️", success: "✅", warning: 
 export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPending: number }> {
   if (!telegramConfigured()) return { sent: 0, digestPending: 0 };
   const admin = createAdminClient();
+  // Query the instant tier DIRECTLY — never slice the whole pending set, or a
+  // digest-tier backlog starves critical alerts out of the fetch window.
   const { data: pending, error } = await admin.from("alerts")
     .select("id,event_key,severity,title,body,created_at")
     .is("notified_at", null)
+    .or("severity.in.(success,critical),event_key.like.radar-%,event_key.like.ai-%")
     .order("created_at", { ascending: true })
-    .limit(50);
+    .limit(25);
   if (error) throw new Error(`Alert dispatch query failed: ${error.message}`);
-  if (!pending?.length) return { sent: 0, digestPending: 0 };
+  const { count: digestPending } = await admin.from("alerts")
+    .select("id", { count: "exact", head: true }).is("notified_at", null);
 
   let sent = 0;
   const now = Date.now();
-  for (const row of pending.filter(isInstantAlert)) {
+  for (const row of pending ?? []) {
     if (now - new Date(String(row.created_at)).getTime() > STALE_MS) {
       await admin.from("alerts").update({ notified_at: new Date().toISOString() }).eq("id", row.id);
       continue;
@@ -49,5 +53,5 @@ export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPen
       console.error("Instant alert send failed (will retry)", row.event_key, err);
     }
   }
-  return { sent, digestPending: pending.filter(row => !isInstantAlert(row)).length };
+  return { sent, digestPending: Math.max((digestPending ?? 0) - (pending?.length ?? 0), 0) };
 }

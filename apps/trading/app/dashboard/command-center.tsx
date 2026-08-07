@@ -42,7 +42,7 @@ interface PaperState {
   account?:{ equity:string; buying_power:string; options_buying_power:string; status:string };
   positions?:unknown[]; orders?:unknown[];
 }
-interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; brokerPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; unmanagedPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; error?:string }
+interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;kill_switch:boolean;auto_adopt_unmanaged?:boolean}; status?:{managed_positions:number;last_heartbeat:string}|null; brokerPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; unmanagedPositions?:Array<{symbol:string;quantity:number;managed:boolean}>; error?:string }
 interface RobinhoodState {connected:boolean;executionReady?:boolean;error?:string}
 interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;read_at:string|null;created_at:string}
 interface AlertState{alerts:AlertItem[];unread:number}
@@ -80,6 +80,10 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const markAlertsRead=useCallback(async(id?:string)=>{await fetch("/api/alerts",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(id?{id}:{all:true})});await refreshPaper();},[refreshPaper]);
   const setKillSwitch = useCallback(async (killSwitch:boolean) => {
     const response=await fetch("/api/position-manager",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({killSwitch})});
+    const payload=await response.json(); if(!response.ok){setOrderMessage({tone:"error",text:payload.error??"Control update failed"});return;} setManager(payload);
+  },[]);
+  const setAutoAdopt = useCallback(async (autoAdopt:boolean) => {
+    const response=await fetch("/api/position-manager",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({autoAdopt})});
     const payload=await response.json(); if(!response.ok){setOrderMessage({tone:"error",text:payload.error??"Control update failed"});return;} setManager(payload);
   },[]);
 
@@ -241,7 +245,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div className={`connection-state ${paper?.configured ? "connected" : ""}`}><i/><span>{paper?.configured ? "ALPACA PAPER CONNECTED" : paper?.error ?? "CONNECTING"}</span></div>
             <div className={`connection-state robinhood-state ${robinhood?.connected ? "connected" : ""}`}><i/><span>{robinhood?.connected?<Link href="/dashboard/robinhood">{robinhood.executionReady?"ROBINHOOD · TRADE DESK":"ROBINHOOD CONNECTED"}</Link>:<a href="/api/brokers/robinhood/connect">CONNECT ROBINHOOD</a>}</span></div>
           </section>
-          <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"ENTRIES HALTED · EXITS ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume entries":"Emergency stop entries"}</button></section>
+          <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"ENTRIES HALTED · EXITS ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className="refresh-button" title="When ON, positions opened outside the app (directly in Alpaca) are adopted at their average fill and protected by the standard stop/trail/time exits. When OFF, outside positions are only flagged." onClick={()=>void setAutoAdopt(!(manager?.control?.auto_adopt_unmanaged!==false))}>Auto-adopt: {manager?.control?.auto_adopt_unmanaged!==false?"ON":"OFF"}</button><button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume entries":"Emergency stop entries"}</button></section>
 
           <section className="market-grid">
             <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice??data?.spotPrice)}`} detail={market?`${market.regime} regime`:data?.spotPrice?"Live option-chain snapshot · chart bars unavailable":"Waiting for price"} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />

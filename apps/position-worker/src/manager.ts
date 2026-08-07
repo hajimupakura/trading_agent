@@ -3,7 +3,7 @@ import { dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { cancelOrder, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
-import { createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
+import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
 import { RobinhoodExitManager } from "./robinhood.js";
 import type { AlpacaOrder, OptionQuote } from "./types.js";
 
@@ -45,7 +45,7 @@ export class PositionManager {
     const [spyPrice,spxPrice] = await Promise.all([getSpyPrice().catch(() => null), needsSpx ? getSpxPrice().catch(() => null) : Promise.resolve(null)]);
     for (const brokerPosition of optionPositions) {
       try {
-        await this.managePosition(brokerPosition,orders,spyPrice,spxPrice);
+        await this.managePosition(brokerPosition,orders,spyPrice,spxPrice,control.auto_adopt_unmanaged !== false);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         cycleErrors.push(`${brokerPosition.symbol}: ${message}`);
@@ -84,12 +84,27 @@ export class PositionManager {
       console.log(JSON.stringify({ event:"paper_entry_repriced", symbol:order.symbol, orderId:order.id, newOrderId:replaced.id, price:plan.price, ageMs }));
     }
   }
-  private async managePosition(brokerPosition:{symbol:string;qty:string;avg_entry_price:string},orders:AlpacaOrder[],spyPrice:number|null,spxPrice:number|null) {
+  private async managePosition(brokerPosition:{symbol:string;qty:string;avg_entry_price:string},orders:AlpacaOrder[],spyPrice:number|null,spxPrice:number|null,autoAdopt:boolean) {
     const entryPrice = Number(brokerPosition.avg_entry_price); if (!(entryPrice > 0)) return;
-    const position = await getManagedPosition(brokerPosition.symbol,entryPrice,orders); if (!position) return;
+    let position = await getManagedPosition(brokerPosition.symbol,entryPrice,orders);
+    if (!position) {
+      // No journal entry — this position was opened outside the app. Adopt it (when
+      // enabled) so the standard stop/trail/time exits protect it from the broker's
+      // average fill; otherwise leave it for the dashboard's unprotected banner.
+      if (!autoAdopt) return;
+      const ownerId = await adoptBrokerPosition(brokerPosition.symbol,entryPrice,Number(brokerPosition.qty));
+      if (!ownerId) return;
+      await createWorkerAlert({ userId:ownerId, signalId:null, eventKey:`position-adopted-${brokerPosition.symbol}-${new Date().toISOString().slice(0,10)}`, severity:"success", title:"Unmanaged position adopted — exits now active", body:`${brokerPosition.qty} × ${brokerPosition.symbol} was opened outside the app (likely directly in Alpaca). The worker adopted it at the $${entryPrice.toFixed(2)} average fill: 30% stop, trailing exits, and the standard time rules now apply. Close it manually anytime; disable auto-adoption from the dashboard if you want outside positions left alone.`, metadata:{ contractTicker:`O:${brokerPosition.symbol}`, entryPrice, quantity:Number(brokerPosition.qty) } });
+      position = await getManagedPosition(brokerPosition.symbol,entryPrice,orders);
+      if (!position) return;
+    }
     position.quantity = Number(brokerPosition.qty); this.managedCount++;
-    const now = Date.now(); const underlying = position.ticker.startsWith("O:SPX") ? "SPX":"SPY";
-    const underlyingPrice = underlying === "SPX" ? spxPrice : spyPrice;
+    const now = Date.now();
+    // Resolve the underlying from the OCC root so watch-ticker contracts (NVDA, SPCX, …)
+    // quote correctly instead of being mistaken for SPY.
+    const root = position.alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"");
+    const underlying = root === "SPXW" ? "SPX" : root;
+    const underlyingPrice = underlying === "SPX" ? spxPrice : underlying === "SPY" ? spyPrice : null;
     const quote = fresh(this.quotes.get(position.ticker),now) ?? await getSnapshotQuote(underlying,position.ticker);
     if (!quote || now - quote.timestamp > 30_000) { await saveMonitor(position,{bid:0,ask:0,quoteAt:now,status:"error",error:"No fresh option quote"});await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`quote-stale-${position.userId}-${position.ticker}-${position.openedAt}`,severity:"critical",title:"Option quote is stale",body:`Automatic exits cannot price ${position.ticker}. Check Alpaca and manage the position manually until data recovers.`,metadata:{contractTicker:position.ticker,openedAt:position.openedAt}}); throw new Error(`No fresh option quote for ${position.ticker}`); }
     const quoteState = {bid:quote.bid,ask:quote.ask,quoteAt:quote.timestamp};

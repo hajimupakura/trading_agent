@@ -4,8 +4,25 @@ import type { AlpacaOrder, ManagedPosition, SignalMarket } from "./types.js";
 
 const db = createClient(config.supabaseUrl,config.SUPABASE_SECRET_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
 export async function getControl() {
-  const { data,error } = await db.from("position_manager_control").select("auto_exits_enabled,kill_switch").eq("id",true).single();
+  const { data,error } = await db.from("position_manager_control").select("auto_exits_enabled,kill_switch,auto_adopt_unmanaged").eq("id",true).single();
   if (error) throw error; return data;
+}
+// Adopt a broker position that has no journal entry (bought directly in Alpaca):
+// synthesize the buy_to_open row so getManagedPosition picks it up with the broker's
+// average fill as the entry price. Standard stop/trail rules apply from there.
+export async function adoptBrokerPosition(alpacaSymbol:string,entryPrice:number,quantity:number):Promise<string|null> {
+  const { data:owner,error:ownerError } = await db.from("profiles").select("id").limit(1).maybeSingle();
+  if (ownerError) throw ownerError; if (!owner) return null;
+  const root = alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"");
+  const { error } = await db.from("paper_trade_orders").insert({
+    user_id:owner.id, signal_id:null, alpaca_order_id:`adopted-${alpacaSymbol}-${Date.now()}`,
+    client_order_id:`velocity-adopted-${Date.now()}`.slice(0,48), action:"buy_to_open",
+    underlying:root === "SPXW" ? "SPX" : root, contract_ticker:`O:${alpacaSymbol}`,
+    quantity, order_type:"limit", limit_price:entryPrice, max_debit:entryPrice*quantity*100,
+    status:"filled", risk_snapshot:{ adopted:true }, broker_response:{ adopted:true },
+  });
+  if (error) throw error;
+  return owner.id;
 }
 export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,orders:AlpacaOrder[]):Promise<ManagedPosition|null> {
   const ticker = `O:${alpacaSymbol}`;

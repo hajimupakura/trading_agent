@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 async function state(userId:string) {
   const admin = createAdminClient();
   const [{data:control,error:controlError},{data:statuses,error:statusError},{data:monitors,error:monitorError},paper] = await Promise.all([
-    admin.from("position_manager_control").select("auto_exits_enabled,kill_switch,updated_at").eq("id",true).single(),
+    admin.from("position_manager_control").select("auto_exits_enabled,kill_switch,auto_adopt_unmanaged,updated_at").eq("id",true).single(),
     admin.from("position_manager_status").select("enabled,healthy,managed_positions,last_error,last_heartbeat").order("last_heartbeat",{ascending:false}).limit(1),
     admin.from("paper_position_monitors").select("contract_ticker,status").eq("user_id",userId).in("status",["monitoring","closing","error"]),
     getPaperTradingState(),
@@ -30,9 +30,12 @@ export async function GET() {
 export async function POST(request:Request) {
   const user=await getAuthenticatedUser();
   if (!user) return Response.json({error:"Unauthorized"},{status:401});
-  const parsed=z.object({killSwitch:z.boolean()}).safeParse(await request.json().catch(()=>null));
+  const parsed=z.object({killSwitch:z.boolean().optional(),autoAdopt:z.boolean().optional()}).refine(value=>value.killSwitch!==undefined||value.autoAdopt!==undefined,{message:"No control field provided"}).safeParse(await request.json().catch(()=>null));
   if(!parsed.success) return Response.json({error:"Invalid control request"},{status:400});
-  const {error}=await createAdminClient().from("position_manager_control").update({kill_switch:parsed.data.killSwitch,updated_at:new Date().toISOString()}).eq("id",true);
+  const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
+  if(parsed.data.killSwitch!==undefined)patch.kill_switch=parsed.data.killSwitch;
+  if(parsed.data.autoAdopt!==undefined)patch.auto_adopt_unmanaged=parsed.data.autoAdopt;
+  const {error}=await createAdminClient().from("position_manager_control").update(patch).eq("id",true);
   if(error) return Response.json({error:error.message},{status:500});
   return Response.json(await state(user.id));
 }
