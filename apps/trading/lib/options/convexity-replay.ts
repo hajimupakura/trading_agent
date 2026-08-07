@@ -30,8 +30,26 @@ async function massive<T>(path: string): Promise<T> {
   const url = new URL(`https://api.massive.com${path}`);
   url.searchParams.set("apiKey", key);
   const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(12_000) });
-  if (!response.ok) throw new Error(`Massive API ${response.status}`);
+  if (!response.ok) throw new Error(`Massive API ${response.status} (${url.pathname})`);
   return response.json() as Promise<T>;
+}
+
+// One-shot diagnostic run when a replay dies on a Massive error: which datasets does
+// this plan actually include? (Historical index vs option aggregates vs NBBO quotes.)
+async function probeEntitlements(): Promise<string> {
+  const today = etDate(Date.now());
+  const tests: Array<[string, string]> = [
+    ["idx-today", `/v2/aggs/ticker/I:SPX/range/1/minute/${today}/${today}?limit=5&sort=asc`],
+    ["idx-hist", "/v2/aggs/ticker/I:SPX/range/1/minute/2026-08-06/2026-08-06?limit=5&sort=asc"],
+    ["opt-agg", "/v2/aggs/ticker/O:SPXW260807C07770000/range/1/minute/2026-08-06/2026-08-07?limit=5&sort=asc"],
+    ["opt-quotes", "/v3/quotes/O:SPXW260807C07770000?limit=1"],
+  ];
+  const out: string[] = [];
+  for (const [label, path] of tests) {
+    try { await massive(path); out.push(`${label}:ok`); }
+    catch (error) { out.push(`${label}:${error instanceof Error ? error.message.replace(/^Massive API /, "") : String(error)}`); }
+  }
+  return out.join(" ");
 }
 
 interface Agg { t: number; o: number; h: number; l: number; c: number; v: number }
@@ -156,7 +174,8 @@ export async function runConvexityReplays(): Promise<{ processed: string | null;
     if (error) throw new Error(`replay persistence: ${error.message}`);
     return { processed: String(job.entry_date), queued: (count ?? 1) - 1 };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    let message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Massive API")) message += ` [probe: ${await probeEntitlements().catch(() => "probe failed")}]`;
     await admin.from("convexity_replays").update({ status: "error", error: message, processed_at: new Date().toISOString() }).eq("id", job.id);
     return { processed: String(job.entry_date), queued: (count ?? 1) - 1, error: message };
   }
