@@ -69,8 +69,15 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [critiqueBusy, setCritiqueBusy] = useState(false);
   type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
-  const horizonRange = (tab: HorizonTab): [number, number] => tab === 0 ? [0,0] : tab === 1 ? [1,1] : tab === 2 ? [2,2] : tab === "1M" ? [3,59] : tab === "3M" ? [60,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
-  const horizonLabel = (tab: HorizonTab) => typeof tab === "number" ? `${tab}DTE` : tab;
+  // Numeric tabs are SESSIONS ahead, not calendar days: on a Friday the 1DTE tab shows
+  // Monday's expiry (calendar dte 3 — the DTE column keeps the honest number so the
+  // weekend theta stays visible). The session list is whatever the short chain carries.
+  const sessionDtes = useMemo(() => [...new Set((data?.contracts ?? []).filter(contract => contract.dte <= 6).map(contract => contract.dte))].sort((a, b) => a - b), [data]);
+  const horizonRange = (tab: HorizonTab): [number, number] => {
+    if (typeof tab === "number") { const dte = sessionDtes[tab]; return dte == null ? [-1,-1] : [dte, dte]; }
+    return tab === "1M" ? [7,59] : tab === "3M" ? [60,135] : tab === "6M" ? [136,225] : tab === "9M" ? [226,320] : [321,500];
+  };
+  const horizonLabel = (tab: HorizonTab) => typeof tab === "number" ? (sessionDtes[tab] != null && sessionDtes[tab] !== tab ? `${tab}DTE·${sessionDtes[tab]}d` : `${tab}DTE`) : tab;
   const horizonTabs: HorizonTab[] = [0,1,2,"1M","3M","6M","9M","1Y"];
 
   const refreshPaper = useCallback(async () => {
@@ -307,7 +314,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div className="dte-tabs" role="tablist" aria-label="Filter contracts by expiration horizon">{horizonTabs.map(tab => { const [lo,hi] = horizonRange(tab); const count = data?.contracts.filter(contract => contract.dte >= lo && contract.dte <= hi).length ?? 0; return <button key={String(tab)} role="tab" aria-selected={selectedHorizon === tab} className={selectedHorizon === tab ? "selected":""} onClick={()=>setSelectedHorizon(tab)}>{horizonLabel(tab)} <span>{count}</span></button>; })}</div>
             <div className="table-wrap"><table>
               <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
-              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} onSelect={inspect} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts {query ? "match the search" : "returned in this scan"}.{!query && typeof selectedHorizon === "number" && selectedHorizon > 0 ? " Weekends and holidays have no expirations — the next session's contracts (e.g. Monday, 3DTE on Fridays) are under the 1M tab." : ""}</td></tr>}</tbody>
+              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} onSelect={inspect} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts {query ? "match the search" : "returned in this scan"}.{!query && typeof selectedHorizon === "number" && selectedHorizon > 0 ? " Numeric tabs are sessions ahead (on Fridays, 1DTE = Monday); this session hasn't been returned by the scan yet." : ""}</td></tr>}</tbody>
             </table></div>
           </section>
 
