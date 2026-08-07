@@ -211,7 +211,7 @@ async function runPreCloseScan(today: string): Promise<boolean> {
       ? `Overnight Convexity: QUALIFIED ${qualification.direction.toUpperCase()} — swing window 15:45-16:00`
       : "Overnight Convexity: not qualified — stand down tonight",
     body: qualification.direction
-      ? `Pre-close checks — ${checksLine}. Study candidates (0.15-0.35Δ ${wantSide}s, exp ${expiryDate}): ${top.map(describe).join(" · ") || "none in band"}. ${tomorrowEcon ? `⚠️ Tomorrow: ${tomorrowEcon.name} at ${tomorrowEcon.releaseLabel} — size down or skip.` : "No CPI/FOMC/NFP tomorrow."} Research phase: manual entries only, one contract, risk ≤0.5% — treat as 100% losable. Captured ${rows.length} contracts for the study.`
+      ? `Pre-close checks — ${checksLine}. Study candidates (0.15-0.35Δ ${wantSide}s, exp ${expiryDate}): ${top.map(describe).join(" · ") || "none in band"}. ${tomorrowEcon ? `⚠️ Tomorrow: ${tomorrowEcon.name} at ${tomorrowEcon.releaseLabel} — size down or skip.` : "No CPI/FOMC/NFP tomorrow."} ${qualification.direction === "bearish" ? "⚠️ Backtest (Jun 22-Aug 6): 7 bearish-qualified nights averaged -21% on the trail with 2/7 winners — bearish closes were overnight noise, not signal. Study-only; do not trade this verdict. " : ""}Research phase: manual entries only, one contract, risk ≤0.5% — treat as 100% losable. Captured ${rows.length} contracts for the study.`
       : `Pre-close checks — ${checksLine}. The tape did not qualify; buying tonight is the negative-expectancy version of this trade. Captured ${rows.length} contracts (${expiryDate}) for the filter-off study anyway.`,
     metadata: { kind: "convexity_scan", qualification, expiryDate, captured: rows.length, tracked: trackSet.size },
   });
