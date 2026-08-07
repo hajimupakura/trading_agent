@@ -14,6 +14,9 @@ const clientOrderId = (symbol:string,reason:string,now:number) => `velocity-exit
 
 export class PositionManager {
   readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = [];
+  // Consecutive stale-quote cycles per ticker: a single miss (worker restart, stream
+  // resubscribe) retries quietly; the critical alert fires only after the threshold.
+  private quoteMisses = new Map<string, number>();
   start() { this.quotes.start(); void this.loop(); }
   stop() { this.quotes.stop(); }
   private async loop() {
@@ -106,7 +109,15 @@ export class PositionManager {
     const underlying = root === "SPXW" ? "SPX" : root;
     const underlyingPrice = underlying === "SPX" ? spxPrice : underlying === "SPY" ? spyPrice : null;
     const quote = fresh(this.quotes.get(position.ticker),now) ?? await getSnapshotQuote(underlying,position.ticker);
-    if (!quote || now - quote.timestamp > 30_000) { await saveMonitor(position,{bid:0,ask:0,quoteAt:now,status:"error",error:"No fresh option quote"});await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`quote-stale-${position.userId}-${position.ticker}-${position.openedAt}`,severity:"critical",title:"Option quote is stale",body:`Automatic exits cannot price ${position.ticker}. Check Alpaca and manage the position manually until data recovers.`,metadata:{contractTicker:position.ticker,openedAt:position.openedAt}}); throw new Error(`No fresh option quote for ${position.ticker}`); }
+    if (!quote || now - quote.timestamp > 30_000) {
+      const misses = (this.quoteMisses.get(position.ticker) ?? 0) + 1;
+      this.quoteMisses.set(position.ticker, misses);
+      await saveMonitor(position,{bid:0,ask:0,quoteAt:now,status:"error",error:`No fresh option quote (${misses} consecutive)`});
+      if (misses < 3) return; // transient (restart/resubscribe) — retry next cycle quietly
+      await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`quote-stale-${position.userId}-${position.ticker}-${position.openedAt}`,severity:"critical",title:"Option quote is stale",body:`Automatic exits cannot price ${position.ticker} (${misses} cycles without a fresh quote). Check Alpaca and manage the position manually until data recovers.`,metadata:{contractTicker:position.ticker,openedAt:position.openedAt}});
+      throw new Error(`No fresh option quote for ${position.ticker}`);
+    }
+    this.quoteMisses.delete(position.ticker);
     const quoteState = {bid:quote.bid,ask:quote.ask,quoteAt:quote.timestamp};
     position.peakBid = Math.max(position.peakBid,quote.bid);
     const dte = dteFromOcc(position.alpacaSymbol);
