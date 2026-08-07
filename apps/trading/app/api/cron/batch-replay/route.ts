@@ -13,12 +13,13 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const date = params.get("date") ?? "";
   const dte = Number(params.get("dte") ?? 0);
+  const variant = params.get("variant") === "trend" ? "trend" as const : "baseline" as const;
   if (!DATE.test(date) || ![0,1,2].includes(dte)) return Response.json({ error:"bad params" }, { status:400 });
   const { data:profile, error } = await createAdminClient().from("profiles").select("id").limit(1).maybeSingle();
   if (error || !profile) return Response.json({ error:error?.message ?? "no profile" }, { status:500 });
   try {
-    const result = await runHistoricalReplay({ ownerId:profile.id, underlying:"SPY", sessionDate:date, dte:dte as 0|1|2 });
-    return Response.json({ date, dte, status:result.status, summary:result.summary, noTradeReasons:result.noTradeReasons.slice(0,3) });
+    const result = await runHistoricalReplay({ ownerId:profile.id, underlying:"SPY", sessionDate:date, dte:dte as 0|1|2, variant });
+    return Response.json({ date, dte, variant, status:result.status, summary:result.summary, noTradeReasons:result.noTradeReasons.slice(0,3) });
   } catch (cause) {
     return Response.json({ date, dte, error:cause instanceof Error ? cause.message : "replay failed" }, { status:502 });
   }

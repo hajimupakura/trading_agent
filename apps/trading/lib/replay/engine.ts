@@ -6,11 +6,11 @@ const dummy = (underlying:Underlying, side:Side):Contract => ({ ticker:`REPLAY-$
 
 export interface ReplayTrigger { timestamp:number; side:Side; reasons:string[]; spot:number; openingRangeHigh:number; openingRangeLow:number }
 
-export function findReplayTriggers(underlying:Underlying, bars:Bar[], maximum=3):ReplayTrigger[] {
+export function findReplayTriggers(underlying:Underlying, bars:Bar[], maximum=3, options?:{trendDayEnabled?:boolean}):ReplayTrigger[] {
   const triggers:ReplayTrigger[]=[]; let previous:"call"|"put"|null=null;
   for(let index=35; index<bars.length; index++) {
     const window=bars.slice(0,index+1); const market=marketStateAt(underlying,window);
-    const signal=generateSignal(market,[dummy(underlying,"call"),dummy(underlying,"put")]);
+    const signal=generateSignal(market,[dummy(underlying,"call"),dummy(underlying,"put")],{trendDayEnabled:options?.trendDayEnabled});
     const side=signal.action === "enter_call" ? "call" : signal.action === "enter_put" ? "put" : null;
     if(side && side !== previous) triggers.push({timestamp:market.asOf,side,reasons:signal.reasons.filter(reason=>!reason.startsWith("REPLAY-")),spot:market.price,openingRangeHigh:market.openingRangeHigh,openingRangeLow:market.openingRangeLow});
     previous=side;
