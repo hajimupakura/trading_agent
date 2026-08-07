@@ -20,7 +20,10 @@ export async function chatComplete(input: { system: string; user: string; maxTok
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-Title": "Velocity" },
     body: JSON.stringify({
       model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
-      max_tokens: input.maxTokens ?? 900,
+      // Reasoning models spend thinking tokens from the same budget as the reply; a
+      // tight cap starves the visible answer entirely ("empty completion"). Give every
+      // call generous headroom — prompt word-limits keep the actual output short.
+      max_tokens: Math.max(input.maxTokens ?? 900, 4000),
       messages: [
         { role: "system", content: input.system },
         { role: "user", content: input.user },
