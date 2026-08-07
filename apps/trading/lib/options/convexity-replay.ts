@@ -107,15 +107,30 @@ async function replayContract(entryDate: string, exitDate: string, side: "call" 
   };
 }
 
+// The Massive plan does not include index (I:SPX) aggregates — probe-verified 403 on
+// current AND historical. Spot for the strike grid comes from SPY x the live SPX/SPY
+// ratio instead; a few points of drift only shifts which strikes we sample, and the
+// entry-premium band filter absorbs that.
+async function spxSpyRatio(): Promise<number> {
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin.from("options_monitor_snapshots").select("underlying,payload").in("underlying", ["SPX", "SPY"]);
+    const spot = (underlying: string) => {
+      const payload = data?.find(row => row.underlying === underlying)?.payload as { spotPrice?: number | null } | undefined;
+      return payload?.spotPrice ?? null;
+    };
+    const spx = spot("SPX"); const spy = spot("SPY");
+    if (spx && spy && spx / spy > 9 && spx / spy < 11) return spx / spy;
+  } catch { /* fall through to the long-run default */ }
+  return 10.04;
+}
+
 async function processReplay(entryDate: string, exitDate: string) {
-  const [{ session, prior }, spxAggs] = await Promise.all([
-    spyBarsFor(entryDate),
-    minuteAggs("I:SPX", entryDate, entryDate),
-  ]);
+  const [{ session, prior }, ratio] = await Promise.all([spyBarsFor(entryDate), spxSpyRatio()]);
   const qualification = assessQualification(session, prior);
-  const spotBar = spxAggs.filter(bar => etMinutes(bar.t) <= 950).at(-1);
-  if (!spotBar) throw new Error("No SPX index bars for the entry session");
-  const spot = spotBar.c;
+  const spyAtScan = session.filter(bar => bar.minutes <= 950).at(-1);
+  if (!spyAtScan) throw new Error("No SPY bars at the scan window for the entry session");
+  const spot = spyAtScan.close * ratio;
 
   const targets = STRIKE_OFFSETS.flatMap(offset => [
     { side: "call" as const, strike: Math.round((spot + offset) / 5) * 5 },
