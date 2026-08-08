@@ -40,17 +40,17 @@ export async function GET(request: Request) {
     const accountNumber = String(agentic.account_number);
     const { positions, positionsShape, orders } = await getRobinhoodOverview(userId, accountNumber);
     const longs = positions.filter((position:any) => (position?.type ?? "long") === "long" && Number(position?.quantity) > 0);
-    const diag = longs.length ? null : `no long option positions in ${accountNumber.slice(-4)} (shape ${positionsShape}; raw count ${positions.length})`;
     // Enrich with instrument details (strike/expiration/type) for OCC quote lookups.
     const ids = [...new Set(longs.map((position:any) => String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop()).filter(Boolean))];
     let instruments: any[] = [];
     if (ids.length) {
       const parsed = parseToolData(await callRobinhoodTool(userId, "get_option_instruments", { ids: ids.join(",") }));
-      instruments = Array.isArray(parsed) ? parsed : parsed?.instruments ?? parsed?.results ?? [];
+      instruments = Array.isArray(parsed) ? parsed
+        : parsed?.instruments ?? parsed?.results ?? (parsed && typeof parsed === "object" && (parsed.id || parsed.strike_price) ? [parsed] : []);
     }
     const enriched = longs.map((position:any) => {
       const optionId = String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop() ?? "";
-      const instrument = instruments.find((item:any) => item?.id === optionId) ?? {};
+      const instrument = instruments.find((item:any) => item?.id === optionId || String(item?.url ?? "").includes(optionId) || item?.option_id === optionId) ?? {};
       const chainSymbol = String(instrument.chain_symbol ?? position.chain_symbol ?? "");
       const type = (instrument.type ?? "call") as "call" | "put";
       const strike = Number(instrument.strike_price ?? 0);
@@ -61,6 +61,10 @@ export async function GET(request: Request) {
         quantity: Number(position.quantity), entryPrice: Number(position.average_price ?? position.average_open_price ?? 0),
       };
     }).filter((position:any) => position.occTicker && position.entryPrice > 0);
+    // Diagnostic covers EVERY drop path — a position must never vanish silently.
+    const diag = enriched.length ? null
+      : longs.length ? `enrichment dropped ${longs.length} position(s): instruments=${instruments.length}, ids=${JSON.stringify(ids)}, sampleInstrument=${JSON.stringify(instruments[0] ?? null).slice(0, 200)}, samplePosition=${JSON.stringify(longs[0]).slice(0, 300)}`
+      : `no long option positions in ${accountNumber.slice(-4)} (shape ${positionsShape}; raw count ${positions.length}${positions.length ? `; sample=${JSON.stringify(positions[0]).slice(0, 300)}` : ""})`;
     const optionOrders = orders.map((order:any) => ({
       id: String(order.id ?? ""), state: String(order.state ?? ""),
       createdAt: order.created_at ?? null, optionIds: (order.legs ?? []).map((leg:any) => String(leg.option ?? leg.option_id ?? "").split("/").filter(Boolean).pop()),
