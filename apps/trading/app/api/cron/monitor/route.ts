@@ -30,10 +30,18 @@ export async function GET(request: Request) {
     refreshCommandCenter("SPX", undefined, { includeLongHorizons }),
     ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
   ]);
-  // Autonomous SPY paper entries: acts on the signal from the refresh above; every
-  // deterministic gate (window, sizing, caps, cooldown, kill switch) enforced inside.
-  const spySnapshot = results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null;
-  const autoEntry = await runAutoEntry(spySnapshot).catch(error => { console.error("auto entry failed", error); return { entered:null, skipped:String(error) }; });
+  // Autonomous paper entries — SPY plus this tick's refreshed watch tickers. Global
+  // gates (one position, trades/day, daily loss, cooldown, kill switch) bound the
+  // whole fleet; sequential with early exit so one tick can never open two positions.
+  const autoCandidates: Array<{ underlying: string; snapshot: CommandCenter | null }> = [
+    { underlying: "SPY", snapshot: results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null },
+    ...watchGroup.map((symbol, index) => { const result = results[index + 2]; return { underlying: symbol, snapshot: result?.status === "fulfilled" ? (result.value as CommandCenter) : null }; }),
+  ];
+  let autoEntry: { entered: string | null; skipped?: string } = { entered: null };
+  for (const candidate of autoCandidates) {
+    autoEntry = await runAutoEntry(candidate.snapshot, candidate.underlying).catch(error => { console.error("auto entry failed", candidate.underlying, error); return { entered:null, skipped:String(error) }; });
+    if (autoEntry.entered) break;
+  }
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });

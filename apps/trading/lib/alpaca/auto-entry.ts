@@ -6,12 +6,13 @@ import { PAPER_RULES, computePositionSize, entryCooldownActive, validatePaperEnt
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import type { CommandCenter } from "@/lib/options/types";
 
-// Fully autonomous PAPER entries (SPY only — Alpaca has no index options).
-// Runs from the every-minute cron right after the SPY refresh: if a fresh engine
-// signal exists and EVERY deterministic gate passes (window, cooldown, sizing,
-// daily loss, trades/day, one position, economic guard, kill switch), the order
-// submits itself. Purpose: measure the strategies cleanly — a paper record built
-// without waiting on a human is the evidence the promotion ladder needs.
+// Fully autonomous PAPER entries — SPY plus every watchlist ticker (SPX excluded:
+// Alpaca has no index options). Runs from the every-minute cron right after each
+// refresh: if a fresh engine signal exists and EVERY deterministic gate passes
+// (window, cooldown, sizing, daily loss, trades/day, one position, economic guard,
+// kill switch — all GLOBAL across tickers), the order submits itself. Purpose:
+// measure the strategies cleanly — a paper record built without waiting on a human
+// is the evidence the promotion ladder needs.
 // Off by default (settings.autoEntriesEnabled). Every entry telegrams instantly.
 
 async function entriesToday(userId: string) {
@@ -26,8 +27,9 @@ async function entriesToday(userId: string) {
   return count ?? 0;
 }
 
-export async function runAutoEntry(spySnapshot: CommandCenter | null): Promise<{ entered: string | null; skipped?: string }> {
-  const signal = spySnapshot?.signal;
+export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
+  if (underlying === "SPX") return { entered: null };
+  const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
   // Freshness: act only on signals generated within the last two minutes.
@@ -56,13 +58,13 @@ export async function runAutoEntry(spySnapshot: CommandCenter | null): Promise<{
   const order = await submitPaperOptionOrder({ symbol: contract.ticker, limitPrice: entryLimit, clientOrderId, quantity: risk.quantity });
   await createAlert({
     userId: owner.id, signalId: signal.id, eventKey: `paper-entry-${order.id}`, severity: "success",
-    title: `AUTONOMOUS entry: bought ${risk.quantity} ${signal.action === "enter_call" ? "call" : "put"}${risk.quantity === 1 ? "" : "s"} on SPY`,
+    title: `AUTONOMOUS entry: bought ${risk.quantity} ${signal.action === "enter_call" ? "call" : "put"}${risk.quantity === 1 ? "" : "s"} on ${underlying}`,
     body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on its own: BUY ${risk.quantity} × ${contract.ticker} at a $${entryLimit.toFixed(2)} limit — about $${risk.debit.toFixed(0)} at risk, sized to the account. The worker guards the exit from here (stop, trail, time rules). Emergency stop in the dashboard halts future entries anytime.`,
     metadata: { kind: "auto_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: entryLimit, quantity: risk.quantity, maxDebit: risk.debit },
   }).catch(error => console.error("auto entry alert failed", error));
   const { error: journalError } = await admin.from("paper_trade_orders").insert({
     user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
-    action: "buy_to_open", underlying: "SPY", contract_ticker: contract.ticker,
+    action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
     risk_snapshot: { autonomous: true, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES }, broker_response: order,
   });
