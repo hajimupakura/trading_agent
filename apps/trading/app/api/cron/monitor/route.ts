@@ -10,6 +10,7 @@ import { runSectorFlow } from "@/lib/options/sector-flow";
 import { runResearchFetches } from "@/lib/options/research-fetch";
 import { runTradeReviews } from "@/lib/options/trade-review";
 import { reportJobHealth } from "@/lib/ops/heartbeat";
+import { runSurgeRadar } from "@/lib/options/surge-radar";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -28,6 +29,8 @@ export async function GET(request: Request) {
     ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
   ]);
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
+  // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
+  const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
   // Historical replay backtest: one queued session per tick, on minutes clear of the
@@ -43,10 +46,11 @@ export async function GET(request: Request) {
   await reportJobHealth({
     refresh: results.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []),
     radar: radar.errors ?? [],
+    surge: surge.errors ?? [],
     convexity: convexity.errors ?? [],
     sectors: sectors === null ? null : (sectors.errors ?? []),
     replay: replay === null ? null : (replay.error ? [replay.error] : []),
     research: research === null ? null : (research.error ? [research.error] : []),
   }).catch(error => console.error("heartbeat failed", error));
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, surge, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
