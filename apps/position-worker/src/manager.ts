@@ -121,7 +121,19 @@ export class PositionManager {
     const quoteState = {bid:quote.bid,ask:quote.ask,quoteAt:quote.timestamp};
     position.peakBid = Math.max(position.peakBid,quote.bid);
     const dte = dteFromOcc(position.alpacaSymbol);
-    const reason = evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2});
+    // TREND (ride) mode: MAX CONVEXITY — only the 50% disaster floor sells; the trail
+    // and time rules are off so multi-day swings can survive option-price wobbles.
+    // A one-time nudge fires at 10x suggesting cost recovery; selling stays manual.
+    const trendMode = position.exitMode === "trend";
+    if (trendMode && quote.bid >= position.entryPrice * 10) {
+      await createWorkerAlert({ userId:position.userId, signalId:position.signalId, eventKey:`trend-10x-${position.ticker}-${position.openedAt}`, severity:"success",
+        title:`RIDE MODE: ${position.alpacaSymbol} hit 10x — consider recovering your cost`,
+        body:`${position.alpacaSymbol} is bidding $${quote.bid.toFixed(2)} vs your $${position.entryPrice.toFixed(2)} entry (${(quote.bid/position.entryPrice).toFixed(1)}x). Selling ${Math.max(1,Math.ceil(position.quantity/10))} of ${position.quantity} contracts here pays back the original debit — the rest rides free. The worker will NOT sell automatically in ride mode unless the bid falls below 50% of entry.`,
+        metadata:{ contractTicker:position.ticker, bid:quote.bid, entryPrice:position.entryPrice } }).catch(()=>undefined);
+    }
+    const reason = trendMode
+      ? (quote.bid <= position.entryPrice * 0.5 ? "premium_stop" as const : null)
+      : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2});
     const symbolOrders = orders.filter(order => order.symbol === position.alpacaSymbol && order.side === "sell");
     const openClose = symbolOrders.find(activeOrder); const recentlyFilled = symbolOrders.find(order => order.status === "filled" && order.filled_at && now-Date.parse(order.filled_at)<30_000);
     if (!reason) { await saveMonitor(position,{...quoteState,status:"monitoring"}); return; }

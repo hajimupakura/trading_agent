@@ -31,7 +31,7 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   if (error) throw new Error(`db error: ${error.message}`); if (!entry) return null;
   const [{data:signal,error:signalError},{data:state,error:stateError}] = await Promise.all([
     entry.signal_id ? db.from("option_signals").select("action,market_snapshot").eq("signal_id",entry.signal_id).maybeSingle() : Promise.resolve({data:null,error:null} as {data:null,error:null}),
-    db.from("paper_position_monitors").select("peak_bid,opened_at,close_order_id,close_order_submitted_at").eq("contract_ticker",ticker).maybeSingle(),
+    db.from("paper_position_monitors").select("peak_bid,opened_at,close_order_id,close_order_submitted_at,exit_mode").eq("contract_ticker",ticker).maybeSingle(),
   ]);
   if (signalError) throw signalError; if (stateError) throw stateError;
   const brokerEntry = orders.find(order => order.id === entry.alpaca_order_id);
@@ -41,7 +41,8 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   const market = (signal?.market_snapshot as SignalMarket|undefined) ?? { openingRangeHigh:Number.NEGATIVE_INFINITY, openingRangeLow:Number.POSITIVE_INFINITY, referencePrice:0, chartSymbol:alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"") };
   return { ticker,alpacaSymbol,side:signal ? (signal.action === "enter_put" ? "put":"call") : occSide,quantity:1,entryPrice,
     peakBid:Number(state?.peak_bid ?? entryPrice),openedAt:Date.parse(state?.opened_at ?? brokerEntry?.filled_at ?? entry.created_at),signalId:entry.signal_id,userId:entry.user_id,
-    market,closeOrderId:state?.close_order_id ?? null,closeOrderSubmittedAt:state?.close_order_submitted_at ? Date.parse(state.close_order_submitted_at):null };
+    market,closeOrderId:state?.close_order_id ?? null,closeOrderSubmittedAt:state?.close_order_submitted_at ? Date.parse(state.close_order_submitted_at):null,
+    exitMode:state?.exit_mode === "trend" ? "trend" : "burst" };
 }
 export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask:number;quoteAt:number;status:string;exitReason?:string|null;closeOrderId?:string|null;error?:string|null}) {
   const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,updated_at:new Date().toISOString() });

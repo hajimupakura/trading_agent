@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { evaluateExit } from "./exit-engine.js";
 import type { ManagedPosition } from "./types.js";
 
-const base:ManagedPosition = { ticker:"O:SPY260806C00770000", alpacaSymbol:"SPY260806C00770000", side:"call", quantity:1, entryPrice:4, peakBid:4, openedAt:Date.parse("2026-08-06T14:00:00Z"), signalId:"signal", userId:"user", market:{ openingRangeHigh:770, openingRangeLow:765, referencePrice:768, chartSymbol:"SPY" }, closeOrderId:null, closeOrderSubmittedAt:null };
+const base:ManagedPosition = { ticker:"O:SPY260806C00770000", alpacaSymbol:"SPY260806C00770000", side:"call", quantity:1, entryPrice:4, peakBid:4, openedAt:Date.parse("2026-08-06T14:00:00Z"), signalId:"signal", userId:"user", market:{ openingRangeHigh:770, openingRangeLow:765, referencePrice:768, chartSymbol:"SPY" }, closeOrderId:null, closeOrderSubmittedAt:null, exitMode:"burst" };
 const at = (time:string) => new Date(`2026-08-06T${time}:00Z`);
 describe("automatic paper exit engine", () => {
   it("triggers the 30% premium stop", () => expect(evaluateExit({ position:base, bid:2.8, underlyingPrice:771, now:at("14:05") })).toBe("premium_stop"));

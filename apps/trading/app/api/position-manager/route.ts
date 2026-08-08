@@ -10,13 +10,14 @@ async function state(userId:string) {
   const [{data:control,error:controlError},{data:statuses,error:statusError},{data:monitors,error:monitorError},paper] = await Promise.all([
     admin.from("position_manager_control").select("auto_exits_enabled,kill_switch,auto_adopt_unmanaged,updated_at").eq("id",true).single(),
     admin.from("position_manager_status").select("enabled,healthy,managed_positions,last_error,last_heartbeat").order("last_heartbeat",{ascending:false}).limit(1),
-    admin.from("paper_position_monitors").select("contract_ticker,status").eq("user_id",userId).in("status",["monitoring","closing","error"]),
+    admin.from("paper_position_monitors").select("contract_ticker,status,exit_mode").eq("user_id",userId).in("status",["monitoring","closing","error"]),
     getPaperTradingState(),
   ]);
   if (controlError) throw controlError; if (statusError) throw statusError; if (monitorError) throw monitorError;
   const status = statuses?.[0] ?? null; const heartbeatAge = status ? Date.now()-Date.parse(status.last_heartbeat):Infinity;
   const managed = new Set((monitors??[]).map(row=>String(row.contract_ticker).replace(/^O:/,"")));
-  const brokerPositions=paper.positions.map(position=>({symbol:position.symbol,quantity:Number(position.qty),managed:managed.has(position.symbol)}));
+  const exitModes = new Map((monitors??[]).map(row=>[String(row.contract_ticker).replace(/^O:/,""),String(row.exit_mode ?? "burst")]));
+  const brokerPositions=paper.positions.map(position=>({symbol:position.symbol,quantity:Number(position.qty),managed:managed.has(position.symbol),exitMode:exitModes.get(position.symbol)??null}));
   return { control,status,online:Boolean(status?.healthy && heartbeatAge<30_000),heartbeatAgeMs:Number.isFinite(heartbeatAge)?heartbeatAge:null,brokerPositions,unmanagedPositions:brokerPositions.filter(position=>!position.managed) };
 }
 async function reconcileExitAlerts(userId:string){const admin=createAdminClient();const [{data:monitors,error:monitorError},{data:journals,error:journalError},orders]=await Promise.all([admin.from("paper_position_monitors").select("contract_ticker,signal_id,status,last_error,close_order_id,exit_reason,latest_bid,updated_at").eq("user_id",userId).in("status",["closing","error"]),admin.from("paper_trade_orders").select("alpaca_order_id,signal_id,contract_ticker,status,limit_price").eq("user_id",userId).eq("action","sell_to_close").order("created_at",{ascending:false}).limit(50),getRecentPaperOrders()]);if(monitorError)throw monitorError;if(journalError)throw journalError;for(const monitor of monitors??[]){if(monitor.status==="error")await createAlert({userId,signalId:monitor.signal_id,eventKey:`monitor-error-${userId}-${monitor.contract_ticker}-${String(monitor.updated_at).slice(0,13)}`,severity:"critical",title:"Automatic exit monitoring error",body:`${monitor.contract_ticker}: ${monitor.last_error??"unknown monitoring failure"}. Check Alpaca immediately.`,metadata:monitor});}
@@ -30,12 +31,20 @@ export async function GET() {
 export async function POST(request:Request) {
   const user=await getAuthenticatedUser();
   if (!user) return Response.json({error:"Unauthorized"},{status:401});
-  const parsed=z.object({killSwitch:z.boolean().optional(),autoAdopt:z.boolean().optional()}).refine(value=>value.killSwitch!==undefined||value.autoAdopt!==undefined,{message:"No control field provided"}).safeParse(await request.json().catch(()=>null));
+  const parsed=z.object({killSwitch:z.boolean().optional(),autoAdopt:z.boolean().optional(),exitMode:z.object({symbol:z.string().min(6),mode:z.enum(["burst","trend"])}).optional()}).refine(value=>value.killSwitch!==undefined||value.autoAdopt!==undefined||value.exitMode!==undefined,{message:"No control field provided"}).safeParse(await request.json().catch(()=>null));
   if(!parsed.success) return Response.json({error:"Invalid control request"},{status:400});
-  const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
-  if(parsed.data.killSwitch!==undefined)patch.kill_switch=parsed.data.killSwitch;
-  if(parsed.data.autoAdopt!==undefined)patch.auto_adopt_unmanaged=parsed.data.autoAdopt;
-  const {error}=await createAdminClient().from("position_manager_control").update(patch).eq("id",true);
-  if(error) return Response.json({error:error.message},{status:500});
+  const admin=createAdminClient();
+  if(parsed.data.exitMode){
+    const ticker=parsed.data.exitMode.symbol.startsWith("O:")?parsed.data.exitMode.symbol:`O:${parsed.data.exitMode.symbol}`;
+    const {error}=await admin.from("paper_position_monitors").update({exit_mode:parsed.data.exitMode.mode,updated_at:new Date().toISOString()}).eq("contract_ticker",ticker).eq("user_id",user.id);
+    if(error) return Response.json({error:error.message},{status:500});
+  }
+  if(parsed.data.killSwitch!==undefined||parsed.data.autoAdopt!==undefined){
+    const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
+    if(parsed.data.killSwitch!==undefined)patch.kill_switch=parsed.data.killSwitch;
+    if(parsed.data.autoAdopt!==undefined)patch.auto_adopt_unmanaged=parsed.data.autoAdopt;
+    const {error}=await admin.from("position_manager_control").update(patch).eq("id",true);
+    if(error) return Response.json({error:error.message},{status:500});
+  }
   return Response.json(await state(user.id));
 }

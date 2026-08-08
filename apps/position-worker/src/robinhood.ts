@@ -95,7 +95,7 @@ export class RobinhoodExitManager {
     const managed: ManagedPosition = {
       ticker: position.occTicker, alpacaSymbol: position.occTicker.slice(2), side: position.optionType,
       quantity: position.quantity, entryPrice: position.entryPrice, peakBid,
-      openedAt, signalId: "", userId: "robinhood",
+      openedAt, signalId: "", userId: "robinhood", exitMode: "burst",
       market: { openingRangeHigh: 0, openingRangeLow: 0, referencePrice: 0, chartSymbol: position.chainSymbol },
       closeOrderId: monitor?.close_order_id ?? null,
       closeOrderSubmittedAt: monitor?.close_submitted_at ? Date.parse(monitor.close_submitted_at) : null,
