@@ -1,13 +1,22 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
+import { getOptionChain } from "./provider";
+import type { Underlying } from "./types";
 
-// Sector money-flow radar. Answers one question in plain English: "where is the money
-// today — metals, semiconductors, aerospace?" Measured from sector ETFs (the baskets
-// institutions actually trade sectors with): unusual volume + outperformance vs SPY =
-// money rotating in. Monitor-only — nothing here can trade; alerts are context.
-// Data: Alpaca IEX feed. IEX volume is partial, but today's volume is compared against
-// the SAME feed's 20-day average, so the ratio stays apples-to-apples.
+// Sector money-flow radar. Answers "where is the money today — metals, semiconductors,
+// aerospace?" from sector ETFs (the baskets institutions trade sectors with), and names
+// a concrete, screened way to play it. Three reads:
+//   1. ~8:40 pre-market map: which sectors are GAPPING vs the market (prep — volume is
+//      thin before the open and options don't trade until 9:30, so this is a plan).
+//   2. ~10:00 money map: confirmed with real session volume vs each sector's 20-day norm.
+//   3. Intraday rotation alerts (top 2/day) when a sector crosses the strong bar —
+//      including the best executable contract from that sector's own option chain,
+//      screened with the same quality checks the engine uses.
+// Suggested plays are MANUAL-entry only; the engine still trades SPY/SPX exclusively.
+// Anything bought manually is adopted and auto-protected by the position worker.
+// Data: Alpaca IEX feed; today's volume is compared against the SAME feed's 20-day
+// average, so partial-feed volume stays apples-to-apples.
 
 interface Sector { etf: string; label: string; leaders: string[] }
 const SECTORS: Sector[] = [
@@ -45,7 +54,7 @@ function headers() {
 }
 
 interface SnapshotBar { c: number; v: number }
-interface Snapshot { dailyBar?: SnapshotBar; prevDailyBar?: SnapshotBar }
+interface Snapshot { dailyBar?: SnapshotBar; prevDailyBar?: SnapshotBar; latestTrade?: { p: number } }
 async function getSnapshots(symbols: string[]): Promise<Record<string, Snapshot>> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/snapshots");
   url.searchParams.set("symbols", symbols.join(",")); url.searchParams.set("feed", "iex");
@@ -84,22 +93,73 @@ async function ownerId(): Promise<string | null> {
 
 const pct = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
 
+// The concrete, screened play: pull the sector ETF's own option chain and pick the top
+// contract that passes the engine-grade quality screen (spread, freshness, liquidity)
+// on the side the money is flowing. Same standards as SPY — different underlying.
+async function bestPlayLine(etf: string, direction: "in" | "out"): Promise<string> {
+  try {
+    const chain = await getOptionChain(etf as Underlying, undefined, { monitorOnly: true });
+    const side = direction === "in" ? "call" : "put";
+    const pick = chain.find(contract =>
+      contract.side === side && contract.eligible && contract.dte <= 7 && contract.midpoint >= 0.5 &&
+      (contract.delta == null || (Math.abs(contract.delta) >= 0.2 && Math.abs(contract.delta) <= 0.5)));
+    if (!pick) return "";
+    const greek = pick.delta != null ? `, delta ${Math.abs(pick.delta).toFixed(2)} (moves ~${Math.round(Math.abs(pick.delta) * 100)}¢ per $1 in ${etf})` : "";
+    return ` Screened way to play it: ${etf} $${pick.strike} ${side} expiring ${pick.expirationDate} — ask $${pick.ask.toFixed(2)}, spread ${pick.spreadPct.toFixed(1)}%${greek}. Manual entry only; anything you buy is auto-protected by the worker (stop, trail, time exits).`;
+  } catch { return ""; }
+}
+
 export async function runSectorFlow(): Promise<{ fired: string[]; errors: string[] }> {
   const clock = et();
   const fired: string[] = []; const errors: string[] = [];
-  // Market hours only, after the first 10 minutes have produced meaningful volume.
-  if (["Sat", "Sun"].includes(clock.weekday) || clock.minutes < 580 || clock.minutes > 965) return { fired, errors };
+  if (["Sat", "Sun"].includes(clock.weekday)) return { fired, errors };
+  const preMarket = clock.minutes >= 510 && clock.minutes < 565;   // 8:30-9:24 ET
+  const session = clock.minutes >= 580 && clock.minutes <= 965;    // 9:40-16:05 ET
+  if (!preMarket && !session) return { fired, errors };
   const userId = await ownerId();
   if (!userId) return { fired, errors };
   const today = etDate();
+  const admin = createAdminClient();
+  const guard = async (label: string, run: () => Promise<void>) => {
+    try { await run(); } catch (error) { errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`); }
+  };
 
   const symbols = ["SPY", ...SECTORS.map(sector => sector.etf)];
+
+  // ---- Pre-market read: gap-based, volume-free. One alert ~8:40; feeds the 9:15 AI brief.
+  if (preMarket) {
+    await guard("premarket", async () => {
+      const snapshots = await getSnapshots(symbols);
+      const spy = snapshots.SPY;
+      if (!spy?.latestTrade?.p || !spy.prevDailyBar?.c) return;
+      const spyGap = (spy.latestTrade.p / spy.prevDailyBar.c - 1) * 100;
+      const moves = SECTORS.flatMap(sector => {
+        const snap = snapshots[sector.etf];
+        if (!snap?.latestTrade?.p || !snap.prevDailyBar?.c) return [];
+        const gap = (snap.latestTrade.p / snap.prevDailyBar.c - 1) * 100;
+        return [{ label: sector.label, etf: sector.etf, gap, excess: gap - spyGap }];
+      }).filter(move => Math.abs(move.excess) >= 0.5)
+        .sort((a, b) => Math.abs(b.excess) - Math.abs(a.excess)).slice(0, 4);
+      if (!moves.length) return;
+      const describe = (move: { label: string; gap: number }) => `${move.label} (${pct(move.gap)})`;
+      await createAlert({
+        userId, eventKey: `radar-sectors-pre-${today}`, severity: "info",
+        title: "Pre-market money map — sectors gapping before the open",
+        body: `Vs the overall market at ${pct(spyGap)} pre-market: ${moves.map(describe).join(" · ")}. Pre-market trading is thin, so treat this as prep, not proof — and options don't trade until 9:30. The 10:00 check confirms with real volume and names a screened play. Nothing to do yet.`,
+        metadata: { kind: "sector_premarket", spyGap, moves },
+      });
+      fired.push("premarket");
+    });
+    return { fired, errors };
+  }
+
+  // ---- Regular session: volume-confirmed reads.
   const [snapshots, avgVolumes] = await Promise.all([getSnapshots(symbols), getAvgVolumes(symbols)]);
   const spy = snapshots.SPY;
   if (!spy?.dailyBar?.c || !spy.prevDailyBar?.c) return { fired, errors: ["SPY snapshot missing"] };
   const spyChange = (spy.dailyBar.c / spy.prevDailyBar.c - 1) * 100;
-  // How far through the session are we? Volume-so-far is judged against a pro-rated
-  // share of the 20-day average (floored so the first minutes don't divide by ~0).
+  // Volume-so-far judged against a pro-rated share of the 20-day average (floored so
+  // the first minutes don't divide by ~0).
   const pace = Math.min(1, Math.max(0.2, (clock.minutes - 570) / 390));
 
   const reads: SectorRead[] = [];
@@ -115,26 +175,26 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
   }
   reads.sort((a, b) => Math.abs(b.excessPct) * Math.min(b.relVolume, 3) - Math.abs(a.excessPct) * Math.min(a.relVolume, 3));
 
-  const admin = createAdminClient();
   const { error: persistError } = await admin.from("sector_flow_snapshots").upsert({ id: "latest", payload: { asOf: Date.now(), spyChange, reads }, updated_at: new Date().toISOString() });
   if (persistError) errors.push(`sector persistence: ${persistError.message}`);
 
-  const guard = async (label: string, run: () => Promise<void>) => {
-    try { await run(); } catch (error) { errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`); }
-  };
-
-  // 1) Daily money map at ~10:00 — one alert, the day's rotation picture.
+  // 1) Daily money map at ~10:00 — the day's rotation picture plus one screened play.
   if (clock.minutes >= 600 && clock.minutes <= 615) await guard("map", async () => {
+    const { data: existing } = await admin.from("alerts").select("id").eq("event_key", `radar-sectors-${today}`).limit(1).maybeSingle();
+    if (existing) return;
     const strongIn = reads.filter(read => read.direction === "in" && read.flagged).slice(0, 3);
     const strongOut = reads.filter(read => read.direction === "out" && read.flagged).slice(0, 3);
     const describe = (read: SectorRead) => `${read.label} (${pct(read.changePct)} vs market ${pct(spyChange)}, ${read.relVolume.toFixed(1)}x normal volume)`;
+    const top = strongIn[0] ?? strongOut[0];
+    const play = top ? await bestPlayLine(top.etf, top.direction) : "";
     await createAlert({
       userId, eventKey: `radar-sectors-${today}`, severity: "info",
       title: "Where the money is today (10:00 check)",
       body: [
         strongIn.length ? `Money flowing IN: ${strongIn.map(describe).join(" · ")}.` : "No sector is pulling in unusual money so far.",
         strongOut.length ? `Money flowing OUT: ${strongOut.map(describe).join(" · ")}.` : "",
-        "This is context, not a signal — nothing to do. Strong sector leadership often hints at how SPY/SPX behaves the rest of the day.",
+        play,
+        "SPY/SPX remain the engine's home turf — sector plays are optional side dishes, one contract, money you can lose.",
       ].filter(Boolean).join(" "),
       metadata: { kind: "sector_map", spyChange, top: reads.slice(0, 5) },
     });
@@ -158,10 +218,11 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
           .slice(0, 3);
         if (moves.length) leadersLine = ` Big names ${read.direction === "in" ? "leading" : "falling"}: ${moves.map(entry => `${entry.symbol} ${pct(entry.move)}`).join(", ")}.`;
       }
+      const play = await bestPlayLine(read.etf, read.direction);
       await createAlert({
         userId, eventKey, severity: "info",
         title: `Money is ${read.direction === "in" ? "flowing into" : "leaving"} ${read.label}`,
-        body: `The ${read.label} group (${read.etf}) is ${read.direction === "in" ? "up" : "down"} ${pct(read.changePct).replace("+", "")} today while the overall market is at ${pct(spyChange)}, on ${read.relVolume.toFixed(1)}x its normal trading volume — that combination usually means real money rotating ${read.direction === "in" ? "in" : "out"}.${leadersLine} Nothing to do — information only.`,
+        body: `The ${read.label} group (${read.etf}) is ${read.direction === "in" ? "up" : "down"} ${pct(read.changePct).replace("+", "")} today while the overall market is at ${pct(spyChange)}, on ${read.relVolume.toFixed(1)}x its normal trading volume — that combination usually means real money rotating ${read.direction === "in" ? "in" : "out"}.${leadersLine}${play}`,
         metadata: { kind: "sector_rotation", ...read },
       });
       fired.push(read.etf);
@@ -169,4 +230,17 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
   }
 
   return { fired, errors };
+}
+
+// Latest confirmed sector reads for other modules (convexity scan, morning brief).
+export async function latestSectorContext(): Promise<string> {
+  try {
+    const { data } = await createAdminClient().from("sector_flow_snapshots").select("payload,updated_at").eq("id", "latest").maybeSingle();
+    const payload = data?.payload as { asOf?: number; spyChange?: number; reads?: SectorRead[] } | undefined;
+    if (!payload?.reads || !payload.asOf || Date.now() - payload.asOf > 5 * 3_600_000) return "";
+    const flagged = payload.reads.filter(read => read.flagged).slice(0, 4);
+    if (!flagged.length) return "";
+    const wording = (read: SectorRead) => `${read.label} ${read.direction === "in" ? "strong" : "weak"} (${pct(read.excessPct)} vs market, ${read.relVolume.toFixed(1)}x volume)`;
+    return `Today's money map: ${flagged.map(wording).join(" · ")}.`;
+  } catch { return ""; }
 }
