@@ -96,7 +96,8 @@ const pct = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
 // The concrete, screened play: pull the sector ETF's own option chain and pick the top
 // contract that passes the engine-grade quality screen (spread, freshness, liquidity)
 // on the side the money is flowing. Same standards as SPY — different underlying.
-async function bestPlayLine(etf: string, direction: "in" | "out"): Promise<string> {
+// Every suggestion is recorded to sector_play_suggestions so it can be graded later.
+async function bestPlayLine(today: string, etf: string, direction: "in" | "out", source: "map" | "rotation"): Promise<string> {
   try {
     const chain = await getOptionChain(etf as Underlying, undefined, { monitorOnly: true });
     const side = direction === "in" ? "call" : "put";
@@ -104,6 +105,10 @@ async function bestPlayLine(etf: string, direction: "in" | "out"): Promise<strin
       contract.side === side && contract.eligible && contract.dte <= 7 && contract.midpoint >= 0.5 &&
       (contract.delta == null || (Math.abs(contract.delta) >= 0.2 && Math.abs(contract.delta) <= 0.5)));
     if (!pick) return "";
+    await createAdminClient().from("sector_play_suggestions").upsert({
+      session_date: today, etf, direction, contract_ticker: pick.ticker, side, strike: pick.strike,
+      expiration_date: pick.expirationDate, ask: pick.ask, spread_pct: pick.spreadPct, delta: pick.delta, source,
+    }, { onConflict: "session_date,etf,source", ignoreDuplicates: true });
     const greek = pick.delta != null ? `, delta ${Math.abs(pick.delta).toFixed(2)} (moves ~${Math.round(Math.abs(pick.delta) * 100)}¢ per $1 in ${etf})` : "";
     return ` Screened way to play it: ${etf} $${pick.strike} ${side} expiring ${pick.expirationDate} — ask $${pick.ask.toFixed(2)}, spread ${pick.spreadPct.toFixed(1)}%${greek}. Manual entry only; anything you buy is auto-protected by the worker (stop, trail, time exits).`;
   } catch { return ""; }
@@ -141,6 +146,7 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
       }).filter(move => Math.abs(move.excess) >= 0.5)
         .sort((a, b) => Math.abs(b.excess) - Math.abs(a.excess)).slice(0, 4);
       if (!moves.length) return;
+      await admin.from("sector_flow_history").insert({ session_date: today, minutes: clock.minutes, phase: "premarket", spy_change: spyGap, reads: moves }).then(({ error }) => { if (error) errors.push(`premarket history: ${error.message}`); });
       const describe = (move: { label: string; gap: number }) => `${move.label} (${pct(move.gap)})`;
       await createAlert({
         userId, eventKey: `radar-sectors-pre-${today}`, severity: "info",
@@ -177,6 +183,9 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
 
   const { error: persistError } = await admin.from("sector_flow_snapshots").upsert({ id: "latest", payload: { asOf: Date.now(), spyChange, reads }, updated_at: new Date().toISOString() });
   if (persistError) errors.push(`sector persistence: ${persistError.message}`);
+  // Append every read — the raw feed for the future sector-rotation backtest.
+  const { error: historyError } = await admin.from("sector_flow_history").insert({ session_date: today, minutes: clock.minutes, phase: "session", spy_change: spyChange, reads });
+  if (historyError) errors.push(`sector history: ${historyError.message}`);
 
   // 1) Daily money map at ~10:00 — the day's rotation picture plus one screened play.
   if (clock.minutes >= 600 && clock.minutes <= 615) await guard("map", async () => {
@@ -186,7 +195,7 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
     const strongOut = reads.filter(read => read.direction === "out" && read.flagged).slice(0, 3);
     const describe = (read: SectorRead) => `${read.label} (${pct(read.changePct)} vs market ${pct(spyChange)}, ${read.relVolume.toFixed(1)}x normal volume)`;
     const top = strongIn[0] ?? strongOut[0];
-    const play = top ? await bestPlayLine(top.etf, top.direction) : "";
+    const play = top ? await bestPlayLine(today, top.etf, top.direction, "map") : "";
     await createAlert({
       userId, eventKey: `radar-sectors-${today}`, severity: "info",
       title: "Where the money is today (10:00 check)",
@@ -218,7 +227,7 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
           .slice(0, 3);
         if (moves.length) leadersLine = ` Big names ${read.direction === "in" ? "leading" : "falling"}: ${moves.map(entry => `${entry.symbol} ${pct(entry.move)}`).join(", ")}.`;
       }
-      const play = await bestPlayLine(read.etf, read.direction);
+      const play = await bestPlayLine(today, read.etf, read.direction, "rotation");
       await createAlert({
         userId, eventKey, severity: "info",
         title: `Money is ${read.direction === "in" ? "flowing into" : "leaving"} ${read.label}`,
