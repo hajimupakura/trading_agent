@@ -13,7 +13,7 @@ const fresh = (quote:OptionQuote|null,now:number) => quote && now - quote.timest
 const clientOrderId = (symbol:string,reason:string,now:number) => `velocity-exit-${symbol}-${reason}-${now}`.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,48);
 
 export class PositionManager {
-  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = [];
+  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = []; private lastRhSyncAt = 0;
   // Consecutive stale-quote cycles per ticker: a single miss (worker restart, stream
   // resubscribe) retries quietly; the critical alert fires only after the threshold.
   private quoteMisses = new Map<string, number>();
@@ -35,14 +35,19 @@ export class PositionManager {
     const inSession = marketSession(new Date());
     const cycleErrors:string[] = [];
     const enabled = config.exitsEnabled && control.auto_exits_enabled;
-    // Robinhood VISIBILITY runs around the clock (position discovery + monitor rows +
-    // diagnostics must not wait for Monday); its EXITS only act in-session when enabled.
-    try {
-      const rh = await this.robinhood.cycle(this.quotes, inSession && enabled);
-      this.rhSymbols = rh.symbols; this.managedCount += this.robinhood.managedCount;
-      cycleErrors.push(...rh.errors);
-    } catch (error) {
-      cycleErrors.push(`robinhood: ${error instanceof Error ? error.message : String(error)}`);
+    // Robinhood: full cadence in-session; off-hours a 5-minute discovery heartbeat —
+    // never completely blind (setup problems must surface BEFORE the open, and evening
+    // manual buys should register), but no wasteful weekend polling either.
+    if (inSession || Date.now() - this.lastRhSyncAt >= 5 * 60_000) {
+      try {
+        const rh = await this.robinhood.cycle(this.quotes, inSession && enabled);
+        this.rhSymbols = rh.symbols; this.managedCount += this.robinhood.managedCount;
+        cycleErrors.push(...rh.errors);
+        this.lastRhSyncAt = Date.now();
+      } catch (error) {
+        cycleErrors.push(`robinhood: ${error instanceof Error ? error.message : String(error)}`);
+        this.lastRhSyncAt = Date.now();
+      }
     }
     if (!inSession) { if (cycleErrors.length) throw new Error(cycleErrors.join(" | ")); return; }
     // Working BUY orders are managed regardless of the exit toggle or kill switch —
