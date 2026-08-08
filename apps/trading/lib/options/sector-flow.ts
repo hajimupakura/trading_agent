@@ -24,6 +24,8 @@ const SECTORS: Sector[] = [
   { etf: "ITA", label: "aerospace & defense", leaders: ["GE", "RTX", "BA", "LMT", "NOC"] },
   { etf: "XME", label: "metals & mining", leaders: ["FCX", "NEM", "AA", "X", "CLF"] },
   { etf: "GDX", label: "gold miners", leaders: ["NEM", "GOLD", "AEM"] },
+  { etf: "REMX", label: "rare earths & strategic metals", leaders: ["MP", "LYC", "TMC"] },
+  { etf: "ARKX", label: "space & orbital economy", leaders: ["SPCX", "ASTS", "RKLB", "LUNR"] },
   { etf: "XLE", label: "energy (oil & gas)", leaders: ["XOM", "CVX", "COP", "SLB"] },
   { etf: "XLF", label: "big banks & finance", leaders: ["JPM", "BAC", "WFC", "GS"] },
   { etf: "KRE", label: "regional banks", leaders: ["ZION", "KEY", "RF"] },
