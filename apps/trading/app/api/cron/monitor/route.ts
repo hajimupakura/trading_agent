@@ -9,6 +9,7 @@ import { runConvexityReplays } from "@/lib/options/convexity-replay";
 import { runSectorFlow } from "@/lib/options/sector-flow";
 import { runResearchFetches } from "@/lib/options/research-fetch";
 import { runTradeReviews } from "@/lib/options/trade-review";
+import { reportJobHealth } from "@/lib/ops/heartbeat";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -38,5 +39,14 @@ export async function GET(request: Request) {
   const research = minute % 5 === 4 ? await runResearchFetches().catch(error => { console.error("research fetch failed", error); return { processed:null, error:String(error) }; }) : null;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
+  // Heartbeat: consecutive job failures page the user instead of dying in this JSON.
+  await reportJobHealth({
+    refresh: results.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []),
+    radar: radar.errors ?? [],
+    convexity: convexity.errors ?? [],
+    sectors: sectors === null ? null : (sectors.errors ?? []),
+    replay: replay === null ? null : (replay.error ? [replay.error] : []),
+    research: research === null ? null : (research.error ? [research.error] : []),
+  }).catch(error => console.error("heartbeat failed", error));
   return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
