@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { WATCH_UNDERLYINGS } from "./types";
+import { detectSurge } from "./surge-trigger";
 
 // Surge radar — the MEASURED trigger, multi-ticker, ALERT-ONLY.
 // Trigger (backtested on 1yr SPY dailies): decisive day (body >= 60% of range) that
@@ -60,12 +61,9 @@ export async function runSurgeRadar(): Promise<{ fired: string[]; errors: string
       const todayBar = series.find(bar => bar.date === today);
       const prior = series.filter(bar => bar.date < today).at(-1);
       if (!todayBar || !prior) continue;
-      const range = Math.max(todayBar.h - todayBar.l, 0.01);
-      const decisive = Math.abs(todayBar.c - todayBar.o) / range >= 0.6;
-      const upSurge = decisive && (todayBar.h - todayBar.c) <= range * 0.15 && todayBar.c > prior.h;
-      const downSurge = decisive && (todayBar.c - todayBar.l) <= range * 0.15 && todayBar.c < prior.l;
-      if (!upSurge && !downSurge) continue;
-      const direction = upSurge ? "up" : "down";
+      const direction = detectSurge(todayBar, prior);
+      if (!direction) continue;
+      const upSurge = direction === "up";
       const eventKey = `radar-surge-${today}-${symbol}`;
       const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
       if (seen) continue;
