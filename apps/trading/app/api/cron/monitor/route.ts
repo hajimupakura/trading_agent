@@ -7,6 +7,7 @@ import { dispatchInstantAlerts } from "@/lib/notify/dispatch";
 import { runConvexityCapture } from "@/lib/options/convexity";
 import { runConvexityReplays } from "@/lib/options/convexity-replay";
 import { runSectorFlow } from "@/lib/options/sector-flow";
+import { runResearchFetches } from "@/lib/options/research-fetch";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -32,5 +33,7 @@ export async function GET(request: Request) {
   const replay = minute % 5 === 3 ? await runConvexityReplays().catch(error => { console.error("convexity replay failed", error); return { processed:null, queued:-1, error:String(error) }; }) : null;
   // Sector money-flow read every 5 minutes, offset from the replay/digest/escalation minutes.
   const sectors = minute % 5 === 1 ? await runSectorFlow().catch(error => { console.error("sector flow failed", error); return { fired:[] as string[], errors:[String(error)] }; }) : null;
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, replay, sectors, aiReviews, notify, at:new Date().toISOString() });
+  // Ad-hoc research fetch queue: one job per tick on its own light minute.
+  const research = minute % 5 === 4 ? await runResearchFetches().catch(error => { console.error("research fetch failed", error); return { processed:null, error:String(error) }; }) : null;
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, convexity, replay, sectors, research, aiReviews, notify, at:new Date().toISOString() });
 }
