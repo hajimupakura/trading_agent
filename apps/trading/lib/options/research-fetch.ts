@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createAlert } from "@/lib/alerts/server";
 
 // Generic research fetch queue: ad-hoc minute-aggregate pulls for any ticker, executed
 // server-side where the data keys live. Insert a row into research_fetches; the cron
@@ -57,6 +58,18 @@ export async function runResearchFetches(): Promise<{ processed: string | null; 
       status: "done", bars, bar_count: bars.length, processed_at: new Date().toISOString(), error: null,
     }).eq("id", job.id);
     if (error) throw new Error(`persistence: ${error.message}`);
+    // Queue drained -> tell the user on Telegram (research data is often awaited).
+    const { count: remaining } = await admin.from("research_fetches").select("id", { count: "exact", head: true }).eq("status", "queued");
+    if ((remaining ?? 0) === 0) {
+      const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+      if (owner) await createAlert({
+        userId: owner.id, eventKey: `radar-research-drained-${today}`, severity: "info",
+        title: "Research data download complete",
+        body: "All queued historical data has finished downloading and is stored in the database. Next time you open the app session, the analysis can run immediately on the full set. Nothing to do now.",
+        metadata: { kind: "research_drained" },
+      }).catch(() => undefined);
+    }
     return { processed: ticker };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
