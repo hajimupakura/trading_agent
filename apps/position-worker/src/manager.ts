@@ -125,6 +125,13 @@ export class PositionManager {
     // and time rules are off so multi-day swings can survive option-price wobbles.
     // A one-time nudge fires at 10x suggesting cost recovery; selling stays manual.
     const trendMode = position.exitMode === "trend";
+    if (trendMode) {
+      // One-time notice per position so RIDE mode is never a silent surprise.
+      await createWorkerAlert({ userId:position.userId, signalId:position.signalId, eventKey:`ride-mode-${position.ticker}-${position.openedAt}`, severity:"info",
+        title:`${position.alpacaSymbol} is in RIDE mode`,
+        body:`This position has ${dteFromOcc(position.alpacaSymbol) ?? "?"} days of runway, so it is managed as a swing: only the 50% disaster floor sells automatically — no trailing stop, no time exits. You will get a nudge at 10x to recover your cost. Prefer full automatic exits? Tap "${position.alpacaSymbol.slice(0,6)}…: RIDE" in the dashboard manager strip to switch it to AUTO.`,
+        metadata:{ contractTicker:position.ticker, exitMode:"trend" } }).catch(()=>undefined);
+    }
     if (trendMode && quote.bid >= position.entryPrice * 10) {
       await createWorkerAlert({ userId:position.userId, signalId:position.signalId, eventKey:`trend-10x-${position.ticker}-${position.openedAt}`, severity:"success",
         title:`RIDE MODE: ${position.alpacaSymbol} hit 10x — consider recovering your cost`,

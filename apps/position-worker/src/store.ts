@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "./config.js";
+import { dteFromOcc } from "./exit-engine.js";
 import type { AlpacaOrder, ManagedPosition, SignalMarket } from "./types.js";
 
 const db = createClient(config.supabaseUrl,config.SUPABASE_SECRET_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
@@ -42,10 +43,12 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   return { ticker,alpacaSymbol,side:signal ? (signal.action === "enter_put" ? "put":"call") : occSide,quantity:1,entryPrice,
     peakBid:Number(state?.peak_bid ?? entryPrice),openedAt:Date.parse(state?.opened_at ?? brokerEntry?.filled_at ?? entry.created_at),signalId:entry.signal_id,userId:entry.user_id,
     market,closeOrderId:state?.close_order_id ?? null,closeOrderSubmittedAt:state?.close_order_submitted_at ? Date.parse(state.close_order_submitted_at):null,
-    exitMode:state?.exit_mode === "trend" ? "trend" : "burst" };
+    // First sighting (no monitor row yet): 3+ day contracts are swings, not scalps —
+    // they default to trend (RIDE) automatically. Existing rows keep their stored mode.
+    exitMode:state ? (state.exit_mode === "trend" ? "trend" : "burst") : ((dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
 }
 export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask:number;quoteAt:number;status:string;exitReason?:string|null;closeOrderId?:string|null;error?:string|null}) {
-  const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,updated_at:new Date().toISOString() });
+  const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,exit_mode:position.exitMode,updated_at:new Date().toISOString() });
   if (error) throw new Error(`monitor save failed for ${position.ticker}: ${error.message}`);
 }
 export async function markMissingPositions(openTickers:string[],orders:AlpacaOrder[]) {
