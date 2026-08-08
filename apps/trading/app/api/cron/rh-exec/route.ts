@@ -29,11 +29,18 @@ export async function GET(request: Request) {
     const userId = await connectionUserId();
     if (!userId) return Response.json({ connected:false, positions:[] });
     const accounts = await getRobinhoodAccounts(userId);
-    const agentic = accounts.find((account:any) => account?.agentic_allowed === true || account?.agentic_allowed === "true");
-    if (!agentic?.account_number) return Response.json({ connected:true, positions:[], error:"no agentic account" });
+    // Tolerant agentic detection: flag variants and type-named accounts both count.
+    const agentic = accounts.find((account:any) =>
+      [account?.agentic_allowed, account?.is_agentic].some(flag => flag === true || flag === "true" || flag === 1)
+      || String(account?.account_type ?? account?.type ?? "").toLowerCase().includes("agentic"));
+    if (!agentic?.account_number) {
+      const summary = accounts.map((account:any) => ({ tail:String(account?.account_number ?? "").slice(-4), type:account?.account_type ?? account?.type ?? null, agentic:account?.agentic_allowed ?? account?.is_agentic ?? null }));
+      return Response.json({ connected:true, positions:[], error:`no agentic account among ${accounts.length}: ${JSON.stringify(summary).slice(0, 400)}` });
+    }
     const accountNumber = String(agentic.account_number);
-    const { positions, orders } = await getRobinhoodOverview(userId, accountNumber);
+    const { positions, positionsShape, orders } = await getRobinhoodOverview(userId, accountNumber);
     const longs = positions.filter((position:any) => (position?.type ?? "long") === "long" && Number(position?.quantity) > 0);
+    const diag = longs.length ? null : `no long option positions in ${accountNumber.slice(-4)} (shape ${positionsShape}; raw count ${positions.length})`;
     // Enrich with instrument details (strike/expiration/type) for OCC quote lookups.
     const ids = [...new Set(longs.map((position:any) => String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop()).filter(Boolean))];
     let instruments: any[] = [];
@@ -59,7 +66,7 @@ export async function GET(request: Request) {
       createdAt: order.created_at ?? null, optionIds: (order.legs ?? []).map((leg:any) => String(leg.option ?? leg.option_id ?? "").split("/").filter(Boolean).pop()),
       side: order.legs?.[0]?.side ?? null, positionEffect: order.legs?.[0]?.position_effect ?? null, price: order.price ?? null,
     }));
-    return Response.json({ connected:true, accountNumber, positions:enriched, orders:optionOrders }, { headers:{ "Cache-Control":"no-store" } });
+    return Response.json({ connected:true, accountNumber, positions:enriched, orders:optionOrders, diag }, { headers:{ "Cache-Control":"no-store" } });
   } catch (error) {
     return Response.json({ error:error instanceof Error ? error.message : "rh-exec overview failed" }, { status:502 });
   }

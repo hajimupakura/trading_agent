@@ -42,7 +42,12 @@ export async function getRobinhoodOverview(userId: string, accountNumber: string
     optionsValue: Number(portfolioRaw?.options_value ?? 0),
     currency: String(portfolioRaw?.currency ?? "USD"),
   };
-  return { portfolio, positions: asList(positionsRaw, "positions"), orders: asList(ordersRaw, "orders").slice(0, 15) };
+  // Tolerant list extraction — the tool has returned positions under different keys.
+  const positions = Array.isArray(positionsRaw) ? positionsRaw
+    : positionsRaw?.positions ?? positionsRaw?.option_positions ?? positionsRaw?.results ?? [];
+  const positionsShape = Array.isArray(positionsRaw) ? `array(${positionsRaw.length})`
+    : positionsRaw && typeof positionsRaw === "object" ? `keys:${Object.keys(positionsRaw).slice(0, 10).join(",")}` : String(typeof positionsRaw);
+  return { portfolio, positions, positionsShape, orders: asList(ordersRaw, "orders").slice(0, 15) };
 }
 
 export async function resolveOptionInstrument(userId: string, input: { chainSymbol: string; expirationDate: string; strike: number; type: "call" | "put" }) {

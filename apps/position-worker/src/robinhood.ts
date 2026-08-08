@@ -61,6 +61,10 @@ export class RobinhoodExitManager {
     const errors: string[] = [];
     if (!config.APP_URL || !config.CRON_SECRET) return { symbols: [], errors: [] };
     const state = await appExec("/api/cron/rh-exec");
+    // Surface silent failure modes: a detection error pages via cycle errors; an
+    // empty-but-connected book logs its diagnostic for railway-log debugging.
+    if (state.error) errors.push(`rh-exec: ${String(state.error)}`);
+    if (state.diag) console.log(JSON.stringify({ event: "rh_no_positions", diag: String(state.diag) }));
     const positions = (state.positions ?? []) as RhPosition[];
     const orders = (state.orders ?? []) as RhOrder[];
     // Close monitors for positions that no longer exist at the broker.
