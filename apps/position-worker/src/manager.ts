@@ -32,8 +32,19 @@ export class PositionManager {
     const entryOrders = orders.filter(order => order.side === "buy" && activeOrder(order));
     this.quotes.setSymbols([...optionPositions.map(position => `O:${position.symbol}`), ...entryOrders.map(order => `O:${order.symbol}`), ...this.rhSymbols]); this.managedCount = 0;
     await markMissingPositions(optionPositions.map(position => `O:${position.symbol}`),orders);
-    if (!marketSession(new Date())) return;
+    const inSession = marketSession(new Date());
     const cycleErrors:string[] = [];
+    const enabled = config.exitsEnabled && control.auto_exits_enabled;
+    // Robinhood VISIBILITY runs around the clock (position discovery + monitor rows +
+    // diagnostics must not wait for Monday); its EXITS only act in-session when enabled.
+    try {
+      const rh = await this.robinhood.cycle(this.quotes, inSession && enabled);
+      this.rhSymbols = rh.symbols; this.managedCount += this.robinhood.managedCount;
+      cycleErrors.push(...rh.errors);
+    } catch (error) {
+      cycleErrors.push(`robinhood: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!inSession) { if (cycleErrors.length) throw new Error(cycleErrors.join(" | ")); return; }
     // Working BUY orders are managed regardless of the exit toggle or kill switch —
     // an already-submitted entry must still be escalated toward the ask or canceled.
     for (const order of entryOrders) {
@@ -42,7 +53,6 @@ export class PositionManager {
     }
     // kill_switch halts NEW ENTRIES (enforced in the app's paper-trading route);
     // protective exits keep running regardless so an emergency stop never strands a position.
-    const enabled = config.exitsEnabled && control.auto_exits_enabled;
     if (!enabled) { if (cycleErrors.length) throw new Error(cycleErrors.join(" | ")); return; }
     const needsSpx = optionPositions.some(position => position.symbol.startsWith("SPX"));
     const [spyPrice,spxPrice] = await Promise.all([getSpyPrice().catch(() => null), needsSpx ? getSpxPrice().catch(() => null) : Promise.resolve(null)]);
@@ -54,15 +64,6 @@ export class PositionManager {
         cycleErrors.push(`${brokerPosition.symbol}: ${message}`);
         console.error(JSON.stringify({event:"position_cycle_error",symbol:brokerPosition.symbol,error:message}));
       }
-    }
-    // Robinhood agentic-account exits: same rules and cadence; broker I/O proxied
-    // through the app's rh-exec endpoint. Errors surface without touching Alpaca work.
-    try {
-      const rh = await this.robinhood.cycle(this.quotes);
-      this.rhSymbols = rh.symbols; this.managedCount += this.robinhood.managedCount;
-      cycleErrors.push(...rh.errors);
-    } catch (error) {
-      cycleErrors.push(`robinhood: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (cycleErrors.length) throw new Error(cycleErrors.join(" | "));
   }

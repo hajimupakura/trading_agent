@@ -56,7 +56,7 @@ function openedAtFromOrders(position: RhPosition, orders: RhOrder[]) {
 export class RobinhoodExitManager {
   managedCount = 0;
 
-  async cycle(quotes: MassiveQuoteStream): Promise<{ symbols: string[]; errors: string[] }> {
+  async cycle(quotes: MassiveQuoteStream, manageExits: boolean): Promise<{ symbols: string[]; errors: string[] }> {
     this.managedCount = 0;
     const errors: string[] = [];
     if (!config.APP_URL || !config.CRON_SECRET) return { symbols: [], errors: [] };
@@ -73,7 +73,13 @@ export class RobinhoodExitManager {
     await db.from("rh_position_monitors").update({ status: "closed", updated_at: new Date().toISOString() }).eq("status", "closing").not("occ_ticker", "in", `(${openTickers.length ? openTickers.map(ticker => `"${ticker}"`).join(",") : '""'})`);
     for (const position of positions) {
       try {
-        await this.manage(position, orders, quotes);
+        if (manageExits) {
+          await this.manage(position, orders, quotes);
+        } else {
+          // Off-session (or exits disabled): keep the monitor row registered and visible
+          // without evaluating exits — quotes are legitimately stale then.
+          await saveMonitor(position, { status: "monitoring", last_error: null });
+        }
         this.managedCount++;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
