@@ -2,7 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { getOptionChain } from "./provider";
-import type { Underlying } from "./types";
+import { WATCH_UNDERLYINGS, type Underlying } from "./types";
 
 // Sector money-flow radar. Answers "where is the money today — metals, semiconductors,
 // aerospace?" from sector ETFs (the baskets institutions trade sectors with), and names
@@ -135,6 +135,27 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
 
   // ---- Pre-market read: gap-based, volume-free. One alert ~8:40; feeds the 9:15 AI brief.
   if (preMarket) {
+    // Watchlist single-name gap sweep: any watched ticker gapping >=3% pre-market gets
+    // its own instant alert (thin pre-market trades — price is indicative, not firm).
+    await guard("premarket-names", async () => {
+      const snaps = await getSnapshots([...WATCH_UNDERLYINGS]);
+      for (const symbol of WATCH_UNDERLYINGS) {
+        const snap = snaps[symbol];
+        if (!snap?.latestTrade?.p || !snap.prevDailyBar?.c) continue;
+        const gapPct = (snap.latestTrade.p / snap.prevDailyBar.c - 1) * 100;
+        if (Math.abs(gapPct) < 3) continue;
+        const eventKey = `radar-gap-name-${today}-${symbol}`;
+        const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
+        if (seen) continue;
+        await createAlert({
+          userId, eventKey, severity: "warning",
+          title: `${symbol} gapping ${pct(gapPct)} pre-market`,
+          body: `${symbol} is trading around $${snap.latestTrade.p.toFixed(2)} pre-market vs yesterday's $${snap.prevDailyBar.c.toFixed(2)} close — likely overnight news. Pre-market prices are thin and can move; check the story before doing anything. Options open at 9:30; big gaps often keep trending, but the disciplined entry waits for the first 15 minutes to confirm direction. Nothing is being bought automatically.`,
+          metadata: { kind: "premarket_gap", symbol, gapPct: +gapPct.toFixed(2) },
+        });
+        fired.push(`gap-${symbol}`);
+      }
+    });
     await guard("premarket", async () => {
       const snapshots = await getSnapshots(symbols);
       const spy = snapshots.SPY;
