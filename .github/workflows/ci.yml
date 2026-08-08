@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck trading app
+        run: pnpm --filter trading-agent-app check
+      - name: Typecheck position worker
+        run: pnpm --filter velocity-position-worker check
+      - name: Test trading app
+        run: pnpm --filter trading-agent-app test
+      - name: Test position worker
+        run: pnpm --filter velocity-position-worker test
