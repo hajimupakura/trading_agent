@@ -1,6 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendTelegram, telegramConfigured } from "./telegram";
+import { insightsChannelConfigured, sendTelegram, telegramConfigured } from "./telegram";
 
 // Telegram dispatcher, run by the every-minute cron. Reads pending alerts from the
 // alerts table (single source of truth — catches worker-written alerts too, which
@@ -22,6 +22,14 @@ export function isInstantAlert(row: { severity: string; event_key: string }): bo
 }
 
 const ICON: Record<string, string> = { info: "ℹ️", success: "✅", warning: "⚠️", critical: "🚨" };
+
+// Market-insight alerts safe for the shared subscriber channel: sector money maps,
+// pre-market gaps, radar reads, overnight-scan verdicts, morning briefs. STRICT
+// whitelist — errors, fills, positions, critiques, and post-mortems never match.
+const INSIGHT_PREFIXES = ["radar-sectors-", "radar-sector-", "radar-gap-", "radar-trend-", "radar-regime-", "radar-event-", "radar-convexity-scan-", "radar-convexity-report-", "ai-brief-"];
+export function isInsightAlert(eventKey: string): boolean {
+  return INSIGHT_PREFIXES.some(prefix => eventKey.startsWith(prefix));
+}
 
 export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPending: number }> {
   if (!telegramConfigured()) return { sent: 0, digestPending: 0 };
@@ -46,7 +54,13 @@ export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPen
       continue;
     }
     try {
-      await sendTelegram(`${ICON[String(row.severity)] ?? "ℹ️"} ${row.title}\n\n${row.body}`);
+      const message = `${ICON[String(row.severity)] ?? "ℹ️"} ${row.title}\n\n${row.body}`;
+      await sendTelegram(message);
+      // Mirror market insights to the shared channel; a channel failure never blocks
+      // the owner's delivery or the cursor.
+      if (insightsChannelConfigured() && isInsightAlert(String(row.event_key))) {
+        await sendTelegram(message, process.env.TELEGRAM_INSIGHTS_CHAT_ID).catch(err => console.error("Insights channel send failed", row.event_key, err));
+      }
       await admin.from("alerts").update({ notified_at: new Date().toISOString() }).eq("id", row.id);
       sent += 1;
     } catch (err) {
