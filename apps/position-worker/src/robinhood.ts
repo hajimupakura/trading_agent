@@ -33,7 +33,7 @@ async function appExec(path: string, init: RequestInit = {}) {
 
 async function loadMonitor(occTicker: string) {
   const { data, error } = await db.from("rh_position_monitors").select("*").eq("occ_ticker", occTicker).maybeSingle();
-  if (error) throw error;
+  if (error) throw new Error(`rh monitor load ${occTicker}: ${error.message}`);
   return data;
 }
 
@@ -44,7 +44,7 @@ async function saveMonitor(position: RhPosition, patch: Record<string, unknown>)
     expiration_date: position.expirationDate, quantity: position.quantity, entry_price: position.entryPrice,
     updated_at: new Date().toISOString(), ...patch,
   });
-  if (error) throw error;
+  if (error) throw new Error(`rh monitor save ${position.occTicker}: ${error.message}`);
 }
 
 function openedAtFromOrders(position: RhPosition, orders: RhOrder[]) {
@@ -77,8 +77,12 @@ export class RobinhoodExitManager {
           await this.manage(position, orders, quotes);
         } else {
           // Off-session (or exits disabled): keep the monitor row registered and visible
-          // without evaluating exits — quotes are legitimately stale then.
-          await saveMonitor(position, { status: "monitoring", last_error: null });
+          // without evaluating exits — quotes are legitimately stale then. opened_at
+          // mirrors manage(): existing row first, then the actual buy fill, then now.
+          const monitor = await loadMonitor(position.occTicker);
+          const orderOpenedAt = openedAtFromOrders(position, orders);
+          const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? Date.now();
+          await saveMonitor(position, { status: "monitoring", last_error: null, opened_at: new Date(openedAt).toISOString(), opened_at_exact: monitor?.opened_at_exact ?? orderOpenedAt != null });
         }
         this.managedCount++;
       } catch (error) {
