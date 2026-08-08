@@ -11,6 +11,8 @@ import { runResearchFetches } from "@/lib/options/research-fetch";
 import { runTradeReviews } from "@/lib/options/trade-review";
 import { reportJobHealth } from "@/lib/ops/heartbeat";
 import { runSurgeRadar } from "@/lib/options/surge-radar";
+import { runAutoEntry } from "@/lib/alpaca/auto-entry";
+import type { CommandCenter } from "@/lib/options/types";
 
 export const maxDuration = 60;
 export async function GET(request: Request) {
@@ -28,6 +30,10 @@ export async function GET(request: Request) {
     refreshCommandCenter("SPX", undefined, { includeLongHorizons }),
     ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
   ]);
+  // Autonomous SPY paper entries: acts on the signal from the refresh above; every
+  // deterministic gate (window, sizing, caps, cooldown, kill switch) enforced inside.
+  const spySnapshot = results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null;
+  const autoEntry = await runAutoEntry(spySnapshot).catch(error => { console.error("auto entry failed", error); return { entered:null, skipped:String(error) }; });
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
@@ -52,5 +58,5 @@ export async function GET(request: Request) {
     replay: replay === null ? null : (replay.error ? [replay.error] : []),
     research: research === null ? null : (research.error ? [research.error] : []),
   }).catch(error => console.error("heartbeat failed", error));
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, radar, surge, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, radar, surge, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
