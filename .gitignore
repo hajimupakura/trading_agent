@@ -120,3 +120,7 @@ screenshots/
 
 # Local Vercel project link
 /.vercel/
+artifacts/
+output/
+tools/make_beingafrican_donation_qr.py
+tools/make_gala_two_qr_sign.py

@@ -60,7 +60,7 @@ export async function GET(request: Request) {
         occTicker: chainSymbol && expirationDate ? occTicker(chainSymbol, expirationDate, type, strike) : null,
         quantity: Number(position.quantity), entryPrice: Number(position.average_price ?? position.average_open_price ?? 0),
       };
-    }).filter(position => position.occTicker && position.entryPrice > 0);
+    }).filter((position:any) => position.occTicker && position.entryPrice > 0);
     const optionOrders = orders.map((order:any) => ({
       id: String(order.id ?? ""), state: String(order.state ?? ""),
       createdAt: order.created_at ?? null, optionIds: (order.legs ?? []).map((leg:any) => String(leg.option ?? leg.option_id ?? "").split("/").filter(Boolean).pop()),
