@@ -4,7 +4,8 @@ import { evaluateExit, easternClock } from "./exit-engine.js";
 import { getSnapshotQuote, MassiveQuoteStream } from "./massive.js";
 import type { ManagedPosition, OptionQuote } from "./types.js";
 
-// Robinhood agentic-account exit management. The worker owns rules + timing; all
+// Robinhood agentic-account exit management (v2: 24/7 discovery, session-gated exits).
+// The worker owns rules + timing; all
 // broker I/O goes through the app's /api/cron/rh-exec endpoint (Bearer CRON_SECRET),
 // because Robinhood tokens are only decryptable at app runtime.
 
