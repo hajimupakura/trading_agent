@@ -58,7 +58,9 @@ export async function GET(request: Request) {
       return {
         optionId, accountNumber, chainSymbol, optionType:type, strike, expirationDate,
         occTicker: chainSymbol && expirationDate ? occTicker(chainSymbol, expirationDate, type, strike) : null,
-        quantity: Number(position.quantity), entryPrice: Number(position.average_price ?? position.average_open_price ?? 0),
+        // Robinhood reports average_price PER CONTRACT (the $2.05 option comes back as
+        // 205.00); the exit engine works per share — normalize by the 100 multiplier.
+        quantity: Number(position.quantity), entryPrice: Number(position.average_price ?? position.average_open_price ?? 0) / 100,
       };
     }).filter((position:any) => position.occTicker && position.entryPrice > 0);
     // Diagnostic covers EVERY drop path — a position must never vanish silently.
