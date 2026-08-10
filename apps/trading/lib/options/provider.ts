@@ -59,7 +59,16 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
     const minutes = hour * 60 + minute; return minutes >= 570 && minutes < 960;
   };
   const bars: Bar[] = (payload.bars ?? []).filter(item => inRegularSession(item.t)).map(item => ({ timestamp:Date.parse(item.t), open:item.o, high:item.h, low:item.l, close:item.c, volume:item.v ?? 0, vwap:item.vw ?? null }));
-  if (!bars.length) throw new Error(`No Alpaca IEX ${symbol} bars returned`);
+  if (!bars.length) {
+    // Zero session bars is expected off-hours (weekends, holidays, pre-open) — surface
+    // a market-closed notice instead of a data-feed error so the dashboard reads true.
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", weekday:"short", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(new Date());
+    const weekday = parts.find(part => part.type === "weekday")?.value ?? "";
+    const minutes = Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value);
+    const closedNow = ["Sat","Sun"].includes(weekday) || minutes < 570 || minutes >= 960;
+    if (closedNow) throw new Error(`Market is closed — ${symbol} data resumes at the next open (9:30 AM ET)`);
+    throw new Error(`No Alpaca IEX ${symbol} bars returned`);
+  }
   const current = bars.at(-1)!; const opening = bars.slice(0, 15);
   const openingRangeHigh = Math.max(...opening.map(bar => bar.high)); const openingRangeLow = Math.min(...opening.map(bar => bar.low));
   const totalVolume = bars.reduce((sum, bar) => sum + bar.volume, 0);
