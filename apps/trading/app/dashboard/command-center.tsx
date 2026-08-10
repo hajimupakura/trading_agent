@@ -67,6 +67,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [ticketMessage, setTicketMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
   const [critique, setCritique] = useState<string | null>(null);
   const [critiqueBusy, setCritiqueBusy] = useState(false);
+  const [futures, setFutures] = useState<{ rows:Array<{ label:string; product:string; ticker:string; price:number; changePct:number|null; source:string }>; note:string|null; asOf:number } | null>(null);
   type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
   // Numeric tabs are SESSIONS ahead, not calendar days: on a Friday the 1DTE tab shows
@@ -119,6 +120,14 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   }, [refresh]);
 
   useEffect(() => { void refreshPaper();const timer=window.setInterval(refreshPaper,10_000);return()=>window.clearInterval(timer); }, [refreshPaper]);
+
+  // Futures glimpse: overnight/weekend direction from ES/NQ/YM (delayed ~10 min).
+  useEffect(() => {
+    const load = async () => { try { const response = await fetch("/api/futures", { cache:"no-store" }); if (response.ok) setFutures(await response.json()); } catch { /* strip simply stays hidden */ } };
+    void load();
+    const timer = window.setInterval(load, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const signal = data?.signal;
   const approveOrder = useCallback(async () => {
@@ -242,6 +251,21 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
               <RefreshCw size={15} className={loading ? "spin" : ""} /> {loading ? "Scanning" : "Refresh scan"}
             </button>
           </section>
+
+          {futures?.rows.length ? (
+            <section className="paper-strip" title={futures.note ?? "Front-month futures — quotes are ~10 minutes delayed"}>
+              {futures.rows.map(row => (
+                <div key={row.product}>
+                  <span>{row.label.toUpperCase()} FUTURES</span>
+                  <strong style={{ color: (row.changePct ?? 0) >= 0 ? "var(--positive, #22c55e)" : "var(--negative, #ef4444)" }}>
+                    {row.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                    {row.changePct != null ? ` ${row.changePct >= 0 ? "▲" : "▼"} ${Math.abs(row.changePct).toFixed(2)}%` : ""}
+                  </strong>
+                </div>
+              ))}
+              <div><span>OVERNIGHT TAPE</span><strong>{new Date(futures.asOf).toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" })} · delayed</strong></div>
+            </section>
+          ) : null}
 
           {(requestError || data?.errors.length) ? (
             <div className="system-alert"><span>DATA NOTICE</span>{requestError ?? data?.errors.join(" · ")}</div>
