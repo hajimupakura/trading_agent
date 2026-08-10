@@ -120,8 +120,84 @@ async function analyzeReadyReviews(): Promise<string[]> {
   return done;
 }
 
-export async function runTradeReviews(): Promise<{ staged: number; analyzed: string[] }> {
+// Self-healing loop, step 2: tally counter -> drafted proposal. When the same verdict
+// accumulates across enough trades, draft a rule proposal AND pre-score it by replaying
+// candidate exit rules over the stored tapes of every reviewed trade (not just the
+// pattern members — a rule must help the whole book, not the cherry-picked losers).
+// Output is a proposal row + a plain-English Telegram insight. Nothing here changes
+// live rules: adoption stays a human decision after the full replay gauntlet.
+const TALLY_THRESHOLD = 3;
+const TRAIL_ARM = 1.3;   // candidate: arm the trail once up 30%...
+const TRAIL_KEEP = 0.75; // ...then exit if price gives back to 75% of its peak.
+
+function simulateTrail(bars: number[][], entry: number, entryTs: number, exitTs: number, actualExit: number, ride: boolean): number {
+  let peak = 0, armed = false;
+  for (const bar of bars) {
+    if (bar[0] < entryTs - 60_000) continue;
+    if (!ride && bar[0] > exitTs + 60_000) break;
+    peak = Math.max(peak, bar[2]);
+    if (!armed && peak >= entry * TRAIL_ARM) armed = true;
+    if (armed && bar[3] <= peak * TRAIL_KEEP) return peak * TRAIL_KEEP;
+    // ride mode without an armed trail still respects the actual (time) exit.
+    if (ride && !armed && bar[0] >= exitTs) return actualExit;
+  }
+  return actualExit;
+}
+
+async function aggregateLessons(): Promise<string[]> {
+  const admin = createAdminClient();
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const { data: reviews } = await admin.from("trade_reviews").select("id,contract_ticker,entry_at,exit_at,entry_price,exit_price,verdict")
+    .eq("status", "done").gte("processed_at", since).limit(100);
+  if (!reviews?.length) return [];
+  const tallies = new Map<string, number>();
+  for (const review of reviews) tallies.set(String(review.verdict), (tallies.get(String(review.verdict)) ?? 0) + 1);
+  const drafted: string[] = [];
+  for (const [pattern, count] of tallies) {
+    if (count < TALLY_THRESHOLD || !["gave_back_gains", "sold_too_early"].includes(pattern)) continue;
+    const { data: open } = await admin.from("rule_proposals").select("id").eq("pattern", pattern).eq("status", "proposed").limit(1).maybeSingle();
+    if (open) continue;
+    // Score the candidate trail rule over EVERY reviewed trade with a stored tape.
+    const perTrade: Array<{ ticker: string; actualPct: number; bankPct: number; ridePct: number }> = [];
+    for (const review of reviews) {
+      const entry = Number(review.entry_price ?? 0); const exit = Number(review.exit_price ?? 0);
+      if (!entry || !exit) continue;
+      const { data: fetch } = await admin.from("research_fetches").select("bars,status")
+        .eq("ticker", review.contract_ticker).eq("from_date", etDate(review.entry_at)).eq("to_date", etDate(review.exit_at))
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      const bars = (fetch?.status === "done" ? fetch.bars as number[][] : null) ?? [];
+      if (!bars.length) continue;
+      const entryTs = Date.parse(String(review.entry_at)); const exitTs = Date.parse(String(review.exit_at));
+      const bank = simulateTrail(bars, entry, entryTs, exitTs, exit, false);
+      const rideExit = simulateTrail(bars, entry, entryTs, exitTs, exit, true);
+      perTrade.push({ ticker: review.contract_ticker, actualPct: +((exit / entry - 1) * 100).toFixed(1), bankPct: +((bank / entry - 1) * 100).toFixed(1), ridePct: +((rideExit / entry - 1) * 100).toFixed(1) });
+    }
+    if (perTrade.length < TALLY_THRESHOLD) continue;
+    const avg = (key: "actualPct" | "bankPct" | "ridePct") => +(perTrade.reduce((sum, row) => sum + row[key], 0) / perTrade.length).toFixed(1);
+    const summary = { trades: perTrade.length, patternCount: count, avgActualPct: avg("actualPct"), avgBankTrailPct: avg("bankPct"), avgRideTrailPct: avg("ridePct") };
+    const best = Math.max(summary.avgBankTrailPct, summary.avgRideTrailPct);
+    const helps = best > summary.avgActualPct + 2; // must beat reality by a real margin
+    const proposedRule = summary.avgBankTrailPct >= summary.avgRideTrailPct
+      ? `Arm a ${Math.round((1 - TRAIL_KEEP) * 100)}% trailing stop once a position is up ${Math.round((TRAIL_ARM - 1) * 100)}% (banked before any time exit)`
+      : `Once up ${Math.round((TRAIL_ARM - 1) * 100)}%, let a ${Math.round((1 - TRAIL_KEEP) * 100)}% trail override the time exit and ride the trend`;
+    await admin.from("rule_proposals").insert({ pattern, proposed_rule: proposedRule, status: helps ? "proposed" : "rejected_by_replay", evidence: { ...summary, perTrade } });
+    const userId = await ownerId();
+    if (userId) await createAlert({
+      userId, eventKey: `ai-rule-proposal-${pattern}-${etDate(Date.now())}`, severity: "info",
+      title: helps ? `Pattern confirmed ${count}× — the engine drafted a rule change for you` : `Pattern seen ${count}× — but the fix failed its replay test`,
+      body: helps
+        ? `"${pattern.replace(/_/g, " ")}" has now happened ${count} times in 30 days, so the tally became a draft rule: ${proposedRule}. Replayed over the last ${summary.trades} real trades' price tapes it would have averaged ${best >= 0 ? "+" : ""}${best}% per trade vs ${summary.avgActualPct >= 0 ? "+" : ""}${summary.avgActualPct}% actual. This changes NOTHING yet — it needs the full backtest gauntlet and your sign-off before going live.`
+        : `"${pattern.replace(/_/g, " ")}" has happened ${count} times, and the obvious fix (${proposedRule.toLowerCase()}) was auto-replayed over ${summary.trades} real trades — it would have averaged ${best}% vs ${summary.avgActualPct}% actual, so it does NOT survive the evidence and was shelved automatically. The tape keeps accumulating; a better variant may be proposed later.`,
+      metadata: { kind: "rule_proposal", pattern, ...summary },
+    }).catch(error => console.error("rule proposal alert failed", error));
+    drafted.push(pattern);
+  }
+  return drafted;
+}
+
+export async function runTradeReviews(): Promise<{ staged: number; analyzed: string[]; proposals?: string[] }> {
   const staged = await stageNewReviews();
   const analyzed = await analyzeReadyReviews();
-  return { staged, analyzed };
+  const proposals = analyzed.length ? await aggregateLessons().catch(error => { console.error("lesson aggregation failed", error); return []; }) : [];
+  return { staged, analyzed, proposals };
 }
