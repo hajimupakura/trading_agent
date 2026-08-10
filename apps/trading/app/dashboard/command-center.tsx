@@ -67,7 +67,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [ticketMessage, setTicketMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
   const [critique, setCritique] = useState<string | null>(null);
   const [critiqueBusy, setCritiqueBusy] = useState(false);
-  const [futures, setFutures] = useState<{ rows:Array<{ label:string; product:string; ticker:string; price:number; changePct:number|null; source:string }>; note:string|null; asOf:number } | null>(null);
+  const [futures, setFutures] = useState<{ rows:Array<{ label:string; product:string; ticker:string; price:number; changePct:number|null; prevSettle:number|null; source:string }>; note:string|null; asOf:number } | null>(null);
   type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
   // Numeric tabs are SESSIONS ahead, not calendar days: on a Friday the 1DTE tab shows
@@ -259,7 +259,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
                   <span>{row.label.toUpperCase()} FUTURES</span>
                   <strong style={{ color: (row.changePct ?? 0) >= 0 ? "var(--positive, #22c55e)" : "var(--negative, #ef4444)" }}>
                     {row.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                    {row.changePct != null ? ` ${row.changePct >= 0 ? "▲" : "▼"} ${Math.abs(row.changePct).toFixed(2)}%` : ""}
+                    {row.prevSettle != null ? ` ${row.price >= row.prevSettle ? "▲" : "▼"} $${Math.abs(row.price - row.prevSettle).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ""}
+                    {row.changePct != null ? ` (${row.changePct >= 0 ? "+" : "−"}${Math.abs(row.changePct).toFixed(2)}%)` : ""}
                   </strong>
                 </div>
               ))}
