@@ -71,7 +71,7 @@ export function generateScalpSignal(market: MarketState, contracts: Contract[], 
       side === "call"
         ? `Scalp: dipped ${excursion.toFixed(1)} ATR below VWAP within ${LOOKBACK_BARS} min, now reclaiming it with RSI ${rsi!.toFixed(0)}`
         : `Scalp: popped ${excursion.toFixed(1)} ATR above VWAP within ${LOOKBACK_BARS} min, now losing it with RSI ${rsi!.toFixed(0)}`,
-      "Scalp envelope: 2x target, 25% stop, 15% trail after +30%, 30-minute time box",
+      "Exit plan (replay-calibrated): 30% stop, trail 20% once up 40% (15% after 2x), flat by 3:10 PM — winners ride, no time box",
       `${contract.ticker} is ranked ${contract.liquidityScore}/100 and asks $${contract.ask.toFixed(2)}`,
     ],
     invalidation: `${market.chartSymbol} back ${side === "call" ? "below" : "above"} VWAP ${vwap.toFixed(2)}`,

@@ -76,7 +76,7 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
         await createAlert({
           userId: owner.id, signalId: signal.id, eventKey: `scalp-spx-${signal.action}-${hourKey}`, severity: "warning",
           title: `SPX SCALP setup: ${signal.action === "enter_call" ? "dip reclaimed — call" : "pop failed — put"}`,
-          body: `${signal.reasons[0]}. Candidate: ${signal.contract.ticker.replace("O:","")} asking $${signal.contract.ask.toFixed(2)}. The scalp plan: target 2x, cut at -25%, and if it hasn't worked in 30 minutes it's over.${ticketUrl ? ` One-tap ticket (everything prefilled, just hit buy): ${ticketUrl}` : ""} Autonomous Robinhood execution only happens if the real-money toggle is ON in Settings.`,
+          body: `${signal.reasons[0]}. Candidate: ${signal.contract.ticker.replace("O:","")} asking $${signal.contract.ask.toFixed(2)}. The plan (backtested over 41 reclaim days): cut at -30%, trail 20% once up 40%, let winners run — the big ones need an hour or more.${ticketUrl ? ` One-tap ticket (everything prefilled, just hit buy): ${ticketUrl}` : ""} Autonomous Robinhood execution only happens if the real-money toggle is ON in Settings.`,
           metadata: { kind: "scalp_signal", underlying, contractTicker: signal.contract.ticker, ask: signal.contract.ask, ticketUrl },
         }).catch(error => console.error("spx scalp alert failed", error));
       }

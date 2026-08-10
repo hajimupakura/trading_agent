@@ -26,13 +26,14 @@ describe("swing exit handling", () => {
 });
 
 const scalp:ManagedPosition = { ...base, exitMode:"scalp" };
-describe("scalp exit handling", () => {
-  it("banks the 2x target immediately", () => expect(evaluateExit({ position:{...scalp,peakBid:8}, bid:8, underlyingPrice:771, now:at("14:05") })).toBe("scalp_target"));
-  it("stops out at the tighter 25% scalp stop", () => expect(evaluateExit({ position:scalp, bid:3, underlyingPrice:771, now:at("14:05") })).toBe("premium_stop"));
-  it("does not stop between 25% and 30% in burst mode terms", () => expect(evaluateExit({ position:scalp, bid:3.1, underlyingPrice:771, now:at("14:05") })).toBe(null));
-  it("trails 15% after a 30% gain", () => expect(evaluateExit({ position:{...scalp,peakBid:5.3}, bid:4.5, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
-  it("time-boxes the trade at 30 minutes", () => expect(evaluateExit({ position:{...scalp,peakBid:4.4}, bid:4.2, underlyingPrice:771, now:at("14:31") })).toBe("scalp_time_box"));
-  it("ignores underlying invalidation (envelope rules only)", () => expect(evaluateExit({ position:scalp, bid:3.9, underlyingPrice:769.9, now:at("14:05") })).toBe(null));
+describe("scalp exit handling (v2: replay-calibrated — patient exits on scalp entries)", () => {
+  it("keeps the 30% premium stop", () => expect(evaluateExit({ position:scalp, bid:2.8, underlyingPrice:771, now:at("14:05") })).toBe("premium_stop"));
+  it("does not sell a double — winners ride the trail", () => expect(evaluateExit({ position:{...scalp,peakBid:8}, bid:8, underlyingPrice:771, now:at("14:05") })).toBe(null));
+  it("trails 20% once up 40%", () => expect(evaluateExit({ position:{...scalp,peakBid:6}, bid:4.8, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
+  it("tightens the trail to 15% after 2x", () => expect(evaluateExit({ position:{...scalp,peakBid:8}, bid:6.79, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
+  it("has no 30-minute time box (winners need an hour)", () => expect(evaluateExit({ position:{...scalp,peakBid:4.4}, bid:4.2, underlyingPrice:771, now:at("14:31") })).toBe(null));
+  it("skips the 10-minute follow-through test", () => expect(evaluateExit({ position:{...scalp,peakBid:4.2}, bid:3.9, underlyingPrice:771, now:at("14:11") })).toBe(null));
+  it("ignores underlying invalidation (reclaim entries have no ORB context)", () => expect(evaluateExit({ position:scalp, bid:3.9, underlyingPrice:769.9, now:at("14:05") })).toBe(null));
   it("still goes flat at 15:10 as a backstop", () => expect(evaluateExit({ position:scalp, bid:4, underlyingPrice:771, now:at("19:10") })).toBe("mandatory_time_exit"));
 });
 

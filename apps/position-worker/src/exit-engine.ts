@@ -6,10 +6,13 @@ export const EXIT_RULES = { stopLossPct:.30, trailActivationPct:.40, trailPct:.2
   // since a 1DTE swing expires at that day's close.
   swingOpenThresholdMinutes:15 * 60 + 30 } as const;
 
-// SCALP mode: in fast, out fast. Tighter stop, an explicit double-your-premium target,
-// an earlier/tighter trail, and a hard 30-minute time box — a scalp thesis that hasn't
-// paid in 30 minutes is over regardless of price.
-export const SCALP_RULES = { stopLossPct:.25, targetMult:2, trailActivationPct:.30, trailPct:.15, timeBoxMs:30 * 60_000 } as const;
+// SCALP mode v2 — REPLAY-CALIBRATED (41 reclaim days, 2026-05..08): the original
+// fast-out envelope (2x target, 30-min box) averaged +0.5%/trade because the 2x
+// never printed inside 30 minutes (0/41) and the box amputated every big winner
+// (May 13 +204% became +8%). The standard patient exits on the SAME entries made
+// +7.5%/trade. Scalp mode is therefore an ENTRY lane, not an exit style: burst
+// stop/trail rules apply, minus the 10-minute follow-through test and underlying
+// invalidation (a reclaim entry's thesis needs an hour, not ten minutes).
 
 export type ExitReason = "mandatory_time_exit"|"premium_stop"|"underlying_invalidation"|"trailing_stop"|"no_follow_through"|"scalp_target"|"scalp_time_box";
 export function easternClock(now:Date) {
@@ -21,15 +24,14 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   const openedClock = easternClock(new Date(position.openedAt));
   const heldOvernight = openedClock.dateKey < clock.dateKey;
   if (position.exitMode === "scalp") {
-    // The 15:10 flat and overnight guards still apply (a scalp should never see them,
-    // but a worker outage must not leave one unguarded into the close).
+    // The 15:10 flat and overnight guards still apply (a worker outage must never
+    // leave a 0DTE position unguarded into the close).
     if (heldOvernight && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= 570) return "mandatory_time_exit";
     if (clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
-    if (bid <= position.entryPrice * (1 - SCALP_RULES.stopLossPct)) return "premium_stop";
-    if (bid >= position.entryPrice * SCALP_RULES.targetMult) return "scalp_target";
+    if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
     const scalpGain = position.peakBid / position.entryPrice - 1;
-    if (scalpGain >= SCALP_RULES.trailActivationPct && bid <= position.peakBid * (1 - SCALP_RULES.trailPct)) return "trailing_stop";
-    if (now.getTime() - position.openedAt >= SCALP_RULES.timeBoxMs) return "scalp_time_box";
+    const scalpTrail = scalpGain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : scalpGain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
+    if (scalpTrail != null && bid <= position.peakBid * (1 - scalpTrail)) return "trailing_stop";
     return null;
   }
   // A swing position is one deliberately opened in the late-day window; it is exempt from the
