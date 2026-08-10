@@ -12,6 +12,7 @@ import { runTradeReviews } from "@/lib/options/trade-review";
 import { reportJobHealth } from "@/lib/ops/heartbeat";
 import { runSurgeRadar } from "@/lib/options/surge-radar";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
+import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
 
 export const maxDuration = 60;
@@ -42,6 +43,10 @@ export async function GET(request: Request) {
     autoEntry = await runAutoEntry(candidate.snapshot, candidate.underlying).catch(error => { console.error("auto entry failed", candidate.underlying, error); return { entered:null, skipped:String(error) }; });
     if (autoEntry.entered) break;
   }
+  // Real-money SPX entries on the Robinhood agentic account (separate venue, its own
+  // caps, OFF unless settings.rhAutoEntriesEnabled). Exits are the worker's job.
+  const rhAutoEntry = await runRobinhoodAutoEntry(results[1]?.status === "fulfilled" ? (results[1].value as CommandCenter) : null)
+    .catch(error => { console.error("rh auto entry failed", error); return { entered:null, skipped:String(error) }; });
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
@@ -66,5 +71,5 @@ export async function GET(request: Request) {
     replay: replay === null ? null : (replay.error ? [replay.error] : []),
     research: research === null ? null : (research.error ? [research.error] : []),
   }).catch(error => console.error("heartbeat failed", error));
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, radar, surge, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }

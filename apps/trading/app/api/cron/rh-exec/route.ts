@@ -38,7 +38,12 @@ export async function GET(request: Request) {
       return Response.json({ connected:true, positions:[], error:`no agentic account among ${accounts.length}: ${JSON.stringify(summary).slice(0, 400)}` });
     }
     const accountNumber = String(agentic.account_number);
-    const { positions, positionsShape, orders } = await getRobinhoodOverview(userId, accountNumber);
+    const { portfolio, positions, positionsShape, orders } = await getRobinhoodOverview(userId, accountNumber);
+    // Persist the portfolio read (cash / buying power / total) so dashboards and
+    // research can see account state without another broker round-trip.
+    await createAdminClient().from("broker_portfolio_snapshots").upsert({
+      broker: "robinhood", payload: { ...portfolio, accountTail: accountNumber.slice(-4) }, updated_at: new Date().toISOString(),
+    }).then(({ error }) => { if (error) console.error("rh portfolio snapshot failed", error.message); });
     const longs = positions.filter((position:any) => (position?.type ?? "long") === "long" && Number(position?.quantity) > 0);
     // Enrich with instrument details (strike/expiration/type) for OCC quote lookups.
     const ids = [...new Set(longs.map((position:any) => String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop()).filter(Boolean))];
