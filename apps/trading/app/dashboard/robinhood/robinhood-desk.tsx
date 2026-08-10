@@ -24,6 +24,25 @@ export function RobinhoodDesk({ userEmail }: { userEmail:string | null }) {
     optionType:"call" as "call"|"put", side:"buy" as "buy"|"sell", positionEffect:"open" as "open"|"close",
     quantity:"1", limitPrice:"",
   });
+  const [signalTicket, setSignalTicket] = useState(false);
+
+  // One-tap flow: signal alerts deep-link here with the ticket prefilled — the only
+  // remaining human action is pressing the buy button (server gates still apply).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("chain") || !params.get("exp") || !params.get("strike")) return;
+    setTicket(current => ({ ...current,
+      chainSymbol: String(params.get("chain")).toUpperCase(),
+      underlyingType: params.get("type") === "index" ? "index" : "equity",
+      expirationDate: String(params.get("exp")),
+      strike: String(params.get("strike")),
+      optionType: params.get("side") === "put" ? "put" : "call",
+      side: "buy", positionEffect: "open",
+      quantity: params.get("qty") ?? current.quantity,
+      limitPrice: params.get("limit") ?? current.limitPrice,
+    }));
+    setSignalTicket(true);
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -127,6 +146,7 @@ export function RobinhoodDesk({ userEmail }: { userEmail:string | null }) {
 
             <section className="signal-card">
               <div className="section-heading"><div><span>NEW ORDER</span><strong>SINGLE-LEG OPTION</strong></div></div>
+              {signalTicket ? <p className="order-message success">SIGNAL TICKET LOADED — everything below came from the alert. Check the numbers once, then hit the button. Price may have moved since the alert; bump the limit if the ask ran.</p> : null}
               <div className="settings-grid" style={{ display:"grid", gridTemplateColumns:"repeat(2, minmax(0,1fr))", gap:12 }}>
                 <label className="settings-field"><span>Underlying</span><input value={ticket.chainSymbol} onChange={event => setTicket(current => ({ ...current, chainSymbol:event.target.value.toUpperCase() }))} placeholder="SPY"/><small>SPY, SPXW, NVDA…</small></label>
                 <label className="settings-field"><span>Type</span><select value={ticket.underlyingType} onChange={event => setTicket(current => ({ ...current, underlyingType:event.target.value as "equity"|"index" }))}><option value="equity">Equity</option><option value="index">Index (SPXW)</option></select><small>SPXW is an index</small></label>

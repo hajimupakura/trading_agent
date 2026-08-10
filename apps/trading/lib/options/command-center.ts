@@ -68,11 +68,16 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
       const hourKey = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",hourCycle:"h23"}).format(new Date()).replaceAll(", ","-");
       if (owner) {
         const { createAlert } = await import("@/lib/alerts/server");
+        // One-tap ticket link: opens the Robinhood desk with every field prefilled —
+        // the only remaining human action is the buy button.
+        const chain = /^O:([A-Z]+?)\d{6}[CP]/.exec(signal.contract.ticker)?.[1] ?? "SPXW";
+        const domain = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+        const ticketUrl = domain ? `https://${domain}/dashboard/robinhood?chain=${chain}&type=index&exp=${signal.contract.expirationDate}&strike=${signal.contract.strike}&side=${signal.contract.side}&qty=1&limit=${signal.contract.ask.toFixed(2)}` : null;
         await createAlert({
           userId: owner.id, signalId: signal.id, eventKey: `scalp-spx-${signal.action}-${hourKey}`, severity: "warning",
           title: `SPX SCALP setup: ${signal.action === "enter_call" ? "dip reclaimed — call" : "pop failed — put"}`,
-          body: `${signal.reasons[0]}. Candidate: ${signal.contract.ticker.replace("O:","")} asking $${signal.contract.ask.toFixed(2)}. The scalp plan: target 2x, cut at -25%, and if it hasn't worked in 30 minutes it's over. Autonomous Robinhood execution only happens if the real-money toggle is ON in Settings — otherwise this is a heads-up for a manual play.`,
-          metadata: { kind: "scalp_signal", underlying, contractTicker: signal.contract.ticker, ask: signal.contract.ask },
+          body: `${signal.reasons[0]}. Candidate: ${signal.contract.ticker.replace("O:","")} asking $${signal.contract.ask.toFixed(2)}. The scalp plan: target 2x, cut at -25%, and if it hasn't worked in 30 minutes it's over.${ticketUrl ? ` One-tap ticket (everything prefilled, just hit buy): ${ticketUrl}` : ""} Autonomous Robinhood execution only happens if the real-money toggle is ON in Settings.`,
+          metadata: { kind: "scalp_signal", underlying, contractTicker: signal.contract.ticker, ask: signal.contract.ask, ticketUrl },
         }).catch(error => console.error("spx scalp alert failed", error));
       }
     }
