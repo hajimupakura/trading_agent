@@ -38,6 +38,7 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const userId = String(connection.user_id);
   const settings = await loadRiskSettings(userId);
   if (!settings.rhAutoEntriesEnabled) return { entered: null, skipped: "rh autonomy off" };
+  if (signal.setup === "scalp_reclaim" && !settings.scalpEntriesEnabled) return { entered: null, skipped: "scalp lane off" };
   // One order per signal, ever — and the same signal must not be double-traded here
   // even if Alpaca also acted on it (separate journals, separate venues).
   const { data: existing } = await admin.from("rh_entry_orders").select("id").eq("signal_id", signal.id).limit(1).maybeSingle();
@@ -77,6 +78,7 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const { error: journalError } = await admin.from("rh_entry_orders").insert({
     user_id: userId, signal_id: signal.id, ref_id: refId, underlying: "SPX", contract_ticker: contract.ticker,
     quantity, limit_price: limitPrice, max_debit: debit, status: "submitted",
+    strategy: signal.setup === "scalp_reclaim" ? "scalp" : "orb",
   });
   if (journalError) return { entered: null, skipped: `journal: ${journalError.message}` };
   try {

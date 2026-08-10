@@ -31,10 +31,10 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const etMinutes = Number(etParts.find(part=>part.type==="hour")?.value)*60 + Number(etParts.find(part=>part.type==="minute")?.value);
   const inSwingWindow = settings.swingTradingEnabled && etMinutes >= settings.swingEntryStartMinutes && etMinutes <= settings.swingEntryEndMinutes;
   let signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget, minDte:inSwingWindow ? 1 : 0, trendDayEnabled:settings.trendDayEntriesEnabled }) : null;
-  // Scalp lane (paper research): when the main engine is only watching, look for a
-  // VWAP dip-and-reclaim scalp. SPY only — SPX has no autonomous paper venue, and the
-  // scalp record must be built where it can actually trade.
-  if (underlying === "SPY" && settings.scalpEntriesEnabled && market && signal && !signal.action.startsWith("enter")) {
+  // Scalp lane: when the main engine is only watching, look for a VWAP dip-and-reclaim
+  // scalp. SPY scalps trade autonomously on paper; SPX scalps alert instantly (manual
+  // Robinhood play) and execute on the agentic account only when rhAutoEntriesEnabled.
+  if ((underlying === "SPY" || underlying === "SPX") && settings.scalpEntriesEnabled && market && signal && !signal.action.startsWith("enter")) {
     const scalp = generateScalpSignal(market, contracts, { deltaTarget:settings.deltaTarget });
     if (scalp) signal = scalp;
   }
@@ -61,6 +61,21 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {
     const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString() });
     if (signalError) errors.push(`Signal persistence: ${signalError.message}`);
+    // SPX scalps ping Telegram instantly — they are manual Robinhood plays unless the
+    // real-money autonomy toggle is on. One alert per side per hour keeps chop quiet.
+    if (underlying === "SPX" && signal.setup === "scalp_reclaim" && signal.contract) {
+      const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();
+      const hourKey = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",hourCycle:"h23"}).format(new Date()).replaceAll(", ","-");
+      if (owner) {
+        const { createAlert } = await import("@/lib/alerts/server");
+        await createAlert({
+          userId: owner.id, signalId: signal.id, eventKey: `scalp-spx-${signal.action}-${hourKey}`, severity: "warning",
+          title: `SPX SCALP setup: ${signal.action === "enter_call" ? "dip reclaimed — call" : "pop failed — put"}`,
+          body: `${signal.reasons[0]}. Candidate: ${signal.contract.ticker.replace("O:","")} asking $${signal.contract.ask.toFixed(2)}. The scalp plan: target 2x, cut at -25%, and if it hasn't worked in 30 minutes it's over. Autonomous Robinhood execution only happens if the real-money toggle is ON in Settings — otherwise this is a heads-up for a manual play.`,
+          metadata: { kind: "scalp_signal", underlying, contractTicker: signal.contract.ticker, ask: signal.contract.ask },
+        }).catch(error => console.error("spx scalp alert failed", error));
+      }
+    }
   }
   return snapshot;
 }

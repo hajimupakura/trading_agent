@@ -98,6 +98,13 @@ export class RobinhoodExitManager {
   private async manage(position: RhPosition, orders: RhOrder[], quotes: MassiveQuoteStream) {
     const now = Date.now();
     const monitor = await loadMonitor(position.occTicker);
+    // Autonomous entries record their strategy; scalp entries get the scalp exit
+    // envelope (2x target, 25% stop, 30-min box) instead of the burst profile.
+    const { data: entryOrder } = await db.from("rh_entry_orders").select("strategy")
+      .eq("contract_ticker", position.occTicker).neq("status", "rejected")
+      .gte("created_at", new Date(now - 48 * 3_600_000).toISOString())
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const exitMode = entryOrder?.strategy === "scalp" ? "scalp" as const : "burst" as const;
     const orderOpenedAt = openedAtFromOrders(position, orders);
     const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? now;
     const openedAtExact = monitor?.opened_at_exact ?? orderOpenedAt != null;
@@ -110,7 +117,7 @@ export class RobinhoodExitManager {
     const managed: ManagedPosition = {
       ticker: position.occTicker, alpacaSymbol: position.occTicker.slice(2), side: position.optionType,
       quantity: position.quantity, entryPrice: position.entryPrice, peakBid,
-      openedAt, signalId: "", userId: "robinhood", exitMode: "burst",
+      openedAt, signalId: "", userId: "robinhood", exitMode,
       market: { openingRangeHigh: 0, openingRangeLow: 0, referencePrice: 0, chartSymbol: position.chainSymbol },
       closeOrderId: monitor?.close_order_id ?? null,
       closeOrderSubmittedAt: monitor?.close_submitted_at ? Date.parse(monitor.close_submitted_at) : null,
