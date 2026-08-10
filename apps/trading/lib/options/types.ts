@@ -31,7 +31,7 @@ export interface Contract {
 }
 export interface Signal {
   id: string; generatedAt: number; action: "watch" | "enter_call" | "enter_put" | "no_trade";
-  setup: "opening_range" | "trend_continuation" | "none"; confidence: number; reasons: string[]; invalidation: string | null;
+  setup: "opening_range" | "trend_continuation" | "scalp_reclaim" | "none"; confidence: number; reasons: string[]; invalidation: string | null;
   contract: Contract | null; market: Omit<MarketState, "bars">;
 }
 export interface CommandCenter {

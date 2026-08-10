@@ -4,6 +4,7 @@ import { getHorizonChains, getMarketState, getOptionChain } from "./provider";
 import { recordSpxSample } from "./spx-bars";
 import { scanUnusualFlow } from "./flow-scan";
 import { generateSignal } from "./signal";
+import { generateScalpSignal } from "./scalp";
 import type { CommandCenter, Underlying } from "./types";
 import type { RiskSettings } from "@/lib/settings/config";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
@@ -29,7 +30,14 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const etParts = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date());
   const etMinutes = Number(etParts.find(part=>part.type==="hour")?.value)*60 + Number(etParts.find(part=>part.type==="minute")?.value);
   const inSwingWindow = settings.swingTradingEnabled && etMinutes >= settings.swingEntryStartMinutes && etMinutes <= settings.swingEntryEndMinutes;
-  const signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget, minDte:inSwingWindow ? 1 : 0, trendDayEnabled:settings.trendDayEntriesEnabled }) : null;
+  let signal = market ? generateSignal(market, contracts, { deltaTarget:settings.deltaTarget, minDte:inSwingWindow ? 1 : 0, trendDayEnabled:settings.trendDayEntriesEnabled }) : null;
+  // Scalp lane (paper research): when the main engine is only watching, look for a
+  // VWAP dip-and-reclaim scalp. SPY only — SPX has no autonomous paper venue, and the
+  // scalp record must be built where it can actually trade.
+  if (underlying === "SPY" && settings.scalpEntriesEnabled && market && signal && !signal.action.startsWith("enter")) {
+    const scalp = generateScalpSignal(market, contracts, { deltaTarget:settings.deltaTarget });
+    if (scalp) signal = scalp;
+  }
   // Cap per expiration session actually present — on Fridays the short chain carries
   // Fri/Mon/Tue as dte 0/3/4, not 0/1/2 (weekends have no expirations).
   const shortDtes = [...new Set(contracts.map(contract => contract.dte))].sort((a, b) => a - b).slice(0, 3);

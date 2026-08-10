@@ -25,6 +25,17 @@ describe("swing exit handling", () => {
   it("goes flat at 15:10 on the day after entry to beat expiry", () => expect(evaluateExit({ position:swing, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T19:10:00Z") })).toBe("mandatory_time_exit"));
 });
 
+const scalp:ManagedPosition = { ...base, exitMode:"scalp" };
+describe("scalp exit handling", () => {
+  it("banks the 2x target immediately", () => expect(evaluateExit({ position:{...scalp,peakBid:8}, bid:8, underlyingPrice:771, now:at("14:05") })).toBe("scalp_target"));
+  it("stops out at the tighter 25% scalp stop", () => expect(evaluateExit({ position:scalp, bid:3, underlyingPrice:771, now:at("14:05") })).toBe("premium_stop"));
+  it("does not stop between 25% and 30% in burst mode terms", () => expect(evaluateExit({ position:scalp, bid:3.1, underlyingPrice:771, now:at("14:05") })).toBe(null));
+  it("trails 15% after a 30% gain", () => expect(evaluateExit({ position:{...scalp,peakBid:5.3}, bid:4.5, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
+  it("time-boxes the trade at 30 minutes", () => expect(evaluateExit({ position:{...scalp,peakBid:4.4}, bid:4.2, underlyingPrice:771, now:at("14:31") })).toBe("scalp_time_box"));
+  it("ignores underlying invalidation (envelope rules only)", () => expect(evaluateExit({ position:scalp, bid:3.9, underlyingPrice:769.9, now:at("14:05") })).toBe(null));
+  it("still goes flat at 15:10 as a backstop", () => expect(evaluateExit({ position:scalp, bid:4, underlyingPrice:771, now:at("19:10") })).toBe("mandatory_time_exit"));
+});
+
 describe("long-dated position handling", () => {
   it("does not force-flat long-dated positions at 15:10", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, longDated:true, now:at("19:10") })).toBe(null));
   it("keeps the 30% stop for long-dated positions", () => expect(evaluateExit({ position:base, bid:2.7, underlyingPrice:771, longDated:true, now:at("19:10") })).toBe("premium_stop"));

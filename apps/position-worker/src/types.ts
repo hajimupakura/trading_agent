@@ -7,5 +7,5 @@ export interface ManagedPosition {
   signalId:string; userId:string; market:SignalMarket; closeOrderId:string|null; closeOrderSubmittedAt:number|null;
   // burst = full exit engine (stop/trail/time). trend = MAX CONVEXITY ride: only the
   // 50% disaster floor sells; trail and time rules are off (multi-day convexity swings).
-  exitMode:"burst"|"trend";
+  exitMode:"burst"|"trend"|"scalp";
 }

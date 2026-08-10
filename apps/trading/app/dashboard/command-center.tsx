@@ -297,7 +297,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
                 <div>
                   <p className="signal-kicker">CURRENT READ</p>
                   <div className="decision-help" tabIndex={0} aria-describedby="decision-tooltip"><h2>{actionLabel}</h2><span className="hover-tooltip" id="decision-tooltip" role="tooltip">{actionDescription}</span></div>
-                  <p className="signal-subtitle">{signal?.setup === "opening_range" ? "Opening-range continuation" : "No qualified setup yet"}</p>
+                  <p className="signal-subtitle">{signal?.setup === "opening_range" ? "Opening-range continuation" : signal?.setup === "trend_continuation" ? "Trend-day continuation" : signal?.setup === "scalp_reclaim" ? "Scalp: VWAP reclaim (30-min envelope)" : "No qualified setup yet"}</p>
                 </div>
                 <Confidence score={signal?.confidence ?? 0} />
               </div>

@@ -39,6 +39,7 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   if (!owner) return { entered: null };
   const settings = await loadRiskSettings(owner.id);
   if (!settings.autoEntriesEnabled || !settings.paperTradingEnabled) return { entered: null, skipped: "autonomy off" };
+  if (signal.setup === "scalp_reclaim" && !settings.scalpEntriesEnabled) return { entered: null, skipped: "scalp lane off" };
   // One order per signal, ever.
   const { data: existing } = await admin.from("paper_trade_orders").select("id").eq("signal_id", signal.id).limit(1).maybeSingle();
   if (existing) return { entered: null, skipped: "signal already traded" };
@@ -66,7 +67,7 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
     user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
-    risk_snapshot: { autonomous: true, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES }, broker_response: order,
+    risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES }, broker_response: order,
   });
   if (journalError) console.error("auto entry journal failed", journalError);
   return { entered: contract.ticker };
