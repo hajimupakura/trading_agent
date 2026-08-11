@@ -7,15 +7,19 @@ import {getPaperTradingState,getRecentPaperOrders} from "@/lib/alpaca/paper";
 export const dynamic = "force-dynamic";
 async function state(userId:string) {
   const admin = createAdminClient();
-  const [{data:control,error:controlError},{data:statuses,error:statusError},{data:monitors,error:monitorError},paper] = await Promise.all([
+  const [{data:control,error:controlError},{data:statuses,error:statusError},{data:monitors,error:monitorError},{data:recentBuys},paper] = await Promise.all([
     admin.from("position_manager_control").select("auto_exits_enabled,kill_switch,auto_adopt_unmanaged,updated_at").eq("id",true).single(),
     admin.from("position_manager_status").select("enabled,healthy,managed_positions,last_error,last_heartbeat").order("last_heartbeat",{ascending:false}).limit(1),
     admin.from("paper_position_monitors").select("contract_ticker,status,exit_mode").eq("user_id",userId).in("status",["monitoring","closing","error"]),
+    // App-opened positions awaiting their first worker check-in must not trip the
+    // "not protected" alarm — a fresh fill is unmanaged for only a few seconds.
+    admin.from("paper_trade_orders").select("contract_ticker").eq("user_id",userId).eq("action","buy_to_open").gte("created_at",new Date(Date.now()-30*60_000).toISOString()),
     getPaperTradingState(),
   ]);
   if (controlError) throw controlError; if (statusError) throw statusError; if (monitorError) throw monitorError;
   const status = statuses?.[0] ?? null; const heartbeatAge = status ? Date.now()-Date.parse(status.last_heartbeat):Infinity;
-  const managed = new Set((monitors??[]).map(row=>String(row.contract_ticker).replace(/^O:/,"")));
+  const appOpened = new Set((recentBuys??[]).map(row=>String(row.contract_ticker).replace(/^O:/,"")));
+  const managed = new Set([...(monitors??[]).map(row=>String(row.contract_ticker).replace(/^O:/,"")),...appOpened]);
   const exitModes = new Map((monitors??[]).map(row=>[String(row.contract_ticker).replace(/^O:/,""),String(row.exit_mode ?? "burst")]));
   const brokerPositions=paper.positions.map(position=>({symbol:position.symbol,quantity:Number(position.qty),managed:managed.has(position.symbol),exitMode:exitModes.get(position.symbol)??null}));
   return { control,status,online:Boolean(status?.healthy && heartbeatAge<30_000),heartbeatAgeMs:Number.isFinite(heartbeatAge)?heartbeatAge:null,brokerPositions,unmanagedPositions:brokerPositions.filter(position=>!position.managed) };

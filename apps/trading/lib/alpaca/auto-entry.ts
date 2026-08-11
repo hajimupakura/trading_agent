@@ -51,6 +51,9 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   ]);
   const cooldown = entryCooldownActive({ action: signal.action, recentExits: (recentExits ?? []).map(row => ({ contractTicker: String(row.contract_ticker), exitReason: (row.risk_snapshot as { exitReason?: string } | null)?.exitReason ?? null, at: String(row.updated_at) })) });
   if (cooldown) return { entered: null, skipped: "cooldown" };
+  // Never re-enter a contract already held: with maxOpenPositions > 1 the global cap
+  // permits a second position, but doubling the SAME contract is unintended averaging.
+  if (trading.positions.some(position => `O:${position.symbol}` === contract.ticker)) return { entered: null, skipped: "already holding this contract" };
   const quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings });
   const risk = validatePaperEntry({ signal, contract, ...trading, tradesToday, settings, quantity });
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
