@@ -1,5 +1,5 @@
 export const TRADE_UNDERLYINGS = ["SPY", "SPX"] as const;
-export const WATCH_UNDERLYINGS = ["NVDA", "SPCX", "TSLA", "AAPL", "GOOGL", "META", "MSFT", "MU", "ASTS", "SKHY", "SNDK", "QQQ"] as const;
+export const WATCH_UNDERLYINGS = ["NVDA", "SPCX", "TSLA", "AAPL", "GOOGL", "META", "MSFT", "MU", "ASTS", "SKHY", "SNDK", "QQQ", "SLV", "GLD"] as const;
 export type TradeUnderlying = typeof TRADE_UNDERLYINGS[number];
 export type WatchUnderlying = typeof WATCH_UNDERLYINGS[number];
 export type Underlying = TradeUnderlying | WatchUnderlying;
