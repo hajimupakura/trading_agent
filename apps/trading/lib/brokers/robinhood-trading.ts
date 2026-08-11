@@ -56,7 +56,20 @@ export async function resolveOptionInstrument(userId: string, input: { chainSymb
     strike_price: input.strike.toFixed(4), type: input.type, state: "active", tradability: "tradable",
   }));
   const instrument = asList(raw, "instruments")[0];
-  if (!instrument?.id) throw new Error(`No tradable Robinhood instrument for ${input.chainSymbol} ${input.expirationDate} ${input.strike} ${input.type}`);
+  if (!instrument?.id) {
+    // Diagnose instead of shrugging: re-query WITHOUT the state/tradability filters so
+    // the error names what Robinhood actually says about this contract (2026-08-11: a
+    // same-day SPY put came back empty despite the account's expiration-date toggle
+    // being ON — the filters below will reveal whether the API marks 0DTE instruments
+    // closing-only on the agentic surface).
+    const unfiltered = parseToolData(await callRobinhoodTool(userId, "get_option_instruments", {
+      chain_symbol: input.chainSymbol, expiration_dates: input.expirationDate,
+      strike_price: input.strike.toFixed(4), type: input.type,
+    }).catch(() => null));
+    const found = asList(unfiltered, "instruments")[0];
+    const detail = found ? `instrument exists but state=${found.state ?? "?"} tradability=${found.tradability ?? "?"}` : "instrument not returned at all";
+    throw new Error(`No tradable Robinhood instrument for ${input.chainSymbol} ${input.expirationDate} ${input.strike} ${input.type} (${detail})`);
+  }
   return instrument as { id: string };
 }
 
