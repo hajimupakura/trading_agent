@@ -43,12 +43,14 @@ export function generateScalpSignal(market: MarketState, contracts: Contract[], 
     && rsi != null && rsi >= 45 && rsi <= 70
     && last.close > prev.close
     && !["bearish_engulfing", "shooting_star"].includes(technicals.candlePattern);
-  // Put scalp: popped above, and THIS bar crosses back below VWAP.
-  const putTrigger = poppedAbove && prev.close >= vwap && last.close < vwap
-    && vwap - last.close <= MAX_EXT_ATR * atr
-    && rsi != null && rsi <= 55 && rsi >= 30
-    && last.close < prev.close
-    && !["bullish_engulfing", "hammer"].includes(technicals.candlePattern);
+  // Put scalp (pop-fade): BENCHED 2026-08-11 by replay — 59 fire days May-Aug scored
+  // -5.4%/trade avg, 23/59 wins, -$1,284 per $400/trade under the live exits. Fading
+  // pops fought the uptrend regime all summer; the trigger also fired on 60/67 days
+  // (near-noise). Do not re-enable without a regime filter that survives replay.
+  // Benched trigger was: poppedAbove && prev.close >= vwap && last.close < vwap
+  //   && vwap - last.close <= MAX_EXT_ATR * atr && rsi 30-55 && falling close && no bullish candle.
+  const putTrigger = false;
+  void poppedAbove;
 
   const side = callTrigger ? "call" : putTrigger ? "put" : null;
   if (!side) return null;
