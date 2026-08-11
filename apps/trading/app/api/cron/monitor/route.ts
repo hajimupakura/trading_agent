@@ -46,12 +46,12 @@ export async function GET(request: Request) {
   }
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPY first — at small caps it affords the
-  // strong strikes — then SPX, then QQQ when this tick refreshed it. Correlation-group
+  // strong strikes — then SPX, then QQQ/NVDA/TSLA when this tick refreshed them. Correlation-group
   // gates inside the lane cap concurrency at 2 (one S&P slot, one QQQ slot).
   const rhCandidates: Array<CommandCenter | null> = [
     results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null,
     results[1]?.status === "fulfilled" ? (results[1].value as CommandCenter) : null,
-    ...watchGroup.flatMap((symbol, index) => symbol === "QQQ" && results[index + 2]?.status === "fulfilled" ? [(results[index + 2] as PromiseFulfilledResult<CommandCenter>).value] : []),
+    ...watchGroup.flatMap((symbol, index) => ["QQQ", "NVDA", "TSLA"].includes(symbol) && results[index + 2]?.status === "fulfilled" ? [(results[index + 2] as PromiseFulfilledResult<CommandCenter>).value] : []),
   ];
   let rhAutoEntry: { entered: string | null; skipped?: string } = { entered: null };
   for (const candidate of rhCandidates) {

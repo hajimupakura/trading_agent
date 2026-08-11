@@ -6,7 +6,7 @@ import { activeEconomicGuard } from "@/lib/options/economic-calendar";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "./robinhood-trading";
 import type { CommandCenter } from "@/lib/options/types";
 
-// Fully autonomous REAL-MONEY entries on the Robinhood agentic account — SPY/SPX/QQQ.\n// SPY preferred at small caps (strong strikes fit $250; tighter spreads); SPX resumes\n// primacy when caps afford its real strikes.
+// Fully autonomous REAL-MONEY entries on the Robinhood agentic account — SPY/SPX/QQQ/NVDA/TSLA.\n// SPY preferred at small caps (strong strikes fit $250; tighter spreads); SPX resumes\n// primacy when caps afford its real strikes.
 // Mirrors the Alpaca paper auto-entry gate chain, but with its own (tighter) caps
 // because these are real dollars: rhAutoEntriesEnabled is OFF by default and every
 // gate is deterministic. Exits need no wiring here — the Railway worker discovers
@@ -30,7 +30,7 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
-  if (!["SPX", "SPY", "QQQ"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
+  if (!["SPX", "SPY", "QQQ", "NVDA", "TSLA"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
   // Real-money lane: every decision on a real signal is journaled, and an unexpected
   // throw pages as critical — a silent miss here is itself an incident (2026-08-11:
   // a $180 in-cap signal at 10:25 skipped with no trace; cause unrecoverable).
@@ -74,8 +74,9 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const { data: openRows } = await admin.from("rh_position_monitors").select("occ_ticker").in("status", ["monitoring", "closing", "error"]);
   const open = (openRows ?? []).map(row => String(row.occ_ticker));
   if (open.length >= 2) return { entered: null, skipped: "two positions already open" };
-  const groupOf = (occ: string) => /^O:(SPXW|SPY)/.test(occ) ? "sp" : "other";
-  const entryGroup = contract.underlying === "QQQ" ? "other" : "sp";
+  // Groups: SPY/SPX are one market; each other underlying is its own slot. Max 2 open.
+  const groupOf = (occ: string) => /^O:(SPXW|SPY)\d/.test(occ) ? "sp" : (/^O:([A-Z]+?)\d{6}[CP]/.exec(occ)?.[1] ?? "other");
+  const entryGroup = ["SPX", "SPY"].includes(contract.underlying) ? "sp" : contract.underlying;
   if (open.some(occ => groupOf(occ) === entryGroup)) return { entered: null, skipped: `a ${entryGroup === "sp" ? "SPY/SPX" : "QQQ"} position is already open` };
   if (open.includes(contract.ticker)) return { entered: null, skipped: "same contract already open" };
   const { count: todayCount } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
