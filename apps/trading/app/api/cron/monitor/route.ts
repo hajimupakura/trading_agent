@@ -44,10 +44,15 @@ export async function GET(request: Request) {
     autoEntry = await runAutoEntry(candidate.snapshot, candidate.underlying).catch(error => { console.error("auto entry failed", candidate.underlying, error); return { entered:null, skipped:String(error) }; });
     if (autoEntry.entered) break;
   }
-  // Real-money SPX entries on the Robinhood agentic account (separate venue, its own
-  // caps, OFF unless settings.rhAutoEntriesEnabled). Exits are the worker's job.
-  const rhAutoEntry = await runRobinhoodAutoEntry(results[1]?.status === "fulfilled" ? (results[1].value as CommandCenter) : null)
-    .catch(error => { console.error("rh auto entry failed", error); return { entered:null, skipped:String(error) }; });
+  // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
+  // OFF unless settings.rhAutoEntriesEnabled). SPY first — at small caps it affords the
+  // strong strikes — then SPX; the one-position gate stops a same-tick double-spend.
+  let rhAutoEntry: { entered: string | null; skipped?: string } = { entered: null };
+  for (const index of [0, 1]) {
+    rhAutoEntry = await runRobinhoodAutoEntry(results[index]?.status === "fulfilled" ? (results[index].value as CommandCenter) : null)
+      .catch(error => { console.error("rh auto entry failed", error); return { entered:null, skipped:String(error) }; });
+    if (rhAutoEntry.entered) break;
+  }
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });

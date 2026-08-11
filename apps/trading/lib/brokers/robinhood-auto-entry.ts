@@ -6,7 +6,7 @@ import { activeEconomicGuard } from "@/lib/options/economic-calendar";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "./robinhood-trading";
 import type { CommandCenter } from "@/lib/options/types";
 
-// Fully autonomous REAL-MONEY entries on the Robinhood agentic account — SPX ONLY.
+// Fully autonomous REAL-MONEY entries on the Robinhood agentic account — SPY + SPX.\n// SPY preferred at small caps (strong strikes fit $250; tighter spreads); SPX resumes\n// primacy when caps afford its real strikes.
 // Mirrors the Alpaca paper auto-entry gate chain, but with its own (tighter) caps
 // because these are real dollars: rhAutoEntriesEnabled is OFF by default and every
 // gate is deterministic. Exits need no wiring here — the Railway worker discovers
@@ -30,7 +30,7 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
-  if (contract.underlying !== "SPX") return { entered: null, skipped: "not SPX" };
+  if (!["SPX", "SPY"].includes(contract.underlying)) return { entered: null, skipped: "not SPX/SPY" };
   // Real-money lane: every decision on a real signal is journaled, and an unexpected
   // throw pages as critical — a silent miss here is itself an incident (2026-08-11:
   // a $180 in-cap signal at 10:25 skipped with no trace; cause unrecoverable).
@@ -107,7 +107,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // Journal FIRST (unique signal_id is the concurrency lock), then place. A placement
   // failure marks the row rejected so the signal can never fire a second live order.
   const { error: journalError } = await admin.from("rh_entry_orders").insert({
-    user_id: userId, signal_id: signal.id, ref_id: refId, underlying: "SPX", contract_ticker: chosen.ticker,
+    user_id: userId, signal_id: signal.id, ref_id: refId, underlying: contract.underlying, contract_ticker: chosen.ticker,
     quantity, limit_price: limitPrice, max_debit: debit, status: "submitted",
     strategy: signal.setup === "scalp_reclaim" ? "scalp" : "orb",
   });
@@ -115,13 +115,13 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   try {
     const { order } = await reviewAndPlaceOptionOrder(userId, {
       accountNumber: String(agentic.account_number), optionId: instrument.id, side: "buy", positionEffect: "open",
-      quantity, limitPrice, chainSymbol, underlyingType: "index", refId,
+      quantity, limitPrice, chainSymbol, underlyingType: chainSymbol === "SPXW" ? "index" as const : "equity" as const, refId,
     });
     await admin.from("rh_entry_orders").update({ broker_response: order ?? null }).eq("ref_id", refId);
     await createAlert({
       userId, signalId: signal.id, eventKey: `rh-auto-entry-${refId}`, severity: "success",
-      title: `AUTONOMOUS Robinhood entry: bought ${quantity} SPX ${chosen.side}${quantity === 1 ? "" : "s"} (real money)`,
-      body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on the agentic account: BUY ${quantity} × SPXW ${chosen.expirationDate} ${chosen.strike}${chosen.side === "call" ? "C" : "P"} at a $${limitPrice.toFixed(2)} limit — about $${debit.toFixed(0)} of real money at risk. The worker guards the exit (30% stop, profit trail, 3:10 PM hard exit). Emergency stop in the dashboard halts future entries; the Robinhood autonomy toggle is in Settings.`,
+      title: `AUTONOMOUS Robinhood entry: bought ${quantity} ${contract.underlying} ${chosen.side}${quantity === 1 ? "" : "s"} (real money)`,
+      body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on the agentic account: BUY ${quantity} × ${chainSymbol} ${chosen.expirationDate} ${chosen.strike}${chosen.side === "call" ? "C" : "P"} at a $${limitPrice.toFixed(2)} limit — about $${debit.toFixed(0)} of real money at risk. The worker guards the exit (30% stop, profit trail, 3:10 PM hard exit). Emergency stop in the dashboard halts future entries; the Robinhood autonomy toggle is in Settings.`,
       metadata: { kind: "rh_auto_entry", refId, contractTicker: chosen.ticker, limitPrice, quantity, maxDebit: debit },
     }).catch(error => console.error("rh auto entry alert failed", error));
     return { entered: contract.ticker };
@@ -131,7 +131,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     await createAlert({
       userId, eventKey: `rh-auto-entry-fail-${refId}`, severity: "critical",
       title: "Autonomous Robinhood entry FAILED at the broker",
-      body: `The engine tried to buy ${quantity} × SPXW ${chosen.expirationDate} ${chosen.strike}${chosen.side === "call" ? "C" : "P"} but Robinhood rejected it: ${message}. No money moved. The signal is marked used and will not retry.`,
+      body: `The engine tried to buy ${quantity} × ${chainSymbol} ${chosen.expirationDate} ${chosen.strike}${chosen.side === "call" ? "C" : "P"} but Robinhood rejected it: ${message}. No money moved. The signal is marked used and will not retry.`,
       metadata: { kind: "rh_auto_entry_failed", refId, error: message },
     }).catch(alertError => console.error("rh auto entry failure alert failed", alertError));
     return { entered: null, skipped: `broker: ${message}` };
