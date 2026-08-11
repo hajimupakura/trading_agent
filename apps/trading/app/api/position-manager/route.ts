@@ -16,13 +16,30 @@ async function state(userId:string) {
     admin.from("paper_trade_orders").select("contract_ticker").eq("user_id",userId).eq("action","buy_to_open").gte("created_at",new Date(Date.now()-30*60_000).toISOString()),
     getPaperTradingState(),
   ]);
+  // Robinhood real-money snapshot for the dashboard strip (worker-synced, no broker round-trip).
+  const todayEt = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date());
+  const [{data:rhPortfolio},{data:rhOpen},{count:rhTradesToday},{data:rhSettings}] = await Promise.all([
+    admin.from("broker_portfolio_snapshots").select("payload,updated_at").eq("broker","robinhood").maybeSingle(),
+    admin.from("rh_position_monitors").select("occ_ticker,entry_price,latest_bid,peak_bid,exit_mode").in("status",["monitoring","closing"]),
+    admin.from("rh_entry_orders").select("id",{count:"exact",head:true}).gte("created_at",new Date(`${todayEt}T00:00:00-04:00`).toISOString()).neq("status","rejected"),
+    admin.from("user_settings").select("rh_auto_entries_enabled,rh_max_trades_per_day,rh_max_trade_debit").eq("user_id",userId).maybeSingle(),
+  ]);
+  const rh = {
+    portfolio: (rhPortfolio?.payload ?? null) as { totalValue?:number; cash?:number; buyingPower?:number; optionsValue?:number } | null,
+    portfolioAt: rhPortfolio?.updated_at ?? null,
+    openPositions: (rhOpen??[]).map(row=>({ ticker:String(row.occ_ticker).replace(/^O:/,""), entry:Number(row.entry_price), bid:Number(row.latest_bid), exitMode:String(row.exit_mode??"burst") })),
+    tradesToday: rhTradesToday ?? 0,
+    autonomy: Boolean(rhSettings?.rh_auto_entries_enabled),
+    maxTradesPerDay: Number(rhSettings?.rh_max_trades_per_day ?? 2),
+    maxTradeDebit: Number(rhSettings?.rh_max_trade_debit ?? 250),
+  };
   if (controlError) throw controlError; if (statusError) throw statusError; if (monitorError) throw monitorError;
   const status = statuses?.[0] ?? null; const heartbeatAge = status ? Date.now()-Date.parse(status.last_heartbeat):Infinity;
   const appOpened = new Set((recentBuys??[]).map(row=>String(row.contract_ticker).replace(/^O:/,"")));
   const managed = new Set([...(monitors??[]).map(row=>String(row.contract_ticker).replace(/^O:/,"")),...appOpened]);
   const exitModes = new Map((monitors??[]).map(row=>[String(row.contract_ticker).replace(/^O:/,""),String(row.exit_mode ?? "burst")]));
   const brokerPositions=paper.positions.map(position=>({symbol:position.symbol,quantity:Number(position.qty),managed:managed.has(position.symbol),exitMode:exitModes.get(position.symbol)??null}));
-  return { control,status,online:Boolean(status?.healthy && heartbeatAge<30_000),heartbeatAgeMs:Number.isFinite(heartbeatAge)?heartbeatAge:null,brokerPositions,unmanagedPositions:brokerPositions.filter(position=>!position.managed) };
+  return { control,status,online:Boolean(status?.healthy && heartbeatAge<30_000),heartbeatAgeMs:Number.isFinite(heartbeatAge)?heartbeatAge:null,brokerPositions,unmanagedPositions:brokerPositions.filter(position=>!position.managed),rh };
 }
 async function reconcileExitAlerts(userId:string){const admin=createAdminClient();const [{data:monitors,error:monitorError},{data:journals,error:journalError},orders]=await Promise.all([admin.from("paper_position_monitors").select("contract_ticker,signal_id,status,last_error,close_order_id,exit_reason,latest_bid,updated_at").eq("user_id",userId).in("status",["closing","error"]),admin.from("paper_trade_orders").select("alpaca_order_id,signal_id,contract_ticker,status,limit_price").eq("user_id",userId).eq("action","sell_to_close").order("created_at",{ascending:false}).limit(50),getRecentPaperOrders()]);if(monitorError)throw monitorError;if(journalError)throw journalError;for(const monitor of monitors??[]){if(monitor.status==="error")await createAlert({userId,signalId:monitor.signal_id,eventKey:`monitor-error-${userId}-${monitor.contract_ticker}-${String(monitor.updated_at).slice(0,13)}`,severity:"critical",title:"Automatic exit monitoring error",body:`${monitor.contract_ticker}: ${monitor.last_error??"unknown monitoring failure"}. Check Alpaca immediately.`,metadata:monitor});}
   for(const journal of journals??[]){const order=orders.find(item=>item.id===journal.alpaca_order_id);const status=order?.status??journal.status;const fill=Number(order?.filled_avg_price??order?.limit_price??journal.limit_price);const failed=["rejected","canceled","expired","suspended"].includes(status);const filled=status==="filled";await createAlert({userId,signalId:journal.signal_id,eventKey:`paper-exit-${status}-${journal.alpaca_order_id}`,severity:failed?"critical":filled?"success":"warning",title:failed?"Paper exit needs attention":filled?"Paper exit filled":"Paper exit working",body:failed?`SELL ${journal.contract_ticker} is ${status}. Check Alpaca immediately.`:filled?`SELL ${journal.contract_ticker} filled near $${fill.toFixed(2)}. The position is closed.`:`SELL ${journal.contract_ticker} is ${status} near $${fill.toFixed(2)}.`,metadata:{orderId:journal.alpaca_order_id,contractTicker:journal.contract_ticker,status,fillPrice:Number.isFinite(fill)?fill:null}});if(order&&order.status!==journal.status){const {error}=await admin.from("paper_trade_orders").update({status:order.status,limit_price:Number.isFinite(fill)&&fill>0?fill:journal.limit_price,broker_response:order,updated_at:new Date().toISOString()}).eq("alpaca_order_id",journal.alpaca_order_id);if(error)throw error;}}
