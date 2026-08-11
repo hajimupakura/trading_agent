@@ -74,7 +74,19 @@ export async function resolveOptionInstrument(userId: string, input: { chainSymb
       console.log(JSON.stringify({ event: "rh_instrument_resolved_on_retry", ticker: `${input.chainSymbol} ${input.expirationDate} ${input.strike}${input.type[0].toUpperCase()}` }));
       return found as { id: string };
     }
-    const detail = found ? `instrument exists but state=${found.state ?? "?"} tradability=${found.tradability ?? "?"}` : "instrument not returned at all";
+    // Third attempt after a beat: back-to-back calls share a transient outage; a 1.5s
+    // pause decorrelates. Only after all three misses does the caller's fallback run.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const third = parseToolData(await callRobinhoodTool(userId, "get_option_instruments", {
+      chain_symbol: input.chainSymbol, expiration_dates: input.expirationDate,
+      strike_price: input.strike.toFixed(4), type: input.type, state: "active", tradability: "tradable",
+    }).catch(() => null));
+    const late = asList(third, "instruments")[0];
+    if (late?.id) {
+      console.log(JSON.stringify({ event: "rh_instrument_resolved_on_third_try", ticker: `${input.chainSymbol} ${input.expirationDate} ${input.strike}${input.type[0].toUpperCase()}` }));
+      return late as { id: string };
+    }
+    const detail = found ? `instrument exists but state=${found.state ?? "?"} tradability=${found.tradability ?? "?"}` : "instrument not returned at all (3 attempts)";
     throw new Error(`No tradable Robinhood instrument for ${input.chainSymbol} ${input.expirationDate} ${input.strike} ${input.type} (${detail})`);
   }
   return instrument as { id: string };
