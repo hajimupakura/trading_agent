@@ -4,6 +4,7 @@ import { createAlert } from "@/lib/alerts/server";
 import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { PAPER_RULES, computePositionSize, entryCooldownActive, validatePaperEntry } from "./risk";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
+import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import type { CommandCenter } from "@/lib/options/types";
 
 // Fully autonomous PAPER entries — SPY plus every watchlist ticker (SPX excluded:
@@ -51,6 +52,9 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   ]);
   const cooldown = entryCooldownActive({ action: signal.action, recentExits: (recentExits ?? []).map(row => ({ contractTicker: String(row.contract_ticker), exitReason: (row.risk_snapshot as { exitReason?: string } | null)?.exitReason ?? null, at: String(row.updated_at) })) });
   if (cooldown) return { entered: null, skipped: "cooldown" };
+  const etMin = (() => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); })();
+  const earningsBlock = await activeEarningsGuard(underlying, { swingEntry: etMin >= 930 });
+  if (earningsBlock) return { entered: null, skipped: earningsBlock };
   // Never re-enter a contract already held: with maxOpenPositions > 1 the global cap
   // permits a second position, but doubling the SAME contract is unintended averaging.
   if (trading.positions.some(position => `O:${position.symbol}` === contract.ticker)) return { entered: null, skipped: "already holding this contract" };

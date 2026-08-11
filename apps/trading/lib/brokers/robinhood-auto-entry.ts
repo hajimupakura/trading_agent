@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEconomicGuard } from "@/lib/options/economic-calendar";
+import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "./robinhood-trading";
 import type { CommandCenter } from "@/lib/options/types";
 
@@ -65,6 +66,8 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const { data: control } = await admin.from("position_manager_control").select("kill_switch").eq("id", true).single();
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
   if (settings.economicGuardEnabled && activeEconomicGuard()) return { entered: null, skipped: "economic guard" };
+  const earningsBlock = await activeEarningsGuard(contract.underlying);
+  if (earningsBlock) return { entered: null, skipped: earningsBlock };
   const minutes = etMinutes();
   if (minutes < settings.entryStartMinutes || minutes > settings.entryEndMinutes) return { entered: null, skipped: "outside entry window" };
   if (!settings.allowedDte.includes(contract.dte as 0 | 1 | 2)) return { entered: null, skipped: `dte ${contract.dte} not allowed` };

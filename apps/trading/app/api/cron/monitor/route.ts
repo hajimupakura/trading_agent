@@ -12,6 +12,7 @@ import { runTradeReviews } from "@/lib/options/trade-review";
 import { reportJobHealth } from "@/lib/ops/heartbeat";
 import { runSurgeRadar } from "@/lib/options/surge-radar";
 import { runMetalTriggers } from "@/lib/options/metals-triggers";
+import { runEarningsCalendarCheck } from "@/lib/options/earnings-guard";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -64,6 +65,8 @@ export async function GET(request: Request) {
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Metals thesis triggers (SLV>$60 close, GLD weekly MACD cross) — post-close check, fires once each.
   const metals = await runMetalTriggers().catch(error => { console.error("metal triggers failed", error); return { checked:false, fired:[] as string[] }; });
+  const earningsCheck = await runEarningsCalendarCheck().catch(error => { console.error("earnings calendar check failed", error); return { checked:false, missing:[] as string[] }; });
+  void earningsCheck;
   const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
   // Historical replay backtest: one queued session per tick, on minutes clear of the
