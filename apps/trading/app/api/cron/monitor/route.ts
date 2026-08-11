@@ -11,6 +11,7 @@ import { runResearchFetches } from "@/lib/options/research-fetch";
 import { runTradeReviews } from "@/lib/options/trade-review";
 import { reportJobHealth } from "@/lib/ops/heartbeat";
 import { runSurgeRadar } from "@/lib/options/surge-radar";
+import { runMetalTriggers } from "@/lib/options/metals-triggers";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -50,6 +51,8 @@ export async function GET(request: Request) {
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
+  // Metals thesis triggers (SLV>$60 close, GLD weekly MACD cross) — post-close check, fires once each.
+  const metals = await runMetalTriggers().catch(error => { console.error("metal triggers failed", error); return { checked:false, fired:[] as string[] }; });
   const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
   // Historical replay backtest: one queued session per tick, on minutes clear of the
@@ -71,5 +74,5 @@ export async function GET(request: Request) {
     replay: replay === null ? null : (replay.error ? [replay.error] : []),
     research: research === null ? null : (research.error ? [research.error] : []),
   }).catch(error => console.error("heartbeat failed", error));
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, metals, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
