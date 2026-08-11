@@ -87,24 +87,25 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // Cooldown: no re-entry within 30 minutes of any monitor closing (stop-out or otherwise).
   const { data: recentClose } = await admin.from("rh_position_monitors").select("id").eq("status", "closed").gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
   if (recentClose) return { entered: null, skipped: "cooldown after exit" };
-  // Sizing: whole contracts under the per-trade debit cap, priced at the ask so the
-  // limit is marketable. If the SIGNAL's contract (delta-targeted ~0.45, often $500+
-  // on SPX) exceeds the cap, shop the same expiry for the strongest contract that
-  // FITS — highest |delta| with ask*100 <= cap — instead of standing down. On a $250
-  // cap this trades the $1.50-2.50 wings, which is exactly the affordable-SPX style;
-  // the exit engine's rules are identical either way.
-  let chosen = contract;
-  if (!(chosen.ask > 0) || chosen.ask * 100 > settings.rhMaxTradeDebit) {
-    const affordable = (snapshot.contracts ?? [])
-      .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
-        && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
-      .sort((a, b) => Math.abs(b.delta!) - Math.abs(a.delta!))[0];
-    if (!affordable) return { entered: null, skipped: `no eligible contract fits the $${settings.rhMaxTradeDebit} cap` };
-    chosen = affordable;
-  }
+  // Sizing: fill the debit cap with the best AGGREGATE exposure. For every eligible
+  // same-expiry contract (the strict volume/spread/liquidity screen is the
+  // "fundamentals" gate), compute how many fit under the cap and score by
+  // quantity x |delta| — 5 cheap contracts summing to $250 beat 1 mid strike when
+  // their combined exposure is larger. Ties go to the higher per-contract delta
+  // (fewer, stronger contracts bleed less to spreads and time decay).
+  const basket = [contract, ...(snapshot.contracts ?? [])]
+    .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
+      && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
+    .map(candidate => {
+      const fit = Math.min(Math.floor(settings.rhMaxTradeDebit / (candidate.ask * 100)), settings.maxContractsPerTrade);
+      return { candidate, fit, score: fit * Math.abs(candidate.delta!) };
+    })
+    .filter(entry => entry.fit >= 1)
+    .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
+  if (!basket) return { entered: null, skipped: `no eligible contract fits the $${settings.rhMaxTradeDebit} cap` };
+  const chosen = basket.candidate;
   const limitPrice = Number(chosen.ask.toFixed(2));
-  const quantity = Math.min(Math.floor(settings.rhMaxTradeDebit / (limitPrice * 100)), settings.maxContractsPerTrade);
-  if (quantity < 1) return { entered: null, skipped: `contract too expensive ($${(limitPrice * 100).toFixed(0)} > $${settings.rhMaxTradeDebit} cap)` };
+  const quantity = basket.fit;
   const debit = quantity * limitPrice * 100;
   const accounts = await getRobinhoodAccounts(userId);
   const agentic = accounts.find((account: any) =>
