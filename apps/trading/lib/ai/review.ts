@@ -97,6 +97,42 @@ export async function runMorningBrief(): Promise<boolean> {
   return true;
 }
 
+// ---------------------------------------------------------------- intraday tape reads
+// Three scheduled narrative reads of the SPY/SPX setup — the same interpretation a
+// desk trader gives glancing at the chart: posture vs VWAP/opening range, the exact
+// trigger levels either direction, volume character, and what would invalidate it.
+const TAPE_SLOTS = [
+  { key: "open", from: 585, to: 599, title: "Opening read — posture and trigger levels" },
+  { key: "midday", from: 750, to: 764, title: "Midday check — is the morning read holding" },
+  { key: "power", from: 930, to: 944, title: "Power hour — closing posture and swing watch" },
+] as const;
+
+async function runTapeRead(slot: typeof TAPE_SLOTS[number]): Promise<boolean> {
+  const userId = await ownerId();
+  if (!userId || !aiConfigured()) return false;
+  const today = etParts().date;
+  const eventKey = `ai-brief-tape-${slot.key}-${today}`;
+  if (await alertExists(eventKey)) return false;
+  const { data } = await createAdminClient().from("options_monitor_snapshots").select("underlying,payload").in("underlying", ["SPY", "SPX"]);
+  const detail = (data ?? []).map(row => {
+    const payload = row.payload as CommandCenter | null; const market = payload?.market;
+    if (!market) return `${row.underlying}: no market data`;
+    const tech = market.technicals;
+    return [
+      `${row.underlying}: price $${market.price.toFixed(2)}, VWAP/ref $${market.referencePrice.toFixed(2)}, regime ${market.regime}`,
+      `opening range ${market.openingRangeLow.toFixed(2)}-${market.openingRangeHigh.toFixed(2)}, RSI ${tech.rsi14?.toFixed(0) ?? "n/a"}, ATR ${tech.atr14?.toFixed(2) ?? "n/a"}, relative volume ${tech.relativeVolume?.toFixed(2) ?? "n/a"}x, candle ${tech.candlePattern}`,
+      `engine: ${payload?.signal?.action ?? "n/a"} — ${(payload?.signal?.reasons ?? []).join("; ")}`,
+    ].join(" · ");
+  }).join("\n");
+  const read = await chatComplete({
+    system: "You are the intraday tape reader for Velocity, a disciplined SPY/SPX options system. Write ONE compact setup read (120-180 words, plain text): 1) posture in plain English (where price sits vs VWAP and the opening range, volume character, momentum); 2) the EXACT trigger levels that would turn this into the engine's bullish or bearish setup, and which is closer; 3) what would make today a no-trade day. Use ONLY the numbers provided; never invent any. Never tell the user to trade — the engine decides entries. Beginner-friendly: explain jargon briefly on first use, prefer 'buyers/sellers in control' over technical shorthand. If the tape is dead or data thin, say exactly that in one short paragraph.",
+    user: `Slot: ${slot.key} (${etParts().date}). Live engine state:\n${detail || "no snapshots"}`,
+    maxTokens: 500,
+  });
+  await createAlert({ userId, eventKey, severity: "info", title: slot.title, body: read, metadata: { kind: "ai_tape_read", slot: slot.key } });
+  return true;
+}
+
 // ---------------------------------------------------------------- trade critique
 
 export interface CritiqueTicket {
@@ -245,6 +281,9 @@ export async function maybeRunScheduledReviews(): Promise<string[]> {
   if (!settings.aiReviewEnabled) return [];
   const ran: string[] = [];
   if (clock.minutes >= 555 && clock.minutes < 570 && await runMorningBrief()) ran.push("morning-brief");
+  for (const slot of TAPE_SLOTS) {
+    if (clock.minutes >= slot.from && clock.minutes <= slot.to && await runTapeRead(slot).catch(error => { console.error("tape read failed", slot.key, error); return false; })) ran.push(`tape-${slot.key}`);
+  }
   if (clock.weekday === "Fri" && clock.minutes >= 1005 && clock.minutes < 1020 && await runWeeklyPostMortem()) ran.push("weekly-postmortem");
   // Noise digest: every 30 minutes at :05/:35 from 10:05 through the 16:35 sweep.
   // Deliberately OFF the :00/:30 marks — those are %15 ticks where the cron does its
