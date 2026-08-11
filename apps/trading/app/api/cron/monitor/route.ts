@@ -46,10 +46,16 @@ export async function GET(request: Request) {
   }
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPY first — at small caps it affords the
-  // strong strikes — then SPX; the one-position gate stops a same-tick double-spend.
+  // strong strikes — then SPX, then QQQ when this tick refreshed it. Correlation-group
+  // gates inside the lane cap concurrency at 2 (one S&P slot, one QQQ slot).
+  const rhCandidates: Array<CommandCenter | null> = [
+    results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null,
+    results[1]?.status === "fulfilled" ? (results[1].value as CommandCenter) : null,
+    ...watchGroup.flatMap((symbol, index) => symbol === "QQQ" && results[index + 2]?.status === "fulfilled" ? [(results[index + 2] as PromiseFulfilledResult<CommandCenter>).value] : []),
+  ];
   let rhAutoEntry: { entered: string | null; skipped?: string } = { entered: null };
-  for (const index of [0, 1]) {
-    rhAutoEntry = await runRobinhoodAutoEntry(results[index]?.status === "fulfilled" ? (results[index].value as CommandCenter) : null)
+  for (const candidate of rhCandidates) {
+    rhAutoEntry = await runRobinhoodAutoEntry(candidate)
       .catch(error => { console.error("rh auto entry failed", error); return { entered:null, skipped:String(error) }; });
     if (rhAutoEntry.entered) break;
   }
