@@ -67,6 +67,13 @@ export async function resolveOptionInstrument(userId: string, input: { chainSymb
       strike_price: input.strike.toFixed(4), type: input.type,
     }).catch(() => null));
     const found = asList(unfiltered, "instruments")[0];
+    // Self-heal transient flakes (2026-08-11: a filtered lookup returned empty at
+    // 14:02 for a contract probes later proved active+tradable): if the retry finds
+    // the instrument healthy, use it rather than failing the signal.
+    if (found?.id && found.state === "active" && found.tradability === "tradable") {
+      console.log(JSON.stringify({ event: "rh_instrument_resolved_on_retry", ticker: `${input.chainSymbol} ${input.expirationDate} ${input.strike}${input.type[0].toUpperCase()}` }));
+      return found as { id: string };
+    }
     const detail = found ? `instrument exists but state=${found.state ?? "?"} tradability=${found.tradability ?? "?"}` : "instrument not returned at all";
     throw new Error(`No tradable Robinhood instrument for ${input.chainSymbol} ${input.expirationDate} ${input.strike} ${input.type} (${detail})`);
   }
