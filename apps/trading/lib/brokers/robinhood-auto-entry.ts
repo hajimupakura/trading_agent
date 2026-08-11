@@ -103,17 +103,37 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     .filter(entry => entry.fit >= 1)
     .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
   if (!basket) return { entered: null, skipped: `no eligible contract fits the $${settings.rhMaxTradeDebit} cap` };
-  const chosen = basket.candidate;
-  const limitPrice = Number(chosen.ask.toFixed(2));
-  const quantity = basket.fit;
-  const debit = quantity * limitPrice * 100;
+  let chosen = basket.candidate;
+
   const accounts = await getRobinhoodAccounts(userId);
   const agentic = accounts.find((account: any) =>
     [account?.agentic_allowed, account?.is_agentic].some(flag => flag === true || flag === "true" || flag === 1)
     || String(account?.account_type ?? account?.type ?? "").toLowerCase().includes("agentic"));
   if (!agentic?.account_number) return { entered: null, skipped: "no agentic account" };
-  const chainSymbol = /^O:([A-Z]+?)\d{6}[CP]/.exec(chosen.ticker)?.[1] ?? "SPXW";
-  const instrument = await resolveOptionInstrument(userId, { chainSymbol, expirationDate: chosen.expirationDate, strike: chosen.strike, type: chosen.side });
+  let chainSymbol = /^O:([A-Z]+?)\d{6}[CP]/.exec(chosen.ticker)?.[1] ?? "SPXW";
+  let instrument;
+  try {
+    instrument = await resolveOptionInstrument(userId, { chainSymbol, expirationDate: chosen.expirationDate, strike: chosen.strike, type: chosen.side });
+  } catch (resolveError) {
+    // Robinhood commonly refuses same-day contracts (expiration-date trading is an
+    // account permission; even enabled it closes at 15:30 ET). Fall back to the best
+    // cap-filling basket on the NEXT expiry instead of abandoning the signal.
+    if (chosen.dte !== 0) throw resolveError;
+    const fallback = [contract, ...(snapshot.contracts ?? [])]
+      .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate !== chosen.expirationDate
+        && candidate.dte <= 2 && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
+      .map(candidate => ({ candidate, fit: Math.min(Math.floor(settings.rhMaxTradeDebit / (candidate.ask * 100)), settings.maxContractsPerTrade) }))
+      .filter(entry => entry.fit >= 1)
+      .sort((a, b) => b.fit * Math.abs(b.candidate.delta!) - a.fit * Math.abs(a.candidate.delta!))[0];
+    if (!fallback) return { entered: null, skipped: `0DTE refused by Robinhood and no next-expiry contract fits the cap` };
+    chosen = fallback.candidate;
+    chainSymbol = /^O:([A-Z]+?)\d{6}[CP]/.exec(chosen.ticker)?.[1] ?? chainSymbol;
+    instrument = await resolveOptionInstrument(userId, { chainSymbol, expirationDate: chosen.expirationDate, strike: chosen.strike, type: chosen.side });
+  }
+  const limitPrice = Number(chosen.ask.toFixed(2));
+  const quantity = Math.min(Math.floor(settings.rhMaxTradeDebit / (limitPrice * 100)), settings.maxContractsPerTrade);
+  if (quantity < 1) return { entered: null, skipped: "chosen contract no longer fits the cap" };
+  const debit = quantity * limitPrice * 100;
   const refId = crypto.randomUUID();
   // Journal FIRST (unique signal_id is the concurrency lock), then place. A placement
   // failure marks the row rejected so the signal can never fire a second live order.
