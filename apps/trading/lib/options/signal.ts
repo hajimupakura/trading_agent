@@ -4,11 +4,16 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   const minDte = options?.minDte ?? 0;
   const eligible = contracts.filter(contract => contract.eligible && contract.dte >= minDte);
   const deltaTarget = options?.deltaTarget ?? .45;
-  // Deliberate contract choice: nearest |delta| to the target (missing delta = worst),
-  // liquidity score breaks ties — instead of "whichever contract ranked first".
+  // Deliberate contract choice: SHORTEST available expiry first (every replay that
+  // validated these setups ran 0DTE, and positions go flat by 15:10 regardless — longer
+  // expiries pay for time the strategy never uses and mute the payoff; 2026-08-11: a
+  // delta-nearest 2DTE pick made +53% where the same-day contract made ~3x that), then
+  // nearest |delta| to the target within that expiry, liquidity breaking ties.
   const pickContract = (side: Contract["side"]) => {
-    const candidates = eligible.filter(contract => contract.side === side);
-    if (!candidates.length) return null;
+    const sided = eligible.filter(contract => contract.side === side);
+    if (!sided.length) return null;
+    const minDteAvailable = Math.min(...sided.map(contract => contract.dte));
+    const candidates = sided.filter(contract => contract.dte === minDteAvailable);
     const distance = (contract: Contract) => contract.delta == null ? .5 : Math.abs(Math.abs(contract.delta) - deltaTarget);
     return candidates.slice().sort((a, b) => distance(a) - distance(b) || b.liquidityScore - a.liquidityScore)[0];
   };
