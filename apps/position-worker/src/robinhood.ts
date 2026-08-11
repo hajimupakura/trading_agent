@@ -68,6 +68,23 @@ export class RobinhoodExitManager {
     if (state.diag) console.log(JSON.stringify({ event: "rh_no_positions", diag: String(state.diag) }));
     const positions = (state.positions ?? []) as RhPosition[];
     const orders = (state.orders ?? []) as RhOrder[];
+    // Stale ENTRY leash: a buy-to-open limit still working after 10 minutes is a
+    // thesis that already expired — cancel it rather than risk a late fill exactly
+    // when the move reverses through the limit (real money; exits have their own
+    // escalation and are never touched here).
+    for (const order of orders) {
+      if (order.side !== "buy" || order.positionEffect !== "open" || !OPEN_STATES.includes(order.state)) continue;
+      const age = order.createdAt ? Date.now() - Date.parse(order.createdAt) : 0;
+      if (age < 10 * 60_000) continue;
+      try {
+        const accountNumber = positions[0]?.accountNumber ?? (state.accountNumber as string | undefined);
+        if (!accountNumber) continue;
+        await appExec("/api/cron/rh-exec", { method: "POST", body: JSON.stringify({ op: "cancel", accountNumber, orderId: order.id }) });
+        console.log(JSON.stringify({ event: "rh_stale_entry_cancelled", orderId: order.id, ageMinutes: Math.round(age / 60_000) }));
+      } catch (error) {
+        errors.push(`stale entry cancel ${order.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     // Close monitors for positions that no longer exist at the broker.
     const openTickers = positions.map(position => position.occTicker);
     await db.from("rh_position_monitors").update({ status: "closed", updated_at: new Date().toISOString() }).eq("status", "monitoring").not("occ_ticker", "in", `(${openTickers.length ? openTickers.map(ticker => `"${ticker}"`).join(",") : '""'})`);
