@@ -41,9 +41,29 @@ export async function GET(request: Request) {
     const { portfolio, positions, positionsShape, orders } = await getRobinhoodOverview(userId, accountNumber);
     // Persist the portfolio read (cash / buying power / total) so dashboards and
     // research can see account state without another broker round-trip.
-    await createAdminClient().from("broker_portfolio_snapshots").upsert({
+    const adminDb = createAdminClient();
+    await adminDb.from("broker_portfolio_snapshots").upsert({
       broker: "robinhood", payload: { ...portfolio, accountTail: accountNumber.slice(-4) }, updated_at: new Date().toISOString(),
     }).then(({ error }) => { if (error) console.error("rh portfolio snapshot failed", error.message); });
+    // Ad-hoc instrument probes (diagnostics, e.g. the 0DTE tradability question):
+    // rows inserted into rh_instrument_probes get answered here with Robinhood's raw
+    // instrument state/tradability — the worker hits this endpoint every few seconds.
+    const { data: probes } = await adminDb.from("rh_instrument_probes").select("id,chain_symbol,expiration_date,strike,type").eq("status", "pending").limit(3);
+    for (const probe of probes ?? []) {
+      try {
+        const parsed = parseToolData(await callRobinhoodTool(userId, "get_option_instruments", {
+          chain_symbol: probe.chain_symbol, expiration_dates: String(probe.expiration_date),
+          strike_price: Number(probe.strike).toFixed(4), type: probe.type,
+        }));
+        const list: any[] = Array.isArray(parsed) ? parsed : parsed?.instruments ?? parsed?.results ?? (parsed && typeof parsed === "object" && parsed.id ? [parsed] : []);
+        await adminDb.from("rh_instrument_probes").update({ status: "done", result: {
+          count: list.length,
+          instruments: list.slice(0, 2).map((item: any) => ({ id: item?.id, state: item?.state, tradability: item?.tradability, strike: item?.strike_price, expiry: item?.expiration_date })),
+        } }).eq("id", probe.id);
+      } catch (error) {
+        await adminDb.from("rh_instrument_probes").update({ status: "error", result: { error: error instanceof Error ? error.message : String(error) } }).eq("id", probe.id);
+      }
+    }
     const longs = positions.filter((position:any) => (position?.type ?? "long") === "long" && Number(position?.quantity) > 0);
     // Enrich with instrument details (strike/expiration/type) for OCC quote lookups.
     const ids = [...new Set(longs.map((position:any) => String(position.option_id ?? position.option ?? "").split("/").filter(Boolean).pop()).filter(Boolean))];
