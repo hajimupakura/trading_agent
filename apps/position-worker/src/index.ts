@@ -3,6 +3,8 @@ import { config } from "./config.js";
 import { PositionManager } from "./manager.js";
 
 const manager = new PositionManager(); manager.start();
+// Dashboard live-price relay (display path only) — Alpaca IEX stream -> live_quotes -> Supabase Realtime.
+import("./live-quotes.js").then(({ LiveQuoteRelay }) => new LiveQuoteRelay().start()).catch(error => console.error("live quote relay failed to start", error));
 const server = createServer((request,response) => {
   if (request.url !== "/health") { response.writeHead(404).end("Not found"); return; }
   const age = manager.lastCycleAt == null ? Infinity : Date.now()-manager.lastCycleAt;

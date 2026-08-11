@@ -21,6 +21,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
 import { TRADE_UNDERLYINGS, WATCH_UNDERLYINGS } from "@/lib/options/types";
 import { logout } from "@/app/login/actions";
@@ -68,6 +69,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [critique, setCritique] = useState<string | null>(null);
   const [critiqueBusy, setCritiqueBusy] = useState(false);
   const [futures, setFutures] = useState<{ rows:Array<{ label:string; product:string; ticker:string; price:number; changePct:number|null; prevSettle:number|null; source:string }>; note:string|null; asOf:number } | null>(null);
+  const [livePrice, setLivePrice] = useState<{ symbol:string; price:number; at:number } | null>(null);
   type HorizonTab = 0|1|2|"1M"|"3M"|"6M"|"9M"|"1Y";
   const [selectedHorizon, setSelectedHorizon] = useState<HorizonTab>(0);
   // Numeric tabs are SESSIONS ahead, not calendar days: on a Friday the 1DTE tab shows
@@ -120,6 +122,20 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   }, [refresh]);
 
   useEffect(() => { void refreshPaper();const timer=window.setInterval(refreshPaper,10_000);return()=>window.clearInterval(timer); }, [refreshPaper]);
+
+  // Live underlying price: Supabase Realtime pushes from the worker's IEX stream
+  // (~1s cadence). SPX has no stock stream — its tab keeps the snapshot price.
+  useEffect(() => {
+    setLivePrice(null);
+    if (underlying === "SPX") return;
+    const supabase = createBrowserClient();
+    const channel = supabase
+      .channel(`live-quote-${underlying}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "live_quotes", filter: `symbol=eq.${underlying}` },
+        payload => { const row = payload.new as { symbol?:string; price?:number }; if (row?.price) setLivePrice({ symbol:String(row.symbol), price:Number(row.price), at:Date.now() }); })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [underlying]);
 
   // Futures glimpse: overnight/weekend direction from ES/NQ/YM (delayed ~10 min).
   useEffect(() => {
@@ -284,7 +300,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           <section className={`manager-strip ${manager?.online && !manager.control?.kill_switch && !manager.unmanagedPositions?.length ? "active":""}`}><div><span>AUTO EXIT MANAGER</span><strong>{manager?.control?.kill_switch?"ENTRIES HALTED · EXITS ACTIVE":manager?.unmanagedPositions?.length?`${manager.unmanagedPositions.length} UNPROTECTED POSITION${manager.unmanagedPositions.length===1?"":"S"}`:manager?.online?"ONLINE · PAPER":"OFFLINE"}</strong><small>{manager?.status?.managed_positions??0} managed · {manager?.brokerPositions?.length??0} at Alpaca{manager?.unmanagedPositions?.length?` · ${manager.unmanagedPositions.map(position=>`${position.quantity}× ${position.symbol}`).join(", ")} must be managed in Alpaca`:""}</small></div><button className="refresh-button" title="When ON, positions opened outside the app (directly in Alpaca) are adopted at their average fill and protected by the standard stop/trail/time exits. When OFF, outside positions are only flagged." onClick={()=>void setAutoAdopt(!(manager?.control?.auto_adopt_unmanaged!==false))}>Auto-adopt: {manager?.control?.auto_adopt_unmanaged!==false?"ON":"OFF"}</button>{(manager?.brokerPositions??[]).filter(position=>position.managed).map(position=>{const trend=position.exitMode==="trend";return <button key={position.symbol} className="refresh-button" title={trend?"RIDE mode (max convexity): only the 50% disaster floor sells automatically — no trailing stop, no time exits. Click to restore full automatic exits.":"Full automatic exits (stop / trail / time rules). Click to switch this position to RIDE mode for multi-day convexity swings: only a 50% disaster floor, everything else manual."} onClick={()=>void setExitMode(position.symbol,trend?"burst":"trend")}>{position.symbol.replace(/^([A-Z]+)\d{6}([CP])(\d{5})\d{3}$/,"$1 $2$3")}: {trend?"RIDE":"AUTO"}</button>;})}<button className={manager?.control?.kill_switch?"resume-manager":"kill-manager"} onClick={()=>void setKillSwitch(!manager?.control?.kill_switch)}>{manager?.control?.kill_switch?"Resume entries":"Emergency stop entries"}</button></section>
 
           <section className="market-grid">
-            <MarketCard label={`${underlying} LAST`} value={`$${money(market?.displayPrice??data?.spotPrice)}`} detail={market?`${market.regime} regime`:data?.spotPrice?"Live option-chain snapshot · chart bars unavailable":"Waiting for price"} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
+            <MarketCard label={`${underlying} LAST${livePrice && livePrice.symbol === underlying && Date.now() - livePrice.at < 15_000 ? " · LIVE" : ""}`} value={`$${money(livePrice && livePrice.symbol === underlying && Date.now() - livePrice.at < 15_000 ? livePrice.price : market?.displayPrice??data?.spotPrice)}`} detail={market?`${market.regime} regime`:data?.spotPrice?"Live option-chain snapshot · chart bars unavailable":"Waiting for price"} icon={market?.regime === "downtrend" ? <TrendingDown /> : <TrendingUp />} tone={market?.regime === "downtrend" ? "negative" : "positive"} />
             <MarketCard label={market?.referenceLabel ?? (underlying === "SPX" ? "SESSION MEAN" : "VWAP")} value={`$${money(market?.referencePrice)}`} detail={market && market.price >= market.referencePrice ? "Price above reference" : "Price below reference"} icon={<Crosshair />} />
             <MarketCard label="OPENING RANGE" value={`${money(market?.openingRangeLow)} – ${money(market?.openingRangeHigh)}`} detail={market ? `${money(market.openingRangeHigh - market.openingRangeLow)} pts wide` : "Waiting"} icon={<BarChart3 />} />
             <MarketCard label="ELIGIBLE CONTRACTS" value={eligible.length.toString()} detail={`${data?.contracts.length ?? 0} contracts scanned`} icon={<CircleDollarSign />} />
