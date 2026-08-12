@@ -12,14 +12,14 @@ export function aiConfigured(): boolean {
   return Boolean(process.env.OPENROUTER_API_KEY);
 }
 
-export async function chatComplete(input: { system: string; user: string; maxTokens?: number }): Promise<string> {
+export async function chatComplete(input: { system: string; user: string; maxTokens?: number; model?: string }): Promise<string> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error("OPENROUTER_API_KEY is not configured");
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-Title": "Velocity" },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
+      model: input.model || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
       // Reasoning models spend thinking tokens from the same budget as the reply; a
       // tight cap starves the visible answer entirely ("empty completion"). Give every
       // call generous headroom — prompt word-limits keep the actual output short.

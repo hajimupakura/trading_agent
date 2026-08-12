@@ -97,6 +97,57 @@ export async function runMorningBrief(): Promise<boolean> {
   return true;
 }
 
+// ---------------------------------------------------------------- economic release brief
+// The economic guard warns BEFORE a release; this is the missing AFTER: ~10 minutes
+// post-release, fetch the actual printed numbers (via a web-search model) plus the
+// market's live verdict (SPY/QQQ/GLD reaction), and send one layman brief. CPI and
+// NFP land at 8:30 (brief ~8:40); FOMC at 2:00 PM (brief ~2:10).
+
+async function marketReaction(): Promise<string> {
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) return "market reaction data unavailable";
+  try {
+    const response = await fetch("https://data.alpaca.markets/v2/stocks/snapshots?symbols=SPY,QQQ,GLD", {
+      headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return "market reaction data unavailable";
+    const payload = await response.json() as Record<string, { latestTrade?: { p?: number }; prevDailyBar?: { c?: number } }>;
+    return ["SPY", "QQQ", "GLD"].map(symbol => {
+      const snap = payload[symbol];
+      if (!snap?.latestTrade?.p || !snap.prevDailyBar?.c) return `${symbol}: n/a`;
+      const changePct = (snap.latestTrade.p / snap.prevDailyBar.c - 1) * 100;
+      return `${symbol} $${snap.latestTrade.p.toFixed(2)} (${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}% vs yesterday's close)`;
+    }).join(" · ");
+  } catch { return "market reaction data unavailable"; }
+}
+
+async function runEconReleaseBrief(): Promise<boolean> {
+  const userId = await ownerId();
+  if (!userId || !aiConfigured()) return false;
+  const econ = todaysEconomicEvent();
+  if (!econ) return false;
+  const clock = etParts();
+  const morning = econ.releaseLabel.startsWith("8:30");
+  const windowStart = morning ? 8 * 60 + 40 : 14 * 60 + 10;
+  if (clock.minutes < windowStart || clock.minutes > windowStart + 15) return false;
+  const eventKey = `ai-brief-econ-${clock.date}`;
+  if (await alertExists(eventKey)) return false;
+  const reaction = await marketReaction();
+  const brief = await chatComplete({
+    model: "perplexity/sonar",
+    system: "You are a markets desk writer. The reader is a beginner options trader. Report ONLY facts you can verify from today's actual release coverage; if the released figures are not yet reported anywhere, say exactly that rather than guessing. Plain everyday English, no jargon without a one-line explanation. 150-220 words.",
+    user: `Today's ${econ.name} was released at ${econ.releaseLabel} (US Eastern, today ${clock.date}). 1) Report the actual printed numbers versus what economists expected (for CPI: headline and core, monthly and yearly; for the jobs report: payrolls, unemployment rate, wages; for FOMC: the rate decision and the statement's lean). 2) Using this live market reaction — ${reaction} — explain in plain English what the market's verdict looks like (relief rally, inflation scare, mixed) and what that typically means for today's trading tone. 3) End with one line on how our system responds: entries were blocked around the release by the economic guard and resume on schedule; no prediction, just posture.`,
+    maxTokens: 600,
+  });
+  await createAlert({
+    userId, eventKey, severity: "info",
+    title: `${econ.name} released — the numbers and the market's verdict`,
+    body: brief,
+    metadata: { kind: "econ_release_brief", event: econ.name },
+  });
+  return true;
+}
+
 // ---------------------------------------------------------------- intraday tape reads
 // Three scheduled narrative reads of the SPY/SPX setup — the same interpretation a
 // desk trader gives glancing at the chart: posture vs VWAP/opening range, the exact
@@ -281,6 +332,7 @@ export async function maybeRunScheduledReviews(): Promise<string[]> {
   if (!settings.aiReviewEnabled) return [];
   const ran: string[] = [];
   if (clock.minutes >= 555 && clock.minutes < 570 && await runMorningBrief()) ran.push("morning-brief");
+  if (await runEconReleaseBrief().catch(error => { console.error("econ release brief failed", error); return false; })) ran.push("econ-release-brief");
   for (const slot of TAPE_SLOTS) {
     if (clock.minutes >= slot.from && clock.minutes <= slot.to && await runTapeRead(slot).catch(error => { console.error("tape read failed", slot.key, error); return false; })) ran.push(`tape-${slot.key}`);
   }
