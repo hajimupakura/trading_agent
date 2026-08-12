@@ -14,6 +14,7 @@ import { runSurgeRadar } from "@/lib/options/surge-radar";
 import { runMetalTriggers } from "@/lib/options/metals-triggers";
 import { runEarningsCalendarCheck } from "@/lib/options/earnings-guard";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
+import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
 
@@ -36,9 +37,14 @@ export async function GET(request: Request) {
   // Autonomous paper entries — SPY plus this tick's refreshed watch tickers. Global
   // gates (one position, trades/day, daily loss, cooldown, kill switch) bound the
   // whole fleet; sequential with early exit so one tick can never open two positions.
+  // Fast-name 1-minute triggers: bar-only checks for NVDA/TSLA/SPCX/QQQ between their
+  // rotation slots; a structural hit pays for the full refresh and joins this tick's
+  // entry candidates like any rotation refresh.
+  const fastHits = await runFastTriggers([...watchGroup]).catch(error => { console.error("fast triggers failed", error); return []; });
   const autoCandidates: Array<{ underlying: string; snapshot: CommandCenter | null }> = [
     { underlying: "SPY", snapshot: results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null },
     ...watchGroup.map((symbol, index) => { const result = results[index + 2]; return { underlying: symbol, snapshot: result?.status === "fulfilled" ? (result.value as CommandCenter) : null }; }),
+    ...fastHits,
   ];
   let autoEntry: { entered: string | null; skipped?: string } = { entered: null };
   for (const candidate of autoCandidates) {
