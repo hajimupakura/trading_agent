@@ -62,7 +62,8 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if (!signal.action.startsWith("enter_")) errors.push("The current engine decision is not an entry");
   if(!settings.paperTradingEnabled)errors.push("Paper entries are disabled in risk settings");
   if(!(settings.allowedUnderlyings as readonly string[]).includes(contract.underlying))errors.push(`${contract.underlying} is disabled in risk settings`);
-  if (!contract.eligible || !settings.allowedDte.includes(contract.dte as 0|1|2)) errors.push("Contract DTE is disabled or ineligible");
+  const singleNameDteOk = !["SPY","SPX"].includes(contract.underlying) && contract.dte <= 5;
+  if (!contract.eligible || (!settings.allowedDte.includes(contract.dte as 0|1|2) && !singleNameDteOk)) errors.push("Contract DTE is disabled or ineligible");
   if (contract.ask <= 0 || contract.ask > settings.maxOptionAsk) errors.push(`Contract ask exceeds the $${settings.maxOptionAsk.toFixed(2)} limit`);
   if(debit>settings.maxTradeDebit)errors.push(`Total debit (${quantity} contract${quantity===1?"":"s"}) exceeds the $${settings.maxTradeDebit.toFixed(0)} per-trade limit`);
   if (!Number.isFinite(equity) || debit > equity * (settings.maxEquityDebitPct / 100)) errors.push(`Total debit exceeds ${settings.maxEquityDebitPct}% of account equity`);

@@ -70,7 +70,8 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   const minutes = etMinutes();
   if (minutes < settings.entryStartMinutes || minutes > settings.entryEndMinutes) return { entered: null, skipped: "outside entry window" };
-  if (!settings.allowedDte.includes(contract.dte as 0 | 1 | 2)) return { entered: null, skipped: `dte ${contract.dte} not allowed` };
+  const singleNameDteOk = !["SPY", "SPX"].includes(contract.underlying) && contract.dte <= 5;
+  if (!settings.allowedDte.includes(contract.dte as 0 | 1 | 2) && !singleNameDteOk) return { entered: null, skipped: `dte ${contract.dte} not allowed` };
   // Concurrency: max 3 open positions, in CORRELATION GROUPS — SPY and SPX are the
   // same market (never both open); QQQ/NVDA/TSLA/GOOGL/SPCX each their own slot.
   // The worker keeps rh_position_monitors current within seconds in-session.
@@ -133,7 +134,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     if (chosen.dte !== 0) throw resolveError;
     const fallback = [contract, ...(snapshot.contracts ?? [])]
       .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate !== chosen.expirationDate
-        && candidate.dte <= 2 && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
+        && candidate.dte <= 5 && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
       .map(candidate => ({ candidate, fit: Math.min(Math.floor(settings.rhMaxTradeDebit / (candidate.ask * 100)), settings.maxContractsPerTrade) }))
       .filter(entry => entry.fit >= 1)
       .sort((a, b) => b.fit * Math.abs(b.candidate.delta!) - a.fit * Math.abs(a.candidate.delta!))[0];

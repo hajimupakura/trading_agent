@@ -13,7 +13,12 @@ export function rankContracts(contracts: RawContract[], settings:RiskSettings=DE
     // monitorOnly: relaxed screening for watch-list/long-dated views — these contracts can
     // never reach the trading path (risk gate + SPY-only execution), so intraday execution
     // filters (0-2 DTE, session volume, 30s quote freshness, delta band) do not apply.
-    if (!monitorOnly && !settings.allowedDte.includes(contract.dte as 0|1|2)) rejectionReasons.push(contract.dte > 2 ? "Next-session expiry — the engine trades 0-2 calendar DTE; manual entries only" : "DTE is disabled in risk settings");
+    // Single names (Friday-only weeklies like GOOGL/SPCX/MU) may trade their shortest
+    // available expiry up to 5 DTE — the intraday lifecycle (stop/trail/15:10 flat) is
+    // identical; longer expiry only mutes the leverage. SPY/SPX stay strictly 0-2 DTE
+    // per the replay-validated config.
+    const singleNameOk = !["SPY","SPX"].includes(contract.underlying) && contract.dte <= 5;
+    if (!monitorOnly && !settings.allowedDte.includes(contract.dte as 0|1|2) && !singleNameOk) rejectionReasons.push(contract.dte > 2 ? "Next-session expiry — the engine trades 0-2 calendar DTE; manual entries only" : "DTE is disabled in risk settings");
     if (contract.bid <= 0 || contract.ask <= 0 || contract.ask < contract.bid) rejectionReasons.push("Invalid market");
     if (contract.spreadPct > (monitorOnly ? 25 : settings.maxSpreadPct)) rejectionReasons.push(`Spread exceeds ${monitorOnly ? 25 : settings.maxSpreadPct}%`);
     if (!monitorOnly && contract.volume < settings.minContractVolume) rejectionReasons.push(`Volume below ${settings.minContractVolume}`);
