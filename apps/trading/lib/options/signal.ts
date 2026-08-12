@@ -56,7 +56,13 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const consLow = Math.min(...consolidation.map(bar => bar.close));
     const tight = consHigh - consLow <= atr * 1.5;
     const current = market.bars.at(-1)!;
-    const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && participationConfirmed;
+    // Trend grinds rarely print burst minutes: 30-minute persistence IS participation
+    // evidence. Single names (unvalidated frontier — paper measures them) accept
+    // sustained volume (>=0.7x median) here; SPY keeps its replay-validated 1.2x burst
+    // gate and SPX keeps its volume waiver.
+    const trendParticipation = participationConfirmed
+      || (!["SPY", "SPX"].includes(market.symbol) && (technicals.relativeVolume ?? 0) >= 0.7);
+    const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && trendParticipation;
     const persistentAbove = last30.every(bar => bar.close > market.openingRangeHigh) && current.close > market.referencePrice;
     const persistentBelow = last30.every(bar => bar.close < market.openingRangeLow) && current.close < market.referencePrice;
     const callTrend = persistentAbove && tight && momentumOk && technicals.macd! > technicals.macdSignal! && technicals.vwapSlope! > 0

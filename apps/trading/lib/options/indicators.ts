@@ -57,7 +57,11 @@ export function calculateTechnicals(bars: Bar[], underlying: Underlying, opening
   const deviation = Math.sqrt(last20.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, last20.length));
   const distance = current.close > openingHigh ? current.close - openingHigh : current.close < openingLow ? openingLow - current.close : 0;
   const volumes = bars.slice(-21, -1).map(bar => bar.volume).filter(Boolean);
-  const averageVolume = volumes.reduce((sum, value) => sum + value, 0) / Math.max(1, volumes.length);
+  // MEDIAN baseline: a single burst minute inside the window inflates a mean and
+  // makes every following minute read "quiet" (2026-08-12: SPCX ripped +7% all day
+  // while relativeVolume read 0.45 against a spike-contaminated mean).
+  const sortedVolumes = [...volumes].sort((a, b) => a - b);
+  const averageVolume = sortedVolumes.length ? sortedVolumes[Math.floor(sortedVolumes.length / 2)] : 0;
   let cumulativeVolume = 0; let cumulativeValue = 0;
   const sessionVwap = bars.map(bar => {
     cumulativeVolume += bar.volume; cumulativeValue += (bar.vwap ?? bar.close) * bar.volume;
