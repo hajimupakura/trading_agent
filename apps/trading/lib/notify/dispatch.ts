@@ -26,7 +26,7 @@ const ICON: Record<string, string> = { info: "ℹ️", success: "✅", warning: 
 // Market-insight alerts safe for the shared subscriber channel: sector money maps,
 // pre-market gaps, radar reads, overnight-scan verdicts, morning briefs. STRICT
 // whitelist — errors, fills, positions, critiques, and post-mortems never match.
-const INSIGHT_PREFIXES = ["radar-sectors-", "radar-sector-", "radar-gap-", "radar-trend-", "radar-regime-", "radar-event-", "radar-convexity-scan-", "radar-convexity-report-", "radar-surge-", "radar-metal-", "ai-brief-", "ai-rule-"];
+const INSIGHT_PREFIXES = ["radar-sectors-", "radar-sector-", "radar-gap-", "radar-trend-", "radar-regime-", "radar-event-", "radar-convexity-scan-", "radar-convexity-report-", "radar-surge-", "radar-metal-", "ai-brief-", "ai-rule-", "ai-trade-review-"];
 export function isInsightAlert(eventKey: string): boolean {
   return INSIGHT_PREFIXES.some(prefix => eventKey.startsWith(prefix));
 }
