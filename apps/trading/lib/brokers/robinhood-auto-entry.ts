@@ -2,7 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
-import { activeEconomicGuard } from "@/lib/options/economic-calendar";
+import { activeEconomicGuard, todaysEconomicEvent } from "@/lib/options/economic-calendar";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "./robinhood-trading";
 import type { CommandCenter } from "@/lib/options/types";
@@ -66,6 +66,10 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const { data: control } = await admin.from("position_manager_control").select("kill_switch").eq("id", true).single();
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
   if (settings.economicGuardEnabled && activeEconomicGuard()) return { entered: null, skipped: "economic guard" };
+  // Event-day caution (prior-based; see paper lane note): delayed start + half cap.
+  const econToday = todaysEconomicEvent();
+  if (econToday && econToday.releaseLabel.startsWith("8:30") && etMinutes() < 630) return { entered: null, skipped: `event-day caution: entries begin 10:30 on ${econToday.name} days` };
+  const effectiveCap = econToday ? settings.rhMaxTradeDebit / 2 : settings.rhMaxTradeDebit;
   const earningsBlock = await activeEarningsGuard(contract.underlying);
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   const minutes = etMinutes();
@@ -97,6 +101,18 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   }
   const { count: todayCount } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
   if ((todayCount ?? 0) >= settings.rhMaxTradesPerDay) return { entered: null, skipped: "daily trade cap" };
+  // PATTERN DAY TRADER guard: the agentic account is limited margin under $25k, so
+  // FINRA caps it at 3 day trades per rolling 5 business days — a 4th flags the
+  // account for 90 days. Every engine trade is a day trade (3:10 flat). Count our
+  // completed same-day round trips over the last 7 calendar days (superset of 5
+  // business days — deliberately conservative) and refuse to become the 4th.
+  // Remove this gate if the account is converted to CASH (cash accounts are exempt).
+  const { data: recentRounds } = await admin.from("rh_position_monitors")
+    .select("opened_at,updated_at").eq("status", "closed")
+    .gte("updated_at", new Date(Date.now() - 7 * 86_400_000).toISOString());
+  const dayKey = (value: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(value));
+  const dayTrades = (recentRounds ?? []).filter(row => row.opened_at && dayKey(String(row.opened_at)) === dayKey(String(row.updated_at))).length;
+  if (dayTrades >= 3) return { entered: null, skipped: `PDT guard: ${dayTrades} day trades in the rolling window — a 4th would flag the account (convert to a cash account to lift this)` };
   // Cooldown: no re-entry within 30 minutes of any monitor closing (stop-out or otherwise).
   const { data: recentClose } = await admin.from("rh_position_monitors").select("id").eq("status", "closed").gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
   if (recentClose) return { entered: null, skipped: "cooldown after exit" };
@@ -108,14 +124,14 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // (fewer, stronger contracts bleed less to spreads and time decay).
   const basket = [contract, ...(snapshot.contracts ?? [])]
     .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
-      && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
+      && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap && candidate.delta != null)
     .map(candidate => {
-      const fit = Math.min(Math.floor(settings.rhMaxTradeDebit / (candidate.ask * 100)), settings.maxContractsPerTrade);
+      const fit = Math.min(Math.floor(effectiveCap / (candidate.ask * 100)), settings.maxContractsPerTrade);
       return { candidate, fit, score: fit * Math.abs(candidate.delta!) };
     })
     .filter(entry => entry.fit >= 1)
     .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
-  if (!basket) return { entered: null, skipped: `no eligible contract fits the $${settings.rhMaxTradeDebit} cap` };
+  if (!basket) return { entered: null, skipped: `no eligible contract fits the $${effectiveCap} cap` };
   let chosen = basket.candidate;
 
   const accounts = await getRobinhoodAccounts(userId);
@@ -134,7 +150,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     if (chosen.dte !== 0) throw resolveError;
     const fallback = [contract, ...(snapshot.contracts ?? [])]
       .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate !== chosen.expirationDate
-        && candidate.dte <= 5 && candidate.ask > 0 && candidate.ask * 100 <= settings.rhMaxTradeDebit && candidate.delta != null)
+        && candidate.dte <= 5 && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap && candidate.delta != null)
       .map(candidate => ({ candidate, fit: Math.min(Math.floor(settings.rhMaxTradeDebit / (candidate.ask * 100)), settings.maxContractsPerTrade) }))
       .filter(entry => entry.fit >= 1)
       .sort((a, b) => b.fit * Math.abs(b.candidate.delta!) - a.fit * Math.abs(a.candidate.delta!))[0];
@@ -144,7 +160,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     instrument = await resolveOptionInstrument(userId, { chainSymbol, expirationDate: chosen.expirationDate, strike: chosen.strike, type: chosen.side });
   }
   const limitPrice = Number(chosen.ask.toFixed(2));
-  const quantity = Math.min(Math.floor(settings.rhMaxTradeDebit / (limitPrice * 100)), settings.maxContractsPerTrade);
+  const quantity = Math.min(Math.floor(effectiveCap / (limitPrice * 100)), settings.maxContractsPerTrade);
   if (quantity < 1) return { entered: null, skipped: "chosen contract no longer fits the cap" };
   const debit = quantity * limitPrice * 100;
   const refId = crypto.randomUUID();
