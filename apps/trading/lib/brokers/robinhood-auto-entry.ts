@@ -71,12 +71,12 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const minutes = etMinutes();
   if (minutes < settings.entryStartMinutes || minutes > settings.entryEndMinutes) return { entered: null, skipped: "outside entry window" };
   if (!settings.allowedDte.includes(contract.dte as 0 | 1 | 2)) return { entered: null, skipped: `dte ${contract.dte} not allowed` };
-  // Concurrency: max 2 open positions, in CORRELATION GROUPS — SPY and SPX are the
-  // same market (never both open), QQQ is its own slot. The worker keeps
-  // rh_position_monitors current within seconds in-session.
+  // Concurrency: max 3 open positions, in CORRELATION GROUPS — SPY and SPX are the
+  // same market (never both open); QQQ/NVDA/TSLA/GOOGL/SPCX each their own slot.
+  // The worker keeps rh_position_monitors current within seconds in-session.
   const { data: openRows } = await admin.from("rh_position_monitors").select("occ_ticker").in("status", ["monitoring", "closing", "error"]);
   const open = (openRows ?? []).map(row => String(row.occ_ticker));
-  if (open.length >= 2) return { entered: null, skipped: "two positions already open" };
+  if (open.length >= 3) return { entered: null, skipped: "three positions already open" };
   // Groups: SPY/SPX are one market; each other underlying is its own slot. Max 2 open.
   const groupOf = (occ: string) => /^O:(SPXW|SPY)\d/.test(occ) ? "sp" : (/^O:([A-Z]+?)\d{6}[CP]/.exec(occ)?.[1] ?? "other");
   const entryGroup = ["SPX", "SPY"].includes(contract.underlying) ? "sp" : contract.underlying;
