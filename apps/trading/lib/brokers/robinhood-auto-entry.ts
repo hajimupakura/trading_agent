@@ -82,6 +82,18 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const entryGroup = ["SPX", "SPY"].includes(contract.underlying) ? "sp" : contract.underlying;
   if (open.some(occ => groupOf(occ) === entryGroup)) return { entered: null, skipped: `a ${entryGroup === "sp" ? "SPY/SPX" : entryGroup} position is already open` };
   if (open.includes(contract.ticker)) return { entered: null, skipped: "same contract already open" };
+  // Daily-loss circuit breaker: equity (mark-to-market, unrealized included) down more
+  // than the cap from the morning baseline halts NEW entries for the day. Exits and
+  // stops keep running — this stops the digging, not the climbing out.
+  const tradeDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  const [{ data: baseline }, { data: portfolioRow }] = await Promise.all([
+    admin.from("rh_daily_baseline").select("equity").eq("trade_date", tradeDate).maybeSingle(),
+    admin.from("broker_portfolio_snapshots").select("payload").eq("broker", "robinhood").maybeSingle(),
+  ]);
+  const equityNow = Number((portfolioRow?.payload as { totalValue?: number } | null)?.totalValue ?? NaN);
+  if (baseline && Number.isFinite(equityNow) && Number(baseline.equity) - equityNow >= settings.rhMaxDailyLoss) {
+    return { entered: null, skipped: `daily loss breaker: down $${(Number(baseline.equity) - equityNow).toFixed(0)} of $${settings.rhMaxDailyLoss} allowed — no new entries today` };
+  }
   const { count: todayCount } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
   if ((todayCount ?? 0) >= settings.rhMaxTradesPerDay) return { entered: null, skipped: "daily trade cap" };
   // Cooldown: no re-entry within 30 minutes of any monitor closing (stop-out or otherwise).

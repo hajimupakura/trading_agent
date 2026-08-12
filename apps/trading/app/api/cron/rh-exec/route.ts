@@ -45,6 +45,10 @@ export async function GET(request: Request) {
     await adminDb.from("broker_portfolio_snapshots").upsert({
       broker: "robinhood", payload: { ...portfolio, accountTail: accountNumber.slice(-4) }, updated_at: new Date().toISOString(),
     }).then(({ error }) => { if (error) console.error("rh portfolio snapshot failed", error.message); });
+    // Day's first equity reading = the daily-loss breaker baseline (insert-once per date).
+    const tradeDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    await adminDb.from("rh_daily_baseline").upsert({ trade_date: tradeDate, equity: portfolio.totalValue }, { onConflict: "trade_date", ignoreDuplicates: true })
+      .then(({ error }) => { if (error) console.error("rh baseline failed", error.message); });
     // Ad-hoc instrument probes (diagnostics, e.g. the 0DTE tradability question):
     // rows inserted into rh_instrument_probes get answered here with Robinhood's raw
     // instrument state/tradability — the worker hits this endpoint every few seconds.
