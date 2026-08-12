@@ -7,7 +7,7 @@ import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "./robinhood-trading";
 import type { CommandCenter } from "@/lib/options/types";
 
-// Fully autonomous REAL-MONEY entries on the Robinhood agentic account — SPY/SPX/QQQ/NVDA/TSLA/GOOGL.
+// Fully autonomous REAL-MONEY entries on the Robinhood agentic account — SPY/SPX/QQQ/NVDA/TSLA/GOOGL/SPCX.
 // Mirrors the Alpaca paper auto-entry gate chain, but with its own (tighter) caps
 // because these are real dollars: rhAutoEntriesEnabled is OFF by default and every
 // gate is deterministic. Exits need no wiring here — the Railway worker discovers
@@ -31,7 +31,7 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
-  if (!["SPX", "SPY", "QQQ", "NVDA", "TSLA", "GOOGL"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
+  if (!["SPX", "SPY", "QQQ", "NVDA", "TSLA", "GOOGL", "SPCX"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
   // Real-money lane: every decision on a real signal is journaled, and an unexpected
   // throw pages as critical — a silent miss here is itself an incident (2026-08-11:
   // a $180 in-cap signal at 10:25 skipped with no trace; cause unrecoverable).
