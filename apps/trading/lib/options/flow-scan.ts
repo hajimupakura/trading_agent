@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
+import { recordFlowWatch } from "./flow-watch";
 import type { Contract, Underlying } from "./types";
 
 // Unusual options-flow detection over the chains the scanner already pulls.
@@ -41,6 +42,8 @@ export async function scanUnusualFlow(underlying: Underlying, contracts: Contrac
         body: `${contract.volume.toLocaleString()} contracts traded vs ${contract.openInterest.toLocaleString()} open interest (${(contract.volume / Math.max(contract.openInterest, 1)).toFixed(1)}x) — roughly $${(premium / 1_000_000).toFixed(1)}M in premium. Heavy fresh positioning in a ${contract.dte}DTE ${contract.side}. Flow is information, not instruction: check it against the engine's read before acting.`,
         metadata: { ticker: contract.ticker, volume: contract.volume, openInterest: contract.openInterest, premium, dte: contract.dte },
       }).catch(() => undefined);
+      // Smart money tracker: every $500k+ print becomes a scored watch (flow-watch.ts).
+      await recordFlowWatch({ ticker: contract.ticker, premium, side: contract.side }).catch(() => undefined);
     }
   }
 

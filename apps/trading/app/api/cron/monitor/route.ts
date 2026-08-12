@@ -13,6 +13,7 @@ import { reportJobHealth } from "@/lib/ops/heartbeat";
 import { runSurgeRadar } from "@/lib/options/surge-radar";
 import { runMetalTriggers } from "@/lib/options/metals-triggers";
 import { runEarningsCalendarCheck } from "@/lib/options/earnings-guard";
+import { runFlowWatchScoring } from "@/lib/options/flow-watch";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
 import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
@@ -74,6 +75,9 @@ export async function GET(request: Request) {
   const metals = await runMetalTriggers().catch(error => { console.error("metal triggers failed", error); return { checked:false, fired:[] as string[] }; });
   const earningsCheck = await runEarningsCalendarCheck().catch(error => { console.error("earnings calendar check failed", error); return { checked:false, missing:[] as string[] }; });
   void earningsCheck;
+  // Smart money tracker: post-close scoring of large-print flow watches.
+  const flowWatch = await runFlowWatchScoring().catch(error => { console.error("flow watch scoring failed", error); return { checked:false, scored:0 }; });
+  void flowWatch;
   const convexity = await runConvexityCapture().catch(error => { console.error("convexity capture failed", error); return { ran:[] as string[], errors:[String(error)] }; });
   const aiReviews = await maybeRunScheduledReviews().catch(error => { console.error("ai reviews failed", error); return [] as string[]; });
   // Historical replay backtest: one queued session per tick, on minutes clear of the
