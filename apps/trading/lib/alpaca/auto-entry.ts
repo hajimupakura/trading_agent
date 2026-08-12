@@ -5,7 +5,6 @@ import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { PAPER_RULES, computePositionSize, entryCooldownActive, validatePaperEntry } from "./risk";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
-import { todaysEconomicEvent } from "@/lib/options/economic-calendar";
 import type { CommandCenter } from "@/lib/options/types";
 
 // Fully autonomous PAPER entries — SPY plus every watchlist ticker (SPX excluded:
@@ -59,16 +58,9 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   // Never re-enter a contract already held: with maxOpenPositions > 1 the global cap
   // permits a second position, but doubling the SAME contract is unintended averaging.
   if (trading.positions.some(position => `O:${position.symbol}` === contract.ticker)) return { entered: null, skipped: "already holding this contract" };
-  // Event-day caution (prior-based, pending 2026-09-11 CPI validation): post-release
-  // vol crush bleeds long options all morning on CPI/NFP/FOMC days — delay entries to
-  // 10:30 and halve size. 2026-08-12 exhibit: every lane lost small on a whipsaw
-  // CPI morning; regime filters tested that day did NOT survive replay, this did-not-
-  // need-to: it reduces exposure without picking direction.
-  const econToday = todaysEconomicEvent();
-  const etMinNow = (() => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); })();
-  if (econToday && econToday.releaseLabel.startsWith("8:30") && etMinNow < 630) return { entered: null, skipped: `event-day caution: entries begin 10:30 on ${econToday.name} days` };
-  let quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings });
-  if (econToday) quantity = Math.max(1, Math.floor(quantity / 2));
+  // NOTE: event-day caution applies to the REAL-MONEY lane only — paper deliberately
+  // trades unfiltered (its record measures the raw strategy, event days included).
+  const quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings });
   const risk = validatePaperEntry({ signal, contract, ...trading, tradesToday, settings, quantity });
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
   const clientOrderId = `velocity-auto-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
