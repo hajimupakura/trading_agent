@@ -14,7 +14,7 @@ import type { CommandCenter, MarketState, WatchUnderlying } from "./types";
 // strict engine still makes every actual decision. Cost math (2026-08-12): ~8-10
 // Alpaca req/min added vs the 200/min free cap; Massive unchanged except on fires.
 
-export const FAST_SYMBOLS: WatchUnderlying[] = ["NVDA", "TSLA", "SPCX", "QQQ"];
+export const FAST_SYMBOLS: WatchUnderlying[] = ["NVDA", "TSLA", "SPCX", "QQQ", "GOOGL"];
 
 function roughTrigger(market: MarketState): boolean {
   const bars = market.bars;
