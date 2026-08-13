@@ -72,10 +72,12 @@ export async function runMarketRadar(): Promise<{ fired: string[]; errors: strin
     const fomcWindow = clock.minutes >= 750 && clock.minutes < 810 && event.guardStartMinutes > 0;
     if (!morningWindow && !fomcWindow) return;
     await createAlert({
-      userId, eventKey: `radar-event-${today}`, severity: "critical",
-      title: `Event risk today: ${event.name} at ${event.releaseLabel}`,
-      body: `${event.name} lands at ${event.releaseLabel}. These releases gap markets through stops in seconds; the engine blocks new entries ${event.guardStartMinutes === 0 ? "until 10:00 AM ET" : "from 1:30 PM until 3:00 PM ET"} (toggle in Settings). Review open positions and swing exposure before the release.`,
-      metadata: { event: event.name },
+      userId, eventKey: `radar-event-${today}`, severity: event.guarded ? "critical" : "warning",
+      title: `${event.guarded ? "Event risk" : "Data release"} today: ${event.name} at ${event.releaseLabel}`,
+      body: event.guarded
+        ? `${event.name} lands at ${event.releaseLabel}. These releases gap markets through stops in seconds; the engine blocks new entries ${event.guardStartMinutes === 0 ? "until 10:00 AM ET" : "from 1:30 PM until 3:00 PM ET"} (toggle in Settings). Review open positions and swing exposure before the release.`
+        : `${event.name} lands at ${event.releaseLabel}. This is a second-tier release — it can move the market (especially rate-sensitive names) but usually less than CPI or jobs day, so the engine does NOT restrict entries for it. A summary of the numbers and the market's reaction arrives about 10 minutes after the release.`,
+      metadata: { event: event.name, guarded: event.guarded },
     });
     fired.push("event");
   });

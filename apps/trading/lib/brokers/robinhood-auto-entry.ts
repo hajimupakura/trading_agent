@@ -67,9 +67,11 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
   if (settings.economicGuardEnabled && activeEconomicGuard()) return { entered: null, skipped: "economic guard" };
   // Event-day caution (prior-based; see paper lane note): delayed start + half cap.
+  // Guarded events only (CPI/NFP/FOMC) — brief-only releases like PPI don't restrict.
   const econToday = todaysEconomicEvent();
-  if (econToday && econToday.releaseLabel.startsWith("8:30") && etMinutes() < 630) return { entered: null, skipped: `event-day caution: entries begin 10:30 on ${econToday.name} days` };
-  const effectiveCap = econToday ? settings.rhMaxTradeDebit / 2 : settings.rhMaxTradeDebit;
+  const cautionEvent = econToday?.guarded ? econToday : null;
+  if (cautionEvent && cautionEvent.releaseLabel.startsWith("8:30") && etMinutes() < 630) return { entered: null, skipped: `event-day caution: entries begin 10:30 on ${cautionEvent.name} days` };
+  const effectiveCap = cautionEvent ? settings.rhMaxTradeDebit / 2 : settings.rhMaxTradeDebit;
   const earningsBlock = await activeEarningsGuard(contract.underlying);
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   const minutes = etMinutes();
