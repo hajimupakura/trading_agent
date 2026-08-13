@@ -103,18 +103,10 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   }
   const { count: todayCount } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
   if ((todayCount ?? 0) >= settings.rhMaxTradesPerDay) return { entered: null, skipped: "daily trade cap" };
-  // PATTERN DAY TRADER guard: the agentic account is limited margin under $25k, so
-  // FINRA caps it at 3 day trades per rolling 5 business days — a 4th flags the
-  // account for 90 days. Every engine trade is a day trade (3:10 flat). Count our
-  // completed same-day round trips over the last 7 calendar days (superset of 5
-  // business days — deliberately conservative) and refuse to become the 4th.
-  // Remove this gate if the account is converted to CASH (cash accounts are exempt).
-  const { data: recentRounds } = await admin.from("rh_position_monitors")
-    .select("opened_at,updated_at").eq("status", "closed")
-    .gte("updated_at", new Date(Date.now() - 7 * 86_400_000).toISOString());
-  const dayKey = (value: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(value));
-  const dayTrades = (recentRounds ?? []).filter(row => row.opened_at && dayKey(String(row.opened_at)) === dayKey(String(row.updated_at))).length;
-  if (dayTrades >= 3) return { entered: null, skipped: `PDT guard: ${dayTrades} day trades in the rolling window — a 4th would flag the account (convert to a cash account to lift this)` };
+  // NO PDT GUARD — deliberately. The SEC eliminated the pattern-day-trader rule
+  // effective 2026-06-04; there is no day-trade count to protect. A leftover guard
+  // here silently blocked real entries on 2026-08-13 (user standing order: never
+  // add PDT limits). Daily caps + the loss breaker above are the real risk bounds.
   // Cooldown: no re-entry within 30 minutes of any monitor closing (stop-out or otherwise).
   const { data: recentClose } = await admin.from("rh_position_monitors").select("id").eq("status", "closed").gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
   if (recentClose) return { entered: null, skipped: "cooldown after exit" };
