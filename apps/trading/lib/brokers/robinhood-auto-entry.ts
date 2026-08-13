@@ -122,7 +122,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // quantity x |delta| — 5 cheap contracts summing to $250 beat 1 mid strike when
   // their combined exposure is larger. Ties go to the higher per-contract delta
   // (fewer, stronger contracts bleed less to spreads and time decay).
-  const basket = [contract, ...(snapshot.contracts ?? [])]
+  let basket = [contract, ...(snapshot.contracts ?? [])]
     .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
       && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap && candidate.delta != null)
     .map(candidate => {
@@ -131,6 +131,27 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     })
     .filter(entry => entry.fit >= 1)
     .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
+  // CONVEXITY FALLBACK (2026-08-13, user directive after SNDK's +$220 day): on
+  // high-priced names every 0.25-0.70 delta contract can exceed the cap — but on the
+  // trend days that fire these signals, the cheap 0.10-0.25 delta strike is exactly
+  // the piece that pays (an under-$2 SNDK call printed >10x). When nothing in the
+  // band fits, take the best contract that failed ONLY the delta screen and fits the
+  // cap: same spread/volume/freshness quality bar, deliberately lottery-shaped.
+  let lottery = false;
+  if (!basket) {
+    basket = [contract, ...(snapshot.contracts ?? [])]
+      .filter(candidate => !candidate.eligible && candidate.rejectionReasons.every(reason => reason.startsWith("Absolute delta outside"))
+        && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
+        && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap
+        && candidate.delta != null && Math.abs(candidate.delta) >= 0.10 && Math.abs(candidate.delta) < 0.25)
+      .map(candidate => {
+        const fit = Math.min(Math.floor(effectiveCap / (candidate.ask * 100)), settings.maxContractsPerTrade);
+        return { candidate, fit, score: fit * Math.abs(candidate.delta!) };
+      })
+      .filter(entry => entry.fit >= 1)
+      .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
+    lottery = basket != null;
+  }
   if (!basket) return { entered: null, skipped: `no eligible contract fits the $${effectiveCap} cap` };
   let chosen = basket.candidate;
 
@@ -181,8 +202,8 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     await createAlert({
       userId, signalId: signal.id, eventKey: `rh-auto-entry-${refId}`, severity: "success",
       title: `AUTONOMOUS Robinhood entry: bought ${quantity} ${contract.underlying} ${chosen.side}${quantity === 1 ? "" : "s"} (real money)`,
-      body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on the agentic account: BUY ${quantity} × ${chainSymbol} ${chosen.expirationDate} ${chosen.strike}${chosen.side === "call" ? "C" : "P"} at a $${limitPrice.toFixed(2)} limit — about $${debit.toFixed(0)} of real money at risk. The worker guards the exit (30% stop, profit trail, 3:10 PM hard exit). Emergency stop in the dashboard halts future entries; the Robinhood autonomy toggle is in Settings.`,
-      metadata: { kind: "rh_auto_entry", refId, contractTicker: chosen.ticker, limitPrice, quantity, maxDebit: debit },
+      body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on the agentic account: BUY ${quantity} × ${chainSymbol} ${chosen.expirationDate} ${chosen.strike}${chosen.side === "call" ? "C" : "P"} at a $${limitPrice.toFixed(2)} limit — about $${debit.toFixed(0)} of real money at risk.${lottery ? ` CONVEXITY PICK: every standard-delta contract exceeded the cap on this high-priced name, so this is a deliberate ${Math.abs(chosen.delta ?? 0).toFixed(2)}-delta lottery strike — it can expire worthless fast, and on a real trend day it can pay many times over.` : ""} The worker guards the exit (30% stop, profit trail, 3:10 PM hard exit). Emergency stop in the dashboard halts future entries; the Robinhood autonomy toggle is in Settings.`,
+      metadata: { kind: "rh_auto_entry", refId, contractTicker: chosen.ticker, limitPrice, quantity, maxDebit: debit, lottery },
     }).catch(error => console.error("rh auto entry alert failed", error));
     return { entered: contract.ticker };
   } catch (error) {
