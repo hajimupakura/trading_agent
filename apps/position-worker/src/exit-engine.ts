@@ -37,6 +37,23 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     if (scalpTrail != null && bid <= position.peakBid * (1 - scalpTrail)) return "trailing_stop";
     return null;
   }
+  if (position.exitMode === "drive") {
+    // Opening-drive entries: a gap-and-go's first minutes are structurally violent — an
+    // instant +45-56% spike arms the trail and the first wobble stops it out right before
+    // the real trend (2026-08-13 replay: standard exits +16-25% vs +141-165% with the
+    // trail suspended). Until 10:00 ET only the disaster stop and the gap-fill
+    // invalidation live; from 10:00 the standard trail rules resume. Flat rules unchanged.
+    if (heldOvernight && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= 570) return "mandatory_time_exit";
+    if (clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
+    if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
+    if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";
+    if (clock.minutes >= 600) {
+      const driveGain = position.peakBid / position.entryPrice - 1;
+      const driveTrail = driveGain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : driveGain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
+      if (driveTrail != null && bid <= position.peakBid * (1 - driveTrail)) return "trailing_stop";
+    }
+    return null;
+  }
   // A swing position is one deliberately opened in the late-day window; it is exempt from the
   // same-day 15:10 flat, held overnight, and force-sold by 10:30 the next morning instead of 09:30.
   const isSwing = openedClock.minutes >= EXIT_RULES.swingOpenThresholdMinutes;

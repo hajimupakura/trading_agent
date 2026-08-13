@@ -166,7 +166,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const { error: journalError } = await admin.from("rh_entry_orders").insert({
     user_id: userId, signal_id: signal.id, ref_id: refId, underlying: contract.underlying, contract_ticker: chosen.ticker,
     quantity, limit_price: limitPrice, max_debit: debit, status: "submitted",
-    strategy: signal.setup === "scalp_reclaim" ? "scalp" : "orb",
+    strategy: signal.setup === "scalp_reclaim" ? "scalp" : signal.setup === "opening_drive" ? "drive" : "orb",
   });
   if (journalError) return { entered: null, skipped: `journal: ${journalError.message}` };
   try {

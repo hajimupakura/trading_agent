@@ -43,10 +43,11 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   return { ticker,alpacaSymbol,side:signal ? (signal.action === "enter_put" ? "put":"call") : occSide,quantity:1,entryPrice,
     peakBid:Number(state?.peak_bid ?? entryPrice),openedAt:Date.parse(state?.opened_at ?? brokerEntry?.filled_at ?? entry.created_at),signalId:entry.signal_id,userId:entry.user_id,
     market,closeOrderId:state?.close_order_id ?? null,closeOrderSubmittedAt:state?.close_order_submitted_at ? Date.parse(state.close_order_submitted_at):null,
-    // First sighting (no monitor row yet): scalp signals get the scalp profile, 3+ day
-    // contracts are swings defaulting to trend (RIDE). Existing rows keep their stored mode.
-    exitMode:state ? (state.exit_mode === "trend" ? "trend" : state.exit_mode === "scalp" ? "scalp" : "burst")
-      : ((signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
+    // First sighting (no monitor row yet): scalp signals get the scalp profile, opening
+    // drives get the drive profile (trail suspended until 10:00), 3+ day contracts are
+    // swings defaulting to trend (RIDE). Existing rows keep their stored mode.
+    exitMode:state ? (state.exit_mode === "trend" ? "trend" : state.exit_mode === "scalp" ? "scalp" : state.exit_mode === "drive" ? "drive" : "burst")
+      : ((signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
 }
 export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask:number;quoteAt:number;status:string;exitReason?:string|null;closeOrderId?:string|null;error?:string|null}) {
   const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,exit_mode:position.exitMode,updated_at:new Date().toISOString() });

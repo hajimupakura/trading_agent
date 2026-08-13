@@ -121,7 +121,7 @@ export class RobinhoodExitManager {
       .eq("contract_ticker", position.occTicker).neq("status", "rejected")
       .gte("created_at", new Date(now - 48 * 3_600_000).toISOString())
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    const exitMode = entryOrder?.strategy === "scalp" ? "scalp" as const : "burst" as const;
+    const exitMode = entryOrder?.strategy === "scalp" ? "scalp" as const : entryOrder?.strategy === "drive" ? "drive" as const : "burst" as const;
     const orderOpenedAt = openedAtFromOrders(position, orders);
     const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? now;
     const openedAtExact = monitor?.opened_at_exact ?? orderOpenedAt != null;

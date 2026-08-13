@@ -103,9 +103,13 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const first3High = Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
     const first3Low = Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
     const driveParticipation = market.symbol === "SPX" || technicals.volumeConfirmation === true;
-    const driveUp = gapPct >= 0.25 && current.close > prior.high && current.close > dayOpen && current.close > first3High
+    // Gap threshold 0.20 (was 0.25): 2026-08-13's monster gap-and-go measured +0.246% —
+    // a 0.25 bar missed it by 0.004%. The 0.20-0.25 band holds exactly one historical
+    // fire (2026-07-02, -2.7 SPY pts managed) vs today's runner; borderline gaps also
+    // wobble +/-0.02% between data sources, so the threshold needs margin.
+    const driveUp = gapPct >= 0.2 && current.close > prior.high && current.close > dayOpen && current.close > first3High
       && current.close > market.referencePrice && driveParticipation && !["bearish_engulfing", "shooting_star"].includes(technicals.candlePattern) && call;
-    const driveDown = gapPct <= -0.25 && current.close < prior.low && current.close < dayOpen && current.close < first3Low
+    const driveDown = gapPct <= -0.2 && current.close < prior.low && current.close < dayOpen && current.close < first3Low
       && current.close < market.referencePrice && driveParticipation && !["bullish_engulfing", "hammer"].includes(technicals.candlePattern) && put;
     if (driveUp || driveDown) {
       action = driveUp ? "enter_call" : "enter_put"; contract = (driveUp ? call : put)!; setupOverride = "opening_drive";
