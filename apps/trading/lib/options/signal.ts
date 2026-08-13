@@ -83,6 +83,37 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
       reasons.length = 0; reasons.push("Trend day: 30-minute hold below the opening range, consolidation breakdown with momentum aligned");
     }
   }
+  // OPENING DRIVE (SPY/SPX only, 9:36-9:51): the gap-and-go hole neither other path
+  // covers — a market that gaps beyond yesterday's range and keeps pushing is tradable
+  // NOW, not at 10:15 (2026-08-13: SPX gapped ~$50 and ran unbought; the OR path was
+  // structurally closed and the trend path wasn't armed yet). UNVALIDATED FRONTIER:
+  // deployed on user instruction ahead of replay; the record + pending replay decide
+  // whether it stays. Requirements: >=0.25% gap over yesterday's close, price beyond
+  // yesterday's high/low (no overhead/support in the way), drive intact (beyond the
+  // day's open AND the first 3 minutes' extreme), and price on the right side of VWAP.
+  if (!action.startsWith("enter") && ["SPY", "SPX"].includes(market.symbol) && market.bars.length >= 6 && market.bars.length <= 21 && market.priorDay) {
+    const dayOpen = market.bars[0]!.open;
+    const current = market.bars.at(-1)!;
+    const prior = market.priorDay!;
+    const gapPct = (dayOpen / prior.close - 1) * 100;
+    const first3High = Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
+    const first3Low = Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
+    const driveParticipation = market.symbol === "SPX" || technicals.volumeConfirmation === true;
+    const driveUp = gapPct >= 0.25 && current.close > prior.high && current.close > dayOpen && current.close > first3High
+      && current.close > market.referencePrice && driveParticipation && !["bearish_engulfing", "shooting_star"].includes(technicals.candlePattern) && call;
+    const driveDown = gapPct <= -0.25 && current.close < prior.low && current.close < dayOpen && current.close < first3Low
+      && current.close < market.referencePrice && driveParticipation && !["bullish_engulfing", "hammer"].includes(technicals.candlePattern) && put;
+    if (driveUp || driveDown) {
+      action = driveUp ? "enter_call" : "enter_put"; contract = (driveUp ? call : put)!; setupOverride = "opening_drive";
+      invalidation = `${market.chartSymbol} back ${driveUp ? "below" : "above"} the day's open ${dayOpen.toFixed(2)} (gap fill = thesis dead)`;
+      reasons.length = 0;
+      reasons.push(`Opening drive: gapped ${gapPct.toFixed(2)}% over yesterday's close, cleared yesterday's ${driveUp ? "high" : "low"}, still pushing beyond the first minutes' ${driveUp ? "high" : "low"}`);
+      // The worker's invalidation check reads openingRangeHigh/Low from this snapshot;
+      // for a drive entry the tripwire is the DAY'S OPEN (price back inside the gap),
+      // not the still-forming opening range — override the stored levels accordingly.
+      if (driveUp) summary.openingRangeHigh = dayOpen; else summary.openingRangeLow = dayOpen;
+    }
+  }
   // Daily context: confluence information, deliberately NOT a veto — the human decides.
   const priorDay = market.priorDay ?? null;
   let priorDayAligned: boolean | null = null;
