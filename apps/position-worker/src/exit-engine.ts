@@ -39,18 +39,20 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   }
   if (position.exitMode === "drive") {
     // Opening-drive entries: a gap-and-go's first minutes are structurally violent — an
-    // instant +45-56% spike arms the trail and the first wobble stops it out right before
-    // the real trend (2026-08-13 replay: standard exits +16-25% vs +141-165% with the
-    // trail suspended). Until 10:00 ET only the disaster stop and the gap-fill
-    // invalidation live; from 10:00 the standard trail rules resume. Flat rules unchanged.
+    // instant spike arms the trail and the first wobble stops it before the real trend.
+    // GRID-CALIBRATED on the 21 historical fire days' REAL option tapes (2026-08-13):
+    // immediate trail = -2%/trade; resume 10:15 with a FLAT 20% width = +26%/trade
+    // (best band; 10:30 identical, 10:00 far worse — the 10:00-10:05 shake is real).
+    // The 15%-after-2x tightening is deliberately absent here (it halved the edge:
+    // +14% vs +26%). Profile: 7/21 win, median -30%, monsters carry it — convexity.
+    // Until 10:15 only the disaster stop and gap-fill invalidation live.
     if (heldOvernight && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= 570) return "mandatory_time_exit";
     if (clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
     if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
     if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";
-    if (clock.minutes >= 600) {
+    if (clock.minutes >= 615) {
       const driveGain = position.peakBid / position.entryPrice - 1;
-      const driveTrail = driveGain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : driveGain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
-      if (driveTrail != null && bid <= position.peakBid * (1 - driveTrail)) return "trailing_stop";
+      if (driveGain >= EXIT_RULES.trailActivationPct && bid <= position.peakBid * (1 - EXIT_RULES.trailPct)) return "trailing_stop";
     }
     return null;
   }
