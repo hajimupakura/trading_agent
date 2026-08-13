@@ -116,8 +116,11 @@ export async function queueFlowFollowPair(input: { symbol: string; direction: "b
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const { count: todayPairs } = await admin.from("paper_ticket_queue").select("id", { count: "exact", head: true }).like("strategy", "flow-%").in("status", ["pending", "placed"]).gte("created_at", `${today}T00:00:00-04:00`);
   if ((todayPairs ?? 0) >= 6) return; // 3 pairs/day cap (cancelled/expired don't count)
-  // Per-symbol dedupe over a 3-day window (NOT the calendar day — midnight resets re-queued the same print).
-  const { data: dupe } = await admin.from("paper_ticket_queue").select("id").like("strategy", "flow-%").ilike("note", `${input.symbol} flow-follow%`).gte("created_at", new Date(Date.now() - 3 * 86_400_000).toISOString()).limit(1).maybeSingle();
+  // Per-symbol+direction dedupe over a 3-day window (NOT the calendar day — midnight
+  // resets re-queued the same print). Cancelled/errored rows don't count (2026-08-13:
+  // the morning's cancelled stale SNDK rows blocked the fresh $5.2M put print), and an
+  // OPPOSITE-direction print on the same symbol is a new hypothesis, never a dupe.
+  const { data: dupe } = await admin.from("paper_ticket_queue").select("id").like("strategy", "flow-%").in("status", ["pending", "placed"]).ilike("note", `${input.symbol} flow-follow%${input.direction}%`).gte("created_at", new Date(Date.now() - 3 * 86_400_000).toISOString()).limit(1).maybeSingle();
   if (dupe) return;
   const { data: snap } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying", input.symbol === "SPXW" ? "SPX" : input.symbol).maybeSingle();
   const side = input.direction === "bullish" ? "call" : "put";
