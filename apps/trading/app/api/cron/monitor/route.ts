@@ -15,6 +15,7 @@ import { runMetalTriggers } from "@/lib/options/metals-triggers";
 import { runEarningsCalendarCheck } from "@/lib/options/earnings-guard";
 import { runFlowWatchScoring } from "@/lib/options/flow-watch";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
+import { runPaperTicketQueue } from "@/lib/alpaca/ticket-queue";
 import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -68,6 +69,10 @@ export async function GET(request: Request) {
       .catch(error => { console.error("rh auto entry failed", error); return { entered:null, skipped:String(error) }; });
     if (rhAutoEntry.entered) break;
   }
+  // Paper ticket queue: programmatic paper orders (flow-follow ITM/OTM pairs, ad-hoc
+  // tracked buys). Self-gates to market session; prices from the freshest snapshot.
+  const tickets = await runPaperTicketQueue().catch(error => { console.error("paper ticket queue failed", error); return { placed:0, skipped:0 }; });
+  void tickets;
   const radar = await runMarketRadar().catch(error => { console.error("market radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });
   // Post-close surge sweep (16:02-16:25): the measured breakout trigger on SPY + watchlist.
   const surge = await runSurgeRadar().catch(error => { console.error("surge radar failed", error); return { fired:[] as string[], errors:[String(error)] }; });

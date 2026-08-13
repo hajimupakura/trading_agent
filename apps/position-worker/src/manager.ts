@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
+import { EXIT_RULES, dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { cancelOrder, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
@@ -144,8 +144,13 @@ export class PositionManager {
         body:`${position.alpacaSymbol} is bidding $${quote.bid.toFixed(2)} vs your $${position.entryPrice.toFixed(2)} entry (${(quote.bid/position.entryPrice).toFixed(1)}x). Selling ${Math.max(1,Math.ceil(position.quantity/10))} of ${position.quantity} contracts here pays back the original debit — the rest rides free. The worker will NOT sell automatically in ride mode unless the bid falls below 50% of entry.`,
         metadata:{ contractTicker:position.ticker, bid:quote.bid, entryPrice:position.entryPrice } }).catch(()=>undefined);
     }
+    // RIDE mode still must never hold through expiration: on the contract's last day
+    // the 15:10 flat applies — an unsold expiring option settles worthless, which is
+    // strictly worse than any close price.
+    const clock = easternClock(new Date(now));
+    const expiryFlat = dte != null && dte <= 0 && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= EXIT_RULES.mandatoryExitMinutes;
     const reason = trendMode
-      ? (quote.bid <= position.entryPrice * 0.5 ? "premium_stop" as const : null)
+      ? (quote.bid <= position.entryPrice * 0.5 ? "premium_stop" as const : expiryFlat ? "mandatory_time_exit" as const : null)
       : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2});
     const symbolOrders = orders.filter(order => order.symbol === position.alpacaSymbol && order.side === "sell");
     const openClose = symbolOrders.find(activeOrder); const recentlyFilled = symbolOrders.find(order => order.status === "filled" && order.filled_at && now-Date.parse(order.filled_at)<30_000);
