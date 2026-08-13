@@ -39,17 +39,27 @@ export async function runPaperTicketQueue(): Promise<{ placed: number; skipped: 
   let placed = 0, skipped = 0;
   for (const ticket of tickets ?? []) {
     try {
+      // Stale-ticket guard: a ticket that sat unplaced for 2+ hours (queued overnight,
+      // priced off a dead snapshot, thesis gone) expires instead of executing late.
+      if (Date.now() - Date.parse(String(ticket.created_at)) > 2 * 3_600_000) {
+        await admin.from("paper_ticket_queue").update({ status: "expired", result: { reason: "ticket sat unplaced for over 2 hours" } }).eq("id", ticket.id);
+        skipped++; continue;
+      }
       const ask = await askFromSnapshots(admin, String(ticket.contract_ticker));
       if (ask == null) { skipped++; continue; } // stale/missing quote — retry next tick
       const clientOrderId = `velocity-ticket-${String(ticket.id).slice(0, 8)}-${Date.now() % 1e7}`.slice(0, 48);
       const order = await submitPaperOptionOrder({ symbol: String(ticket.contract_ticker), limitPrice: ask, clientOrderId, quantity: Number(ticket.quantity) });
       // Pre-create the monitor row so the worker adopts with the requested exit mode
       // (trend = ride the thesis, no same-day flat; worker preserves stored modes).
-      await admin.from("paper_position_monitors").upsert({
+      // latest_ask/last_quote_at are NOT NULL — omitting them made this insert fail
+      // silently on 2026-08-13 and the worker defaulted 1DTE fills to burst mode.
+      const { error: monitorError } = await admin.from("paper_position_monitors").upsert({
         contract_ticker: ticket.contract_ticker, user_id: owner.id, signal_id: null, status: "monitoring",
-        entry_price: ask, peak_bid: ask, latest_bid: ask, opened_at: new Date().toISOString(),
+        entry_price: ask, peak_bid: ask, latest_bid: ask, latest_ask: ask,
+        opened_at: new Date().toISOString(), last_quote_at: new Date().toISOString(),
         exit_mode: ticket.exit_mode, updated_at: new Date().toISOString(),
       });
+      if (monitorError) console.error("ticket monitor pre-create failed", ticket.contract_ticker, monitorError.message);
       await admin.from("paper_trade_orders").insert({
         user_id: owner.id, signal_id: null, alpaca_order_id: order.id, client_order_id: order.client_order_id,
         action: "buy_to_open", underlying: (/^O:([A-Z]+?)\d{6}/.exec(String(ticket.contract_ticker))?.[1] ?? "").replace(/W$/, ""),
@@ -79,11 +89,19 @@ export async function runPaperTicketQueue(): Promise<{ placed: number; skipped: 
 // direction and expiry. The paired records answer "if whales are worth following,
 // which moneyness pays?" Max 3 pairs/day; one pair per symbol per day.
 export async function queueFlowFollowPair(input: { symbol: string; direction: "bullish" | "bearish"; expirationDate: string; premium: number }): Promise<void> {
+  // Session gate: chains keep refreshing overnight with the day's FINAL tape, so
+  // recordFlowWatch fires off stale prints at 9 PM/midnight. A follow is only valid
+  // while the print is fresh — queue during the session only (9:35-15:30 ET, weekdays).
+  // 2026-08-13: overnight queues bought yesterday's flow at the open AND double-queued
+  // NVDA when the calendar-day dedupe reset at midnight.
+  const clock = etNow();
+  if (["Sat", "Sun"].includes(clock.weekday) || clock.minutes < 575 || clock.minutes > 930) return;
   const admin = createAdminClient();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-  const { count: todayPairs } = await admin.from("paper_ticket_queue").select("id", { count: "exact", head: true }).like("strategy", "flow-%").gte("created_at", `${today}T00:00:00-04:00`);
-  if ((todayPairs ?? 0) >= 6) return; // 3 pairs/day cap
-  const { data: dupe } = await admin.from("paper_ticket_queue").select("id").like("strategy", "flow-%").ilike("note", `%${input.symbol}%`).gte("created_at", `${today}T00:00:00-04:00`).limit(1).maybeSingle();
+  const { count: todayPairs } = await admin.from("paper_ticket_queue").select("id", { count: "exact", head: true }).like("strategy", "flow-%").in("status", ["pending", "placed"]).gte("created_at", `${today}T00:00:00-04:00`);
+  if ((todayPairs ?? 0) >= 6) return; // 3 pairs/day cap (cancelled/expired don't count)
+  // Per-symbol dedupe over a 3-day window (NOT the calendar day — midnight resets re-queued the same print).
+  const { data: dupe } = await admin.from("paper_ticket_queue").select("id").like("strategy", "flow-%").ilike("note", `${input.symbol} flow-follow%`).gte("created_at", new Date(Date.now() - 3 * 86_400_000).toISOString()).limit(1).maybeSingle();
   if (dupe) return;
   const { data: snap } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying", input.symbol === "SPXW" ? "SPX" : input.symbol).maybeSingle();
   const side = input.direction === "bullish" ? "call" : "put";
