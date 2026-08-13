@@ -47,4 +47,10 @@ export async function submitPaperOptionOrder(input: { symbol:string; limitPrice:
     limit_price:input.limitPrice.toFixed(2), client_order_id:input.clientOrderId, position_intent:"buy_to_open",
   }) });
 }
+export async function submitPaperOptionSell(input: { symbol:string; limitPrice:number; clientOrderId:string; quantity:number }) {
+  return alpaca<AlpacaOrder>("/v2/orders", { method:"POST", body:JSON.stringify({
+    symbol:optionSymbolForAlpaca(input.symbol), qty:String(Math.max(1,Math.floor(input.quantity))), side:"sell", type:"limit", time_in_force:"day",
+    limit_price:input.limitPrice.toFixed(2), client_order_id:input.clientOrderId, position_intent:"sell_to_close",
+  }) });
+}
 export async function getRecentPaperOrders(){return alpaca<AlpacaOrder[]>("/v2/orders?status=all&limit=100&direction=desc&nested=true");}

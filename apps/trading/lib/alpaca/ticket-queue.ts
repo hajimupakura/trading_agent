@@ -1,7 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
-import { submitPaperOptionOrder } from "./paper";
+import { submitPaperOptionOrder, submitPaperOptionSell } from "./paper";
 import type { CommandCenter } from "@/lib/options/types";
 
 // PAPER TICKET QUEUE: programmatic paper orders. Insert a row (contract, quantity,
@@ -15,16 +15,16 @@ const etNow = () => {
   return { weekday: String(parts.weekday), minutes: Number(parts.hour) * 60 + Number(parts.minute) };
 };
 
-async function askFromSnapshots(admin: ReturnType<typeof createAdminClient>, contractTicker: string): Promise<number | null> {
+async function quoteFromSnapshots(admin: ReturnType<typeof createAdminClient>, contractTicker: string): Promise<{ ask: number; bid: number } | null> {
   const underlying = /^O:([A-Z]+?)\d{6}/.exec(contractTicker)?.[1] ?? "";
   const symbol = underlying === "SPXW" ? "SPX" : underlying;
   const { data } = await admin.from("options_monitor_snapshots").select("payload,updated_at").eq("underlying", symbol).maybeSingle();
   if (!data) return null;
   const ageMs = Date.now() - Date.parse(String(data.updated_at));
   if (ageMs > 10 * 60_000) return null; // snapshot too stale to price against
-  const contracts = ((data.payload as CommandCenter | null)?.contracts ?? []) as Array<{ ticker: string; ask: number }>;
+  const contracts = ((data.payload as CommandCenter | null)?.contracts ?? []) as Array<{ ticker: string; ask: number; bid: number }>;
   const found = contracts.find(contract => contract.ticker === contractTicker);
-  return found && found.ask > 0 ? found.ask : null;
+  return found && found.ask > 0 ? { ask: found.ask, bid: found.bid } : null;
 }
 
 export async function runPaperTicketQueue(): Promise<{ placed: number; skipped: number }> {
@@ -45,9 +45,25 @@ export async function runPaperTicketQueue(): Promise<{ placed: number; skipped: 
         await admin.from("paper_ticket_queue").update({ status: "expired", result: { reason: "ticket sat unplaced for over 2 hours" } }).eq("id", ticket.id);
         skipped++; continue;
       }
-      const ask = await askFromSnapshots(admin, String(ticket.contract_ticker));
-      if (ask == null) { skipped++; continue; } // stale/missing quote — retry next tick
+      const quote = await quoteFromSnapshots(admin, String(ticket.contract_ticker));
+      if (quote == null) { skipped++; continue; } // stale/missing quote — retry next tick
       const clientOrderId = `velocity-ticket-${String(ticket.id).slice(0, 8)}-${Date.now() % 1e7}`.slice(0, 48);
+      // SELL tickets (manual intervention): place sell-to-close at the bid and mark the
+      // ticket done — the worker's close-order escalation adopts the working sell (it
+      // chases the bid until filled) and journals the exit like any other close.
+      if (ticket.action === "sell") {
+        if (!(quote.bid > 0)) { skipped++; continue; }
+        const sellOrder = await submitPaperOptionSell({ symbol: String(ticket.contract_ticker), limitPrice: quote.bid, clientOrderId, quantity: Number(ticket.quantity) });
+        await admin.from("paper_ticket_queue").update({ status: "placed", result: { orderId: sellOrder.id, limitPrice: quote.bid } }).eq("id", ticket.id);
+        await createAlert({
+          userId: String(owner.id), eventKey: `paper-ticket-${ticket.id}`, severity: "success",
+          title: `Manual sell placed: ${ticket.quantity} × ${String(ticket.contract_ticker).replace("O:", "")}`,
+          body: `SELL to close at a $${quote.bid.toFixed(2)} limit${ticket.note ? ` · ${ticket.note}` : ""}. The worker escalates the price until it fills and journals the exit.`,
+          metadata: { kind: "paper_ticket_sell", contractTicker: ticket.contract_ticker },
+        }).catch(() => undefined);
+        placed++; continue;
+      }
+      const ask = quote.ask;
       const order = await submitPaperOptionOrder({ symbol: String(ticket.contract_ticker), limitPrice: ask, clientOrderId, quantity: Number(ticket.quantity) });
       // Pre-create the monitor row so the worker adopts with the requested exit mode
       // (trend = ride the thesis, no same-day flat; worker preserves stored modes).
