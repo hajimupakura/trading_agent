@@ -71,7 +71,10 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const econToday = todaysEconomicEvent();
   const cautionEvent = econToday?.guarded ? econToday : null;
   if (cautionEvent && cautionEvent.releaseLabel.startsWith("8:30") && etMinutes() < 630) return { entered: null, skipped: `event-day caution: entries begin 10:30 on ${cautionEvent.name} days` };
-  const effectiveCap = cautionEvent ? settings.rhMaxTradeDebit / 2 : settings.rhMaxTradeDebit;
+  // SPX carries its own (higher) per-trade cap: same-day SPX contracts at the open run
+  // $400-800, so a shared $300 cap silently excluded the user's preferred underlying.
+  const baseCap = contract.underlying === "SPX" ? settings.rhMaxTradeDebitSpx : settings.rhMaxTradeDebit;
+  const effectiveCap = cautionEvent ? baseCap / 2 : baseCap;
   const earningsBlock = await activeEarningsGuard(contract.underlying);
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   const minutes = etMinutes();
@@ -145,7 +148,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     const fallback = [contract, ...(snapshot.contracts ?? [])]
       .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate !== chosen.expirationDate
         && candidate.dte <= 5 && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap && candidate.delta != null)
-      .map(candidate => ({ candidate, fit: Math.min(Math.floor(settings.rhMaxTradeDebit / (candidate.ask * 100)), settings.maxContractsPerTrade) }))
+      .map(candidate => ({ candidate, fit: Math.min(Math.floor(effectiveCap / (candidate.ask * 100)), settings.maxContractsPerTrade) }))
       .filter(entry => entry.fit >= 1)
       .sort((a, b) => b.fit * Math.abs(b.candidate.delta!) - a.fit * Math.abs(a.candidate.delta!))[0];
     if (!fallback) return { entered: null, skipped: `0DTE refused by Robinhood and no next-expiry contract fits the cap` };
