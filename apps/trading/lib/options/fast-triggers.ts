@@ -14,7 +14,10 @@ import type { CommandCenter, MarketState, WatchUnderlying } from "./types";
 // strict engine still makes every actual decision. Cost math (2026-08-12): ~8-10
 // Alpaca req/min added vs the 200/min free cap; Massive unchanged except on fires.
 
-export const FAST_SYMBOLS: WatchUnderlying[] = ["NVDA", "TSLA", "SPCX", "QQQ", "GOOGL"];
+// SNDK/MU added 2026-08-13 after SNDK's +$220 trend day went unbought (the ask-ceiling
+// bug was the main cause, but 5-minute rotation latency compounds on fast movers).
+// ~4 extra Alpaca req/min — well inside the 200/min cap.
+export const FAST_SYMBOLS: WatchUnderlying[] = ["NVDA", "TSLA", "SPCX", "QQQ", "GOOGL", "SNDK", "MU"];
 
 function roughTrigger(market: MarketState): boolean {
   const bars = market.bars;
