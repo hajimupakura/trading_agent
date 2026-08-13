@@ -1,6 +1,9 @@
 import type { ManagedPosition } from "./types.js";
 
-export const EXIT_RULES = { stopLossPct:.30, trailActivationPct:.40, trailPct:.20, stretchActivationPct:1, stretchTrailPct:.15, noFollowThroughMs:10 * 60_000, followThroughPct:.10, mandatoryExitMinutes:15 * 60 + 10,
+// trailActivationPct 0.40→0.35 (2026-08-13): grid on 42 tapes — arm 35/trail 20 tested
+// best (+8.4%/trade vs +7.6% at 40); plateau is 30-40, arms at 20-25 halve the edge
+// (an early trail sells at peak×0.80 ≈ scratch, amputating the monsters that ARE the edge).
+export const EXIT_RULES = { stopLossPct:.30, trailActivationPct:.35, trailPct:.20, stretchActivationPct:1, stretchTrailPct:.15, noFollowThroughMs:10 * 60_000, followThroughPct:.10, mandatoryExitMinutes:15 * 60 + 10,
   // Swing positions: opened at/after 15:30 ET and deliberately held overnight. Next day they run
   // on stop/trail/invalidation only, until the standard 15:10 flat — which also guards expiry,
   // since a 1DTE swing expires at that day's close.
