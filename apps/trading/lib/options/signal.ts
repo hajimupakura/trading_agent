@@ -83,7 +83,7 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
       reasons.length = 0; reasons.push("Trend day: 30-minute hold below the opening range, consolidation breakdown with momentum aligned");
     }
   }
-  // OPENING DRIVE (SPY/SPX only, 9:36-9:51): the gap-and-go hole neither other path
+  // OPENING DRIVE (SPY/SPX only, 9:34-9:51): the gap-and-go hole neither other path
   // covers — a market that gaps beyond yesterday's range and keeps pushing is tradable
   // NOW, not at 10:15 (2026-08-13: SPX gapped ~$50 and ran unbought; the OR path was
   // structurally closed and the trend path wasn't armed yet). UNVALIDATED FRONTIER:
@@ -91,7 +91,11 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   // whether it stays. Requirements: >=0.25% gap over yesterday's close, price beyond
   // yesterday's high/low (no overhead/support in the way), drive intact (beyond the
   // day's open AND the first 3 minutes' extreme), and price on the right side of VWAP.
-  if (!action.startsWith("enter") && ["SPY", "SPX"].includes(market.symbol) && market.bars.length >= 6 && market.bars.length <= 21 && market.priorDay) {
+  // 9:34 is the practical floor: bars 1-3 ARE the baseline ("first 3 minutes' extreme"),
+  // so the question "is it still pushing past the opening burst?" is unanswerable before
+  // bar 4 — and 9:30-9:33 option spreads are too wide to buy into anyway. Swept 9:34 vs
+  // 9:36 on 67 sessions: same 22 fires, +0.78 vs +0.75 SPY pts managed — no edge lost.
+  if (!action.startsWith("enter") && ["SPY", "SPX"].includes(market.symbol) && market.bars.length >= 4 && market.bars.length <= 21 && market.priorDay) {
     const dayOpen = market.bars[0]!.open;
     const current = market.bars.at(-1)!;
     const prior = market.priorDay!;
