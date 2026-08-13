@@ -80,6 +80,22 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
   return { symbol, chartSymbol:symbol, asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120), priorDay };
 }
 
+// Prior-day levels for SPX via Massive daily aggs, cached per session date. Without
+// this, SPX market state carried priorDay:null forever — which silently disabled the
+// opening-drive path (it needs yesterday's close/high) and starved the daily-context
+// confluence lines. Found 2026-08-13 replaying the SPX gap morning.
+let spxPriorDayCache:{date:string;value:MarketState["priorDay"]}|null=null;
+async function getSpxPriorDay(today:string):Promise<MarketState["priorDay"]> {
+  if(spxPriorDayCache?.date===today&&spxPriorDayCache.value)return spxPriorDayCache.value;
+  try{
+    const payload:{results?:Array<{t:number;h:number;l:number;c:number}>}=await massive(`/v2/aggs/ticker/I:SPX/range/1/day/${addDays(today,-7)}/${today}?adjusted=true&sort=desc&limit=10`);
+    const prior=(payload.results??[]).find(bar=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date(bar.t))<today);
+    const value=prior?{high:prior.h,low:prior.l,close:prior.c}:null;
+    spxPriorDayCache={date:today,value};
+    return value;
+  }catch{return null;}
+}
+
 async function getSpxMarketState():Promise<MarketState> {
   const date=dateEt();
   let bars:Bar[];
@@ -104,7 +120,8 @@ async function getSpxMarketState():Promise<MarketState> {
   // SPX is a calculated index, not a traded instrument, so native volume/VWAP do not exist.
   // Price-only momentum remains usable; volume confirmation is deliberately treated as unavailable.
   const regime=bars.length<15?"opening":current.close>referencePrice&&technicals.ema8>technicals.ema21?"uptrend":current.close<referencePrice&&technicals.ema8<technicals.ema21?"downtrend":"range";
-  return {symbol:"SPX",chartSymbol:"SPX",asOf:current.timestamp,price:current.close,displayPrice:current.close,referencePrice,referenceLabel:"SESSION MEAN",openingRangeHigh,openingRangeLow,regime,technicals,bars:bars.slice(-120)};
+  const priorDay=await getSpxPriorDay(date);
+  return {symbol:"SPX",chartSymbol:"SPX",asOf:current.timestamp,price:current.close,displayPrice:current.close,referencePrice,referenceLabel:"SESSION MEAN",openingRangeHigh,openingRangeLow,regime,technicals,bars:bars.slice(-120),priorDay};
 }
 
 export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
