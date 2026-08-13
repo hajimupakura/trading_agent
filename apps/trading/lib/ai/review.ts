@@ -111,11 +111,16 @@ async function marketReaction(): Promise<string> {
       headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) return "market reaction data unavailable";
-    const payload = await response.json() as Record<string, { latestTrade?: { p?: number }; prevDailyBar?: { c?: number } }>;
+    const payload = await response.json() as Record<string, { latestTrade?: { p?: number }; dailyBar?: { c?: number; t?: string }; prevDailyBar?: { c?: number } }>;
+    // Pre-market (8:40 CPI/NFP briefs) the snapshot's dailyBar still holds YESTERDAY's
+    // session, so prevDailyBar is two days old — resolve the prior close by bar date.
+    const dateEt = (value: string | Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(typeof value === "string" ? new Date(value) : value);
+    const todayEt = dateEt(new Date());
     return ["SPY", "QQQ", "GLD"].map(symbol => {
       const snap = payload[symbol];
-      if (!snap?.latestTrade?.p || !snap.prevDailyBar?.c) return `${symbol}: n/a`;
-      const changePct = (snap.latestTrade.p / snap.prevDailyBar.c - 1) * 100;
+      const base = snap?.dailyBar?.c && snap.dailyBar.t && dateEt(snap.dailyBar.t) < todayEt ? snap.dailyBar.c : snap?.prevDailyBar?.c;
+      if (!snap?.latestTrade?.p || !base) return `${symbol}: n/a`;
+      const changePct = (snap.latestTrade.p / base - 1) * 100;
       return `${symbol} $${snap.latestTrade.p.toFixed(2)} (${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}% vs yesterday's close)`;
     }).join(" · ");
   } catch { return "market reaction data unavailable"; }

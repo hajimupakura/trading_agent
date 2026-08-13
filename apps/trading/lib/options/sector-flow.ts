@@ -55,8 +55,18 @@ function headers() {
   return { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
 }
 
-interface SnapshotBar { c: number; v: number }
+interface SnapshotBar { c: number; v: number; t: string }
 interface Snapshot { dailyBar?: SnapshotBar; prevDailyBar?: SnapshotBar; latestTrade?: { p: number } }
+
+// Pre-market, today's daily bar does not exist yet on the IEX feed, so a snapshot's
+// `dailyBar` still holds YESTERDAY's session and `prevDailyBar` the day BEFORE that.
+// Trusting the prevDailyBar slot before the open compares against a two-day-old close
+// and manufactures phantom gaps (2026-08-13: "SPCX gapping +9.7%" that was really
+// Tuesday's intraday move). Resolve the prior close by bar DATE, never slot position.
+function priorClose(snap: Snapshot | undefined, today: string): number | null {
+  if (snap?.dailyBar?.c && etDate(new Date(snap.dailyBar.t)) < today) return snap.dailyBar.c;
+  return snap?.prevDailyBar?.c ?? null;
+}
 async function getSnapshots(symbols: string[]): Promise<Record<string, Snapshot>> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/snapshots");
   url.searchParams.set("symbols", symbols.join(",")); url.searchParams.set("feed", "iex");
@@ -141,8 +151,9 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
       const snaps = await getSnapshots([...WATCH_UNDERLYINGS]);
       for (const symbol of WATCH_UNDERLYINGS) {
         const snap = snaps[symbol];
-        if (!snap?.latestTrade?.p || !snap.prevDailyBar?.c) continue;
-        const gapPct = (snap.latestTrade.p / snap.prevDailyBar.c - 1) * 100;
+        const base = priorClose(snap, today);
+        if (!snap?.latestTrade?.p || !base) continue;
+        const gapPct = (snap.latestTrade.p / base - 1) * 100;
         if (Math.abs(gapPct) < 3) continue;
         const eventKey = `radar-gap-name-${today}-${symbol}`;
         const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
@@ -150,7 +161,7 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
         await createAlert({
           userId, eventKey, severity: "warning",
           title: `${symbol} gapping ${pct(gapPct)} pre-market`,
-          body: `${symbol} is trading around $${snap.latestTrade.p.toFixed(2)} pre-market vs yesterday's $${snap.prevDailyBar.c.toFixed(2)} close — likely overnight news. Pre-market prices are thin and can move; check the story before doing anything. Options open at 9:30; big gaps often keep trending, but the disciplined entry waits for the first 15 minutes to confirm direction. Nothing is being bought automatically.`,
+          body: `${symbol} is trading around $${snap.latestTrade.p.toFixed(2)} pre-market vs yesterday's $${base.toFixed(2)} close — likely overnight news. Pre-market prices are thin and can move; check the story before doing anything. Options open at 9:30; big gaps often keep trending, but the disciplined entry waits for the first 15 minutes to confirm direction. Nothing is being bought automatically.`,
           metadata: { kind: "premarket_gap", symbol, gapPct: +gapPct.toFixed(2) },
         });
         fired.push(`gap-${symbol}`);
@@ -159,12 +170,14 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
     await guard("premarket", async () => {
       const snapshots = await getSnapshots(symbols);
       const spy = snapshots.SPY;
-      if (!spy?.latestTrade?.p || !spy.prevDailyBar?.c) return;
-      const spyGap = (spy.latestTrade.p / spy.prevDailyBar.c - 1) * 100;
+      const spyBase = priorClose(spy, today);
+      if (!spy?.latestTrade?.p || !spyBase) return;
+      const spyGap = (spy.latestTrade.p / spyBase - 1) * 100;
       const moves = SECTORS.flatMap(sector => {
         const snap = snapshots[sector.etf];
-        if (!snap?.latestTrade?.p || !snap.prevDailyBar?.c) return [];
-        const gap = (snap.latestTrade.p / snap.prevDailyBar.c - 1) * 100;
+        const base = priorClose(snap, today);
+        if (!snap?.latestTrade?.p || !base) return [];
+        const gap = (snap.latestTrade.p / base - 1) * 100;
         return [{ label: sector.label, etf: sector.etf, gap, excess: gap - spyGap }];
       }).filter(move => Math.abs(move.excess) >= 0.5)
         .sort((a, b) => Math.abs(b.excess) - Math.abs(a.excess)).slice(0, 4);
@@ -185,8 +198,12 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
   // ---- Regular session: volume-confirmed reads.
   const [snapshots, avgVolumes] = await Promise.all([getSnapshots(symbols), getAvgVolumes(symbols)]);
   const spy = snapshots.SPY;
-  if (!spy?.dailyBar?.c || !spy.prevDailyBar?.c) return { fired, errors: ["SPY snapshot missing"] };
-  const spyChange = (spy.dailyBar.c / spy.prevDailyBar.c - 1) * 100;
+  // Session reads require today's bar to actually BE today's (thin IEX names can lag
+  // just after the open) and price the change against the date-resolved prior close.
+  const todaysBar = (snap: Snapshot | undefined) => snap?.dailyBar?.c && etDate(new Date(snap.dailyBar.t)) === today ? snap.dailyBar : null;
+  const spyBar = todaysBar(spy); const spyBase = priorClose(spy, today);
+  if (!spyBar || !spyBase) return { fired, errors: ["SPY snapshot missing"] };
+  const spyChange = (spyBar.c / spyBase - 1) * 100;
   // Volume-so-far judged against a pro-rated share of the 20-day average (floored so
   // the first minutes don't divide by ~0).
   const pace = Math.min(1, Math.max(0.2, (clock.minutes - 570) / 390));
@@ -195,10 +212,11 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
   for (const sector of SECTORS) {
     const snap = snapshots[sector.etf];
     const avgVol = avgVolumes[sector.etf];
-    if (!snap?.dailyBar?.c || !snap.prevDailyBar?.c || !avgVol) continue;
-    const changePct = (snap.dailyBar.c / snap.prevDailyBar.c - 1) * 100;
+    const bar = todaysBar(snap); const base = priorClose(snap, today);
+    if (!bar || !base || !avgVol) continue;
+    const changePct = (bar.c / base - 1) * 100;
     const excessPct = changePct - spyChange;
-    const relVolume = snap.dailyBar.v / (avgVol * pace);
+    const relVolume = bar.v / (avgVol * pace);
     const flagged = (Math.abs(excessPct) >= 0.7 && relVolume >= 1.3) || Math.abs(excessPct) >= 1.5 || (relVolume >= 2.2 && Math.abs(excessPct) >= 0.4);
     reads.push({ etf: sector.etf, label: sector.label, changePct, excessPct, relVolume, flagged, direction: excessPct >= 0 ? "in" : "out" });
   }
@@ -244,7 +262,7 @@ export async function runSectorFlow(): Promise<{ fired: string[]; errors: string
       if (sector.leaders.length) {
         const leaderSnaps = await getSnapshots(sector.leaders).catch(() => ({} as Record<string, Snapshot>));
         const moves = sector.leaders
-          .map(symbol => { const snap = leaderSnaps[symbol]; return snap?.dailyBar?.c && snap.prevDailyBar?.c ? { symbol, move: (snap.dailyBar.c / snap.prevDailyBar.c - 1) * 100 } : null; })
+          .map(symbol => { const snap = leaderSnaps[symbol]; const bar = todaysBar(snap); const base = priorClose(snap, today); return bar && base ? { symbol, move: (bar.c / base - 1) * 100 } : null; })
           .filter((entry): entry is { symbol: string; move: number } => entry != null)
           .sort((a, b) => (read.direction === "in" ? b.move - a.move : a.move - b.move))
           .slice(0, 3);
