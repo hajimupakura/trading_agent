@@ -31,7 +31,10 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
-  if (!["SPX", "SPY", "QQQ", "NVDA", "TSLA", "GOOGL", "SPCX"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
+  // MU/SNDK added 2026-08-13 (user request after SNDK's +$220 day). NOTE: at high share
+  // prices their contracts often exceed the non-SPX cap — when nothing fits, the skip is
+  // journaled as "no eligible contract fits the cap", never silent.
+  if (!["SPX", "SPY", "QQQ", "NVDA", "TSLA", "GOOGL", "SPCX", "MU", "SNDK"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
   // Real-money lane: every decision on a real signal is journaled, and an unexpected
   // throw pages as critical — a silent miss here is itself an incident (2026-08-11:
   // a $180 in-cap signal at 10:25 skipped with no trace; cause unrecoverable).
