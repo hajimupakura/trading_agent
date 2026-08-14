@@ -83,7 +83,7 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
       reasons.length = 0; reasons.push("Trend day: 30-minute hold below the opening range, consolidation breakdown with momentum aligned");
     }
   }
-  // OPENING DRIVE (9:34-9:51): the gap-and-go hole neither other path
+  // OPENING DRIVE (9:34-10:14, when it hands off to the armed trend path): the gap-and-go hole neither other path
   // covers — a market that gaps beyond yesterday's range and keeps pushing is tradable
   // NOW, not at 10:15 (2026-08-13: SPX gapped ~$50 and ran unbought; the OR path was
   // structurally closed and the trend path wasn't armed yet). UNVALIDATED FRONTIER:
@@ -99,7 +99,10 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   // 10:15 hole as SPX the day before). Non-index names need a REAL gap (>=1% — a 0.2%
   // single-name gap is noise) and burst volume participation; earnings-day entries are
   // already excluded by the earnings guard in both entry lanes.
-  if (!action.startsWith("enter") && market.bars.length >= 4 && market.bars.length <= 21 && market.priorDay) {
+  // Window extended to 10:14 (2026-08-14): swept 9:34-9:51 vs 9:34-10:14 on 67 sessions —
+  // IDENTICAL fires and P&L (real drives qualify early), so the extension is free
+  // insurance for chop-then-launch mornings and hands off exactly where trend arms.
+  if (!action.startsWith("enter") && market.bars.length >= 4 && market.bars.length <= 44 && market.priorDay) {
     const dayOpen = market.bars[0]!.open;
     const current = market.bars.at(-1)!;
     const prior = market.priorDay!;
