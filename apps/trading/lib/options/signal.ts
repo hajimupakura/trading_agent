@@ -22,7 +22,13 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   const twoClosesAbove = latestBars.length === 2 && latestBars.every(bar => bar.close > market.openingRangeHigh && bar.close > market.referencePrice);
   const twoClosesBelow = latestBars.length === 2 && latestBars.every(bar => bar.close < market.openingRangeLow && bar.close < market.referencePrice);
   const breakoutControlled = technicals.breakoutAtr != null && technicals.breakoutAtr >= .1 && technicals.breakoutAtr <= .65;
-  const participationConfirmed = market.symbol === "SPX" ? true : technicals.volumeConfirmation === true;
+  // Participation: SPY keeps the validated 1.2x burst gate; SPX has no native volume;
+  // single names accept SUSTAINED participation (>=0.7x median) everywhere — the burst
+  // gate blinded three paths in three days to steady single-name moves (SPCX 8/12
+  // trend, SNDK 8/14 drive, TSLA 8/14 breakout). One rule, applied once, for all paths.
+  const participationConfirmed = market.symbol === "SPX" ? true
+    : technicals.volumeConfirmation === true
+    || (!["SPY", "SPX"].includes(market.symbol) && (technicals.relativeVolume ?? 0) >= 0.7);
   const callMomentum = technicals.rsi14 != null && technicals.rsi14 >= 52 && technicals.rsi14 <= 72 && technicals.macd != null && technicals.macdSignal != null && technicals.macd > technicals.macdSignal && technicals.vwapSlope != null && technicals.vwapSlope > 0 && participationConfirmed && breakoutControlled && !["bearish_engulfing","shooting_star"].includes(technicals.candlePattern);
   const putMomentum = technicals.rsi14 != null && technicals.rsi14 <= 48 && technicals.rsi14 >= 28 && technicals.macd != null && technicals.macdSignal != null && technicals.macd < technicals.macdSignal && technicals.vwapSlope != null && technicals.vwapSlope < 0 && participationConfirmed && breakoutControlled && !["bullish_engulfing","hammer"].includes(technicals.candlePattern);
   const call = pickContract("call"); const put = pickContract("put");
@@ -56,13 +62,7 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const consLow = Math.min(...consolidation.map(bar => bar.close));
     const tight = consHigh - consLow <= atr * 1.5;
     const current = market.bars.at(-1)!;
-    // Trend grinds rarely print burst minutes: 30-minute persistence IS participation
-    // evidence. Single names (unvalidated frontier — paper measures them) accept
-    // sustained volume (>=0.7x median) here; SPY keeps its replay-validated 1.2x burst
-    // gate and SPX keeps its volume waiver.
-    const trendParticipation = participationConfirmed
-      || (!["SPY", "SPX"].includes(market.symbol) && (technicals.relativeVolume ?? 0) >= 0.7);
-    const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && trendParticipation;
+    const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && participationConfirmed;
     const persistentAbove = last30.every(bar => bar.close > market.openingRangeHigh) && current.close > market.referencePrice;
     const persistentBelow = last30.every(bar => bar.close < market.openingRangeLow) && current.close < market.referencePrice;
     const callTrend = persistentAbove && tight && momentumOk && technicals.macd! > technicals.macdSignal! && technicals.vwapSlope! > 0
@@ -110,12 +110,7 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const minGap = ["SPY", "SPX"].includes(market.symbol) ? 0.2 : 1.0;
     const first3High = Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
     const first3Low = Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
-    // Participation mirrors the trend path's 2026-08-12 fix: single names in sustained
-    // moves rarely print burst minutes (the rising median IS the participation — SNDK
-    // 8/14 melted +$55 with relativeVolume 1.15 vs the 1.2 burst bar and the drive sat
-    // out). SPY keeps its validated burst gate; SPX has no native volume.
-    const driveParticipation = market.symbol === "SPX" || technicals.volumeConfirmation === true
-      || (!["SPY", "SPX"].includes(market.symbol) && (technicals.relativeVolume ?? 0) >= 0.7);
+    const driveParticipation = participationConfirmed;
     // Gap threshold 0.20 (was 0.25): 2026-08-13's monster gap-and-go measured +0.246% —
     // a 0.25 bar missed it by 0.004%. The 0.20-0.25 band holds exactly one historical
     // fire (2026-07-02, -2.7 SPY pts managed) vs today's runner; borderline gaps also
