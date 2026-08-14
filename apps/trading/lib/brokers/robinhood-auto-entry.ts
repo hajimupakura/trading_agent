@@ -180,7 +180,12 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     chainSymbol = /^O:([A-Z]+?)\d{6}[CP]/.exec(chosen.ticker)?.[1] ?? chainSymbol;
     instrument = await resolveOptionInstrument(userId, { chainSymbol, expirationDate: chosen.expirationDate, strike: chosen.strike, type: chosen.side });
   }
-  const limitPrice = Number(chosen.ask.toFixed(2));
+  // Entry limit: midpoint + 1/3 of the half-spread, NOT the full ask. Paying the ask
+  // cost real trades a consistent 4-17 points vs identical paper signals (2026-08-12
+  // audit: SPY 771P paper -18% vs real -35% on the same signal) — a ~10-15% round-trip
+  // toll on sub-$1 0DTEs. Still marketable enough to fill anything moving; the worker's
+  // 10-minute stale-entry leash cancels what doesn't fill.
+  const limitPrice = Math.max(0.01, Number((chosen.midpoint + (chosen.ask - chosen.midpoint) / 3).toFixed(2)));
   const quantity = Math.min(Math.floor(effectiveCap / (limitPrice * 100)), settings.maxContractsPerTrade);
   if (quantity < 1) return { entered: null, skipped: "chosen contract no longer fits the cap" };
   const debit = quantity * limitPrice * 100;
