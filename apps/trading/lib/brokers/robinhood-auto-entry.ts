@@ -87,7 +87,7 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // Concurrency: max 3 open positions, in CORRELATION GROUPS — SPY and SPX are the
   // same market (never both open); QQQ/NVDA/TSLA/GOOGL/SPCX each their own slot.
   // The worker keeps rh_position_monitors current within seconds in-session.
-  const { data: openRows } = await admin.from("rh_position_monitors").select("occ_ticker").in("status", ["monitoring", "closing", "error"]);
+  const { data: openRows } = await admin.from("rh_position_monitors").select("occ_ticker,option_type").in("status", ["monitoring", "closing", "error"]);
   const open = (openRows ?? []).map(row => String(row.occ_ticker));
   if (open.length >= 3) return { entered: null, skipped: "three positions already open" };
   // Groups: SPY/SPX are one market; each other underlying is its own slot. Max 2 open.
@@ -95,6 +95,12 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const entryGroup = ["SPX", "SPY"].includes(contract.underlying) ? "sp" : contract.underlying;
   if (open.some(occ => groupOf(occ) === entryGroup)) return { entered: null, skipped: `a ${entryGroup === "sp" ? "SPY/SPX" : entryGroup} position is already open` };
   if (open.includes(contract.ticker)) return { entered: null, skipped: "same contract already open" };
+  // SAME-DIRECTION cap (2026-08-14): correlation groups treat QQQ/NVDA/GOOGL as
+  // independent slots, but on an index move they are ONE bet — the 8/14 morning bought
+  // three tech puts in 28 minutes and one fake breakdown stopped all three. At most 2
+  // open positions in the same direction; the third needs the other side of the tape.
+  const sameDirection = (openRows ?? []).filter(row => String(row.option_type) === contract.side).length;
+  if (sameDirection >= 2) return { entered: null, skipped: `already holding ${sameDirection} ${contract.side} positions — same-direction cap` };
   // Daily-loss circuit breaker: equity (mark-to-market, unrealized included) down more
   // than the cap from the morning baseline halts NEW entries for the day. Exits and
   // stops keep running — this stops the digging, not the climbing out.
@@ -122,15 +128,28 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // quantity x |delta| — 5 cheap contracts summing to $250 beat 1 mid strike when
   // their combined exposure is larger. Ties go to the higher per-contract delta
   // (fewer, stronger contracts bleed less to spreads and time decay).
-  let basket = [contract, ...(snapshot.contracts ?? [])]
+  // QUALITY FIRST (2026-08-14 audit): the old score (quantity × delta) maximized
+  // aggregate exposure, which systematically swapped the signal's ~0.45Δ pick for
+  // strips of cheap far-OTM contracts — the 8/14 morning bought 8× 0.18Δ NVDA puts
+  // and 7× ~0.2Δ QQQ puts and stopped out fast on ordinary wiggles. Win probability
+  // lives near the money: when ANY contract >= 0.35|Δ| fits the cap, take the one
+  // nearest the validated 0.45Δ target (liquidity breaking ties) and size within the
+  // cap. Quantity-maximized strips only when no quality strike is affordable.
+  const affordable = [contract, ...(snapshot.contracts ?? [])]
     .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
-      && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap && candidate.delta != null)
-    .map(candidate => {
-      const fit = Math.min(Math.floor(effectiveCap / (candidate.ask * 100)), settings.maxContractsPerTrade);
-      return { candidate, fit, score: fit * Math.abs(candidate.delta!) };
-    })
-    .filter(entry => entry.fit >= 1)
-    .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
+      && candidate.ask > 0 && candidate.ask * 100 <= effectiveCap && candidate.delta != null);
+  const qualityPick = affordable.filter(candidate => Math.abs(candidate.delta!) >= 0.35)
+    .sort((a, b) => Math.abs(Math.abs(a.delta!) - 0.45) - Math.abs(Math.abs(b.delta!) - 0.45) || b.liquidityScore - a.liquidityScore)[0];
+  let basket = qualityPick
+    ? { candidate: qualityPick, fit: Math.min(Math.floor(effectiveCap / (qualityPick.ask * 100)), settings.maxContractsPerTrade), score: Math.abs(qualityPick.delta!) }
+    : affordable
+      .map(candidate => {
+        const fit = Math.min(Math.floor(effectiveCap / (candidate.ask * 100)), settings.maxContractsPerTrade);
+        return { candidate, fit, score: fit * Math.abs(candidate.delta!) };
+      })
+      .filter(entry => entry.fit >= 1)
+      .sort((a, b) => b.score - a.score || Math.abs(b.candidate.delta!) - Math.abs(a.candidate.delta!))[0];
+  if (basket && basket.fit < 1) basket = undefined as unknown as typeof basket;
   // CONVEXITY FALLBACK (2026-08-13, user directive after SNDK's +$220 day): on
   // high-priced names every 0.25-0.70 delta contract can exceed the cap — but on the
   // trend days that fire these signals, the cheap 0.10-0.25 delta strike is exactly
