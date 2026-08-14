@@ -83,7 +83,7 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
       reasons.length = 0; reasons.push("Trend day: 30-minute hold below the opening range, consolidation breakdown with momentum aligned");
     }
   }
-  // OPENING DRIVE (SPY/SPX only, 9:34-9:51): the gap-and-go hole neither other path
+  // OPENING DRIVE (9:34-9:51): the gap-and-go hole neither other path
   // covers — a market that gaps beyond yesterday's range and keeps pushing is tradable
   // NOW, not at 10:15 (2026-08-13: SPX gapped ~$50 and ran unbought; the OR path was
   // structurally closed and the trend path wasn't armed yet). UNVALIDATED FRONTIER:
@@ -95,11 +95,16 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   // so the question "is it still pushing past the opening burst?" is unanswerable before
   // bar 4 — and 9:30-9:33 option spreads are too wide to buy into anyway. Swept 9:34 vs
   // 9:36 on 67 sessions: same 22 fires, +0.78 vs +0.75 SPY pts managed — no edge lost.
-  if (!action.startsWith("enter") && ["SPY", "SPX"].includes(market.symbol) && market.bars.length >= 4 && market.bars.length <= 21 && market.priorDay) {
+  // Single names included 2026-08-14 (SNDK gapped up AGAIN with no path to fire — same
+  // 10:15 hole as SPX the day before). Non-index names need a REAL gap (>=1% — a 0.2%
+  // single-name gap is noise) and burst volume participation; earnings-day entries are
+  // already excluded by the earnings guard in both entry lanes.
+  if (!action.startsWith("enter") && market.bars.length >= 4 && market.bars.length <= 21 && market.priorDay) {
     const dayOpen = market.bars[0]!.open;
     const current = market.bars.at(-1)!;
     const prior = market.priorDay!;
     const gapPct = (dayOpen / prior.close - 1) * 100;
+    const minGap = ["SPY", "SPX"].includes(market.symbol) ? 0.2 : 1.0;
     const first3High = Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
     const first3Low = Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
     const driveParticipation = market.symbol === "SPX" || technicals.volumeConfirmation === true;
@@ -107,9 +112,9 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     // a 0.25 bar missed it by 0.004%. The 0.20-0.25 band holds exactly one historical
     // fire (2026-07-02, -2.7 SPY pts managed) vs today's runner; borderline gaps also
     // wobble +/-0.02% between data sources, so the threshold needs margin.
-    const driveUp = gapPct >= 0.2 && current.close > prior.high && current.close > dayOpen && current.close > first3High
+    const driveUp = gapPct >= minGap && current.close > prior.high && current.close > dayOpen && current.close > first3High
       && current.close > market.referencePrice && driveParticipation && !["bearish_engulfing", "shooting_star"].includes(technicals.candlePattern) && call;
-    const driveDown = gapPct <= -0.2 && current.close < prior.low && current.close < dayOpen && current.close < first3Low
+    const driveDown = gapPct <= -minGap && current.close < prior.low && current.close < dayOpen && current.close < first3Low
       && current.close < market.referencePrice && driveParticipation && !["bullish_engulfing", "hammer"].includes(technicals.candlePattern) && put;
     if (driveUp || driveDown) {
       action = driveUp ? "enter_call" : "enter_put"; contract = (driveUp ? call : put)!; setupOverride = "opening_drive";
