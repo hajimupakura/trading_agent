@@ -110,7 +110,12 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const minGap = ["SPY", "SPX"].includes(market.symbol) ? 0.2 : 1.0;
     const first3High = Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
     const first3Low = Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
-    const driveParticipation = market.symbol === "SPX" || technicals.volumeConfirmation === true;
+    // Participation mirrors the trend path's 2026-08-12 fix: single names in sustained
+    // moves rarely print burst minutes (the rising median IS the participation — SNDK
+    // 8/14 melted +$55 with relativeVolume 1.15 vs the 1.2 burst bar and the drive sat
+    // out). SPY keeps its validated burst gate; SPX has no native volume.
+    const driveParticipation = market.symbol === "SPX" || technicals.volumeConfirmation === true
+      || (!["SPY", "SPX"].includes(market.symbol) && (technicals.relativeVolume ?? 0) >= 0.7);
     // Gap threshold 0.20 (was 0.25): 2026-08-13's monster gap-and-go measured +0.246% —
     // a 0.25 bar missed it by 0.004%. The 0.20-0.25 band holds exactly one historical
     // fire (2026-07-02, -2.7 SPY pts managed) vs today's runner; borderline gaps also
