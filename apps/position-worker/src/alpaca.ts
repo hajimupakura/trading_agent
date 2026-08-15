@@ -15,6 +15,20 @@ export async function getSpyPrice() {
   const payload = await request<{trade?:{p?:number}}>(DATA,"/v2/stocks/SPY/trades/latest?feed=iex");
   const price = Number(payload.trade?.p); return Number.isFinite(price) && price > 0 ? price : null;
 }
+// Live option quote via Alpaca (equity options only — no index/SPXW coverage). Used
+// when the Massive stream has no fresh quote for a Robinhood-held contract: on
+// 2026-08-14 a TSLA put rode a +55% spike the monitors never saw (recorded peak 0%)
+// because the only fallback was a minutes-stale chain snapshot, so no-follow-through
+// sold a winner as a dud.
+export async function getLatestOptionQuote(occTicker:string):Promise<{symbol:string;bid:number;ask:number;timestamp:number}|null> {
+  const symbol = occTicker.replace(/^O:/,"");
+  try {
+    const payload = await request<{quotes?:Record<string,{bp?:number;ap?:number;t?:string}>}>(DATA,`/v1beta1/options/quotes/latest?symbols=${encodeURIComponent(symbol)}&feed=indicative`);
+    const quote = payload.quotes?.[symbol];
+    const bid = Number(quote?.bp); const ask = Number(quote?.ap); const timestamp = quote?.t ? Date.parse(quote.t) : NaN;
+    return bid > 0 && ask >= bid && Number.isFinite(timestamp) ? { symbol: occTicker, bid, ask, timestamp } : null;
+  } catch { return null; }
+}
 export async function submitCloseOrder(input:{symbol:string;quantity:number;limitPrice:number;clientOrderId:string}) {
   return request<AlpacaOrder>(PAPER,"/v2/orders", { method:"POST", body:JSON.stringify({ symbol:input.symbol, qty:String(input.quantity), side:"sell", type:"limit", time_in_force:"day", limit_price:input.limitPrice.toFixed(2), client_order_id:input.clientOrderId, position_intent:"sell_to_close" }) });
 }

@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { config } from "./config.js";
 import { evaluateExit, easternClock } from "./exit-engine.js";
 import { getSnapshotQuote, MassiveQuoteStream } from "./massive.js";
+import { getLatestOptionQuote } from "./alpaca.js";
 import type { ManagedPosition, OptionQuote } from "./types.js";
 
 // Robinhood agentic-account exit management (v2: 24/7 discovery, session-gated exits).
@@ -125,7 +126,13 @@ export class RobinhoodExitManager {
     const orderOpenedAt = openedAtFromOrders(position, orders);
     const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? now;
     const openedAtExact = monitor?.opened_at_exact ?? orderOpenedAt != null;
-    const quote = fresh(quotes.get(position.occTicker), now) ?? await getSnapshotQuote(snapshotUnderlying(position.chainSymbol), position.occTicker);
+    // Quote ladder: Massive stream (fresh <=15s) -> Alpaca live option quote (equity
+    // contracts, <=60s) -> minutes-stale chain snapshot as last resort. The snapshot
+    // path alone let a TSLA put spike +55% invisibly on 8/14 (peaks & the 10-minute
+    // follow-through test are only as good as the freshest quote the worker sees).
+    const restQuote = position.chainSymbol === "SPXW" ? null : await getLatestOptionQuote(position.occTicker);
+    const restFresh = restQuote && now - restQuote.timestamp <= 60_000 ? restQuote : null;
+    const quote = fresh(quotes.get(position.occTicker), now) ?? restFresh ?? await getSnapshotQuote(snapshotUnderlying(position.chainSymbol), position.occTicker);
     if (!quote || now - quote.timestamp > 30_000) {
       await saveMonitor(position, { status: "error", last_error: "No fresh option quote", opened_at: new Date(openedAt).toISOString(), opened_at_exact: openedAtExact });
       throw new Error(`No fresh option quote for ${position.occTicker}`);
