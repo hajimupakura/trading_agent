@@ -67,16 +67,22 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // The 15:10 flat still fires once the contract itself is inside the 2-DTE window.
   const longDated = input.longDated === true;
   const weekday = !["Sat","Sun"].includes(clock.weekday);
-  if (!longDated && weekday && heldOvernight && clock.minutes >= (isSwing ? EXIT_RULES.mandatoryExitMinutes : 570)) return "mandatory_time_exit";
+  // Morning grace for overnight positions (user 2026-08-14: "don't sell first thing —
+  // wait until ~9:45 and see how the market goes"): 9:30-9:44 only the stop lives; at
+  // 9:45 losers go flat while winners keep riding under the normal trail on the NEW
+  // day's peaks (the workers reset peak_bid at the first sighting of each session so
+  // yesterday's high can't trip the trail at the bell). Everything held overnight
+  // still goes flat by 15:10.
+  if (!longDated && weekday && heldOvernight && (clock.minutes >= EXIT_RULES.mandatoryExitMinutes || (!isSwing && clock.minutes >= 585 && bid <= position.entryPrice))) return "mandatory_time_exit";
   if (!longDated && weekday && !heldOvernight && !isSwing && clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
   if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
   if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";
   const gain = position.peakBid / position.entryPrice - 1;
   const trail = gain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : gain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
-  if (trail != null && bid <= position.peakBid * (1 - trail)) return "trailing_stop";
-  // No-follow-through is an intraday scalp rule; swing and long-dated positions are governed
-  // by the stop and trails instead — a 10-minute test would defeat their thesis.
-  if (!isSwing && !longDated && now.getTime() - position.openedAt >= EXIT_RULES.noFollowThroughMs && position.peakBid < position.entryPrice * (1 + EXIT_RULES.followThroughPct)) return "no_follow_through";
+  if (trail != null && !(heldOvernight && clock.minutes < 585) && bid <= position.peakBid * (1 - trail)) return "trailing_stop";
+  // No-follow-through is an intraday scalp rule; swing, long-dated, and overnight
+  // positions are governed by the stop and trails instead.
+  if (!isSwing && !longDated && !heldOvernight && now.getTime() - position.openedAt >= EXIT_RULES.noFollowThroughMs && position.peakBid < position.entryPrice * (1 + EXIT_RULES.followThroughPct)) return "no_follow_through";
   return null;
 }
 

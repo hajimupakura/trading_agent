@@ -137,7 +137,14 @@ export class RobinhoodExitManager {
       await saveMonitor(position, { status: "error", last_error: "No fresh option quote", opened_at: new Date(openedAt).toISOString(), opened_at_exact: openedAtExact });
       throw new Error(`No fresh option quote for ${position.occTicker}`);
     }
-    const peakBid = Math.max(Number(monitor?.peak_bid ?? 0), quote.bid, position.entryPrice);
+    // New-session peak reset: for positions held overnight, yesterday's peak would trip
+    // the trail on the first evaluation of the day — the 9:45 morning-grace decision is
+    // judged on TODAY's tape, so the peak restarts from the day's first quote.
+    const dayKey = (ts: number) => easternClock(new Date(ts)).dateKey;
+    const staleFromYesterday = monitor?.updated_at != null && dayKey(Date.parse(monitor.updated_at)) < dayKey(now) && dayKey(openedAt) < dayKey(now);
+    const peakBid = staleFromYesterday
+      ? Math.max(quote.bid, position.entryPrice)
+      : Math.max(Number(monitor?.peak_bid ?? 0), quote.bid, position.entryPrice);
     const managed: ManagedPosition = {
       ticker: position.occTicker, alpacaSymbol: position.occTicker.slice(2), side: position.optionType,
       quantity: position.quantity, entryPrice: position.entryPrice, peakBid,

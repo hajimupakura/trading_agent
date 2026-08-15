@@ -125,6 +125,13 @@ export class PositionManager {
     }
     this.quoteMisses.delete(position.ticker);
     const quoteState = {bid:quote.bid,ask:quote.ask,quoteAt:quote.timestamp};
+    // New-session peak reset for overnight holds: yesterday's peak would trip the trail
+    // on the first evaluation after the bell — the 9:45 morning-grace decision judges
+    // TODAY's tape, so the peak restarts from the day's first quote.
+    const sessionKey = (ts:number) => easternClock(new Date(ts)).dateKey;
+    if (position.lastQuoteAt != null && sessionKey(position.lastQuoteAt) < sessionKey(now) && sessionKey(position.openedAt) < sessionKey(now)) {
+      position.peakBid = Math.max(position.entryPrice, quote.bid);
+    }
     position.peakBid = Math.max(position.peakBid,quote.bid);
     const dte = dteFromOcc(position.alpacaSymbol);
     // TREND (ride) mode: MAX CONVEXITY — only the 50% disaster floor sells; the trail

@@ -4,7 +4,7 @@ export interface OptionQuote { symbol:string; bid:number; ask:number; timestamp:
 export interface SignalMarket { openingRangeHigh:number; openingRangeLow:number; referencePrice:number; chartSymbol:string }
 export interface ManagedPosition {
   ticker:string; alpacaSymbol:string; side:"call"|"put"; quantity:number; entryPrice:number; peakBid:number; openedAt:number;
-  signalId:string; userId:string; market:SignalMarket; closeOrderId:string|null; closeOrderSubmittedAt:number|null;
+  signalId:string; userId:string; market:SignalMarket; closeOrderId:string|null; closeOrderSubmittedAt:number|null; lastQuoteAt?:number|null;
   // burst = full exit engine (stop/trail/time). trend = MAX CONVEXITY ride: only the
   // 50% disaster floor sells; trail and time rules are off (multi-day convexity swings).
   exitMode:"burst"|"trend"|"scalp"|"drive";

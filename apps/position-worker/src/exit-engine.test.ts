@@ -11,7 +11,11 @@ describe("automatic paper exit engine", () => {
   it("tightens the trail after a 100% gain", () => expect(evaluateExit({ position:{...base,peakBid:8}, bid:6.79, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
   it("exits after ten minutes without 10% follow-through", () => expect(evaluateExit({ position:{...base,peakBid:4.2}, bid:3.9, underlyingPrice:771, now:at("14:11") })).toBe("no_follow_through"));
   it("forces the time exit at 3:10 p.m. ET", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:at("19:10") })).toBe("mandatory_time_exit"));
-  it("closes an overnight position when the next session opens", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:new Date("2026-08-07T13:30:00Z") })).toBe("mandatory_time_exit"));
+  // Morning grace (2026-08-14): overnight positions are NOT dumped at the bell — the
+  // open gets until 9:45 to show its hand. Losers flat at 9:45; winners keep riding.
+  it("holds an overnight position through the 9:30-9:44 grace window", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:new Date("2026-08-07T13:30:00Z") })).toBe(null));
+  it("flats an overnight loser at 9:45", () => expect(evaluateExit({ position:base, bid:3.9, underlyingPrice:771, now:new Date("2026-08-07T13:45:00Z") })).toBe("mandatory_time_exit"));
+  it("lets an overnight winner keep riding at 9:45", () => expect(evaluateExit({ position:{...base,peakBid:4.4}, bid:4.4, underlyingPrice:771, now:new Date("2026-08-07T13:45:00Z") })).toBe(null));
 });
 
 const swing:ManagedPosition = { ...base, openedAt:Date.parse("2026-08-06T19:46:00Z") }; // 15:46 ET
