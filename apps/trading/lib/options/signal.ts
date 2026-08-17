@@ -91,34 +91,32 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   // whether it stays. Requirements: >=0.25% gap over yesterday's close, price beyond
   // yesterday's high/low (no overhead/support in the way), drive intact (beyond the
   // day's open AND the first 3 minutes' extreme), and price on the right side of VWAP.
-  // 9:34 is the practical floor: bars 1-3 ARE the baseline ("first 3 minutes' extreme"),
-  // so the question "is it still pushing past the opening burst?" is unanswerable before
-  // bar 4 — and 9:30-9:33 option spreads are too wide to buy into anyway. Swept 9:34 vs
-  // 9:36 on 67 sessions: same 22 fires, +0.78 vs +0.75 SPY pts managed — no edge lost.
-  // Single names included 2026-08-14 (SNDK gapped up AGAIN with no path to fire — same
-  // 10:15 hole as SPX the day before). Non-index names need a REAL gap (>=1% — a 0.2%
-  // single-name gap is noise) and burst volume participation; earnings-day entries are
-  // already excluded by the earnings guard in both entry lanes.
-  // Window extended to 10:14 (2026-08-14): swept 9:34-9:51 vs 9:34-10:14 on 67 sessions —
-  // IDENTICAL fires and P&L (real drives qualify early), so the extension is free
-  // insurance for chop-then-launch mornings and hands off exactly where trend arms.
-  if (!action.startsWith("enter") && market.bars.length >= 4 && market.bars.length <= 44 && market.priorDay) {
+  // ENTRY FROM BAR 1 (9:31) — user directive 2026-08-17: "trading should start at 9:30.
+  // if all the fundamentals are right, buy. no need to wait." Bars 1-3 use a reduced-
+  // evidence gap-hold form: gap + beyond yesterday's high + holding above the day's
+  // open, with the gap itself standing in for participation (volume baselines and VWAP
+  // are meaningless that early). From bar 4 the swept config applies unchanged
+  // (first-3-min extreme, VWAP side, volume). Single names need a real gap (>=1%);
+  // earnings days stay excluded by the earnings guard. Window to 10:14, handing off to
+  // the armed trend path.
+  if (!action.startsWith("enter") && market.bars.length >= 1 && market.bars.length <= 44 && market.priorDay) {
     const dayOpen = market.bars[0]!.open;
     const current = market.bars.at(-1)!;
     const prior = market.priorDay!;
     const gapPct = (dayOpen / prior.close - 1) * 100;
     const minGap = ["SPY", "SPX"].includes(market.symbol) ? 0.2 : 1.0;
-    const first3High = Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
-    const first3Low = Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
-    const driveParticipation = participationConfirmed;
+    const early = market.bars.length < 4; // 9:31-9:33 gap-hold form
+    const first3High = early ? Math.max(dayOpen, ...market.bars.slice(0, -1).map(bar => bar.high)) : Math.max(...market.bars.slice(0, 3).map(bar => bar.high));
+    const first3Low = early ? Math.min(dayOpen, ...market.bars.slice(0, -1).map(bar => bar.low)) : Math.min(...market.bars.slice(0, 3).map(bar => bar.low));
+    const driveParticipation = participationConfirmed || early;
     // Gap threshold 0.20 (was 0.25): 2026-08-13's monster gap-and-go measured +0.246% —
     // a 0.25 bar missed it by 0.004%. The 0.20-0.25 band holds exactly one historical
     // fire (2026-07-02, -2.7 SPY pts managed) vs today's runner; borderline gaps also
     // wobble +/-0.02% between data sources, so the threshold needs margin.
     const driveUp = gapPct >= minGap && current.close > prior.high && current.close > dayOpen && current.close > first3High
-      && current.close > market.referencePrice && driveParticipation && !["bearish_engulfing", "shooting_star"].includes(technicals.candlePattern) && call;
+      && (early || current.close > market.referencePrice) && driveParticipation && !["bearish_engulfing", "shooting_star"].includes(technicals.candlePattern) && call;
     const driveDown = gapPct <= -minGap && current.close < prior.low && current.close < dayOpen && current.close < first3Low
-      && current.close < market.referencePrice && driveParticipation && !["bullish_engulfing", "hammer"].includes(technicals.candlePattern) && put;
+      && (early || current.close < market.referencePrice) && driveParticipation && !["bullish_engulfing", "hammer"].includes(technicals.candlePattern) && put;
     if (driveUp || driveDown) {
       action = driveUp ? "enter_call" : "enter_put"; contract = (driveUp ? call : put)!; setupOverride = "opening_drive";
       invalidation = `${market.chartSymbol} back ${driveUp ? "below" : "above"} the day's open ${dayOpen.toFixed(2)} (gap fill = thesis dead)`;

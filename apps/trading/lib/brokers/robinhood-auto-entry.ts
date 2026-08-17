@@ -156,8 +156,14 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // the piece that pays (an under-$2 SNDK call printed >10x). When nothing in the
   // band fits, take the best contract that failed ONLY the delta screen and fits the
   // cap: same spread/volume/freshness quality bar, deliberately lottery-shaped.
+  // REAL-MONEY LOTTERY FALLBACK DISABLED (2026-08-17): it bought 13 far-OTM MU
+  // contracts near a spike top and stopped out -$173 within the hour — directly
+  // against the standing directive ("small consistent gains", "quality positions").
+  // When no quality strike fits the cap, real money SKIPS (journaled) and paper
+  // carries the thesis at proper size. Flip to true to re-enable deliberately.
+  const REAL_LOTTERY_FALLBACK = false;
   let lottery = false;
-  if (!basket) {
+  if (!basket && REAL_LOTTERY_FALLBACK) {
     basket = [contract, ...(snapshot.contracts ?? [])]
       .filter(candidate => !candidate.eligible && candidate.rejectionReasons.every(reason => reason.startsWith("Absolute delta outside"))
         && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate

@@ -27,17 +27,14 @@ export function rankContracts(contracts: RawContract[], settings:RiskSettings=DE
     if (contract.spreadPct > (monitorOnly ? 25 : settings.maxSpreadPct)) rejectionReasons.push(`Spread exceeds ${monitorOnly ? 25 : settings.maxSpreadPct}%`);
     if (!monitorOnly && contract.volume < settings.minContractVolume) rejectionReasons.push(`Volume below ${settings.minContractVolume}`);
     if (contract.midpoint < .1) rejectionReasons.push("Premium below $0.10");
-    // The flat ask ceiling is calibrated to SPY (~1% of spot). On high-priced single
-    // names it silently banned the WHOLE chain — SNDK at $1,500 has no contract under
-    // $8 (2026-08-13, +$220 day missed). Single names scale to 2% of spot (1.1% proved
-    // still too tight on 2026-08-17: SNDK +7% gap inflated even ATM premiums past the
-    // allowance and the whole chain was rejected AGAIN); SPY/SPX keep the flat
-    // replay-validated cap. The blind-spot invariant pages if a liquid chain ever
-    // rejects 100% of contracts, so this class of failure can no longer hide.
-    const askCap = ["SPY","SPX"].includes(contract.underlying) || contract.underlyingPrice == null
-      ? settings.maxOptionAsk
-      : Math.max(settings.maxOptionAsk, contract.underlyingPrice * 0.02);
-    if (!monitorOnly && contract.ask > askCap) rejectionReasons.push(`Ask exceeds $${askCap.toFixed(2)}`);
+    // NO ask ceiling for single names (2026-08-17, third and final iteration): $8 flat
+    // banned SNDK's whole chain, 1.1% of spot banned it on gap days, 2% banned its
+    // 11-DTE series. The ceiling kept doing position-sizing's job by vetoing contracts
+    // instead of sizing them — affordability is enforced where it belongs (per-venue
+    // sizing caps decide HOW MANY, never whether the chain exists). SPY/SPX keep the
+    // flat replay-validated cap; the blind-spot invariant pages if a liquid chain ever
+    // rejects 100% of contracts.
+    if (!monitorOnly && ["SPY","SPX"].includes(contract.underlying) && contract.ask > settings.maxOptionAsk) rejectionReasons.push(`Ask exceeds $${settings.maxOptionAsk.toFixed(2)}`);
     if (!monitorOnly && (contract.quoteUpdatedAt == null || Date.now() - contract.quoteUpdatedAt > 30_000)) rejectionReasons.push("Quote is older than 30 seconds");
     if (!monitorOnly && contract.delta != null && (Math.abs(contract.delta) < .25 || Math.abs(contract.delta) > .70)) rejectionReasons.push("Absolute delta outside 0.25–0.70");
     const score = clamp(
