@@ -62,8 +62,8 @@ export async function GET(request: Request) {
   const rhCandidates: Array<CommandCenter | null> = [
     results[1]?.status === "fulfilled" ? (results[1].value as CommandCenter) : null,
     results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null,
-    ...watchGroup.flatMap((symbol, index) => ["QQQ", "NVDA", "TSLA", "GOOGL", "SPCX", "MU", "SNDK"].includes(symbol) && results[index + 2]?.status === "fulfilled" ? [(results[index + 2] as PromiseFulfilledResult<CommandCenter>).value] : []),
-    ...fastHits.filter(hit => ["QQQ", "NVDA", "TSLA", "GOOGL", "SPCX", "MU", "SNDK"].includes(hit.underlying)).map(hit => hit.snapshot),
+    ...watchGroup.flatMap((symbol, index) => symbol === "QQQ" && results[index + 2]?.status === "fulfilled" ? [(results[index + 2] as PromiseFulfilledResult<CommandCenter>).value] : []),
+    ...fastHits.filter(hit => hit.underlying === "QQQ").map(hit => hit.snapshot),
   ];
   let rhAutoEntry: { entered: string | null; skipped?: string } = { entered: null };
   for (const candidate of rhCandidates) {

@@ -31,10 +31,11 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
-  // MU/SNDK added 2026-08-13 (user request after SNDK's +$220 day). NOTE: at high share
-  // prices their contracts often exceed the non-SPX cap — when nothing fits, the skip is
-  // journaled as "no eligible contract fits the cap", never silent.
-  if (!["SPX", "SPY", "QQQ", "NVDA", "TSLA", "GOOGL", "SPCX", "MU", "SNDK"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe" };
+  // INDEX-ONLY (user call, 2026-08-17 after the -$247 morning): real money trades
+  // SPY/SPX/QQQ only — deep liquidity, tight spreads, replay-validated setups, no
+  // single-name gap mania. Single names live on paper until their record earns a
+  // promotion the user approves.
+  if (!["SPX", "SPY", "QQQ"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe (index-only)" };
   // Real-money lane: every decision on a real signal is journaled, and an unexpected
   // throw pages as critical — a silent miss here is itself an incident (2026-08-11:
   // a $180 in-cap signal at 10:25 skipped with no trace; cause unrecoverable).
