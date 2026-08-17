@@ -17,7 +17,11 @@ export function rankContracts(contracts: RawContract[], settings:RiskSettings=DE
     // available expiry up to 5 DTE — the intraday lifecycle (stop/trail/15:10 flat) is
     // identical; longer expiry only mutes the leverage. SPY/SPX stay strictly 0-2 DTE
     // per the replay-validated config.
-    const singleNameOk = !["SPY","SPX"].includes(contract.underlying) && contract.dte <= 5;
+    // <=14 (was <=5, 2026-08-17): SPCX/SNDK carry NO weekly some Mondays — their prior
+    // Friday expiry dies and only a ~11-DTE series exists, which the 5-day rule banned
+    // outright, freezing the engine out of a +5-7% morning. The picker still prefers
+    // the shortest listed expiry, so this only bites when nothing shorter exists.
+    const singleNameOk = !["SPY","SPX"].includes(contract.underlying) && contract.dte <= 14;
     if (!monitorOnly && !settings.allowedDte.includes(contract.dte as 0|1|2) && !singleNameOk) rejectionReasons.push(contract.dte > 2 ? "Next-session expiry — the engine trades 0-2 calendar DTE; manual entries only" : "DTE is disabled in risk settings");
     if (contract.bid <= 0 || contract.ask <= 0 || contract.ask < contract.bid) rejectionReasons.push("Invalid market");
     if (contract.spreadPct > (monitorOnly ? 25 : settings.maxSpreadPct)) rejectionReasons.push(`Spread exceeds ${monitorOnly ? 25 : settings.maxSpreadPct}%`);
