@@ -95,6 +95,15 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const entryGroup = ["SPX", "SPY"].includes(contract.underlying) ? "sp" : contract.underlying;
   if (open.some(occ => groupOf(occ) === entryGroup)) return { entered: null, skipped: `a ${entryGroup === "sp" ? "SPY/SPX" : entryGroup} position is already open` };
   if (open.includes(contract.ticker)) return { entered: null, skipped: "same contract already open" };
+  // SAME-UNDERLYING gates read the ENTRY JOURNAL, not the monitors — monitors lag fills
+  // by worker-sighting latency, which let two MU entries through 3 minutes apart on
+  // 2026-08-17 (the group gate saw no open MU yet; both stopped out, −$173). The journal
+  // row exists before placement, so this cannot race: 45-minute per-underlying re-entry
+  // cooldown, and a name that already took 2 entries today is DONE for the day.
+  const { data: sameNameToday } = await admin.from("rh_entry_orders").select("id,created_at")
+    .eq("underlying", contract.underlying).neq("status", "rejected").gte("created_at", etDayStartIso());
+  if ((sameNameToday ?? []).length >= 2) return { entered: null, skipped: `${contract.underlying} already traded twice today — done with this name` };
+  if ((sameNameToday ?? []).some(row => Date.now() - Date.parse(String(row.created_at)) < 45 * 60_000)) return { entered: null, skipped: `${contract.underlying} re-entry cooldown (45 min)` };
   // SAME-DIRECTION cap (2026-08-14): correlation groups treat QQQ/NVDA/GOOGL as
   // independent slots, but on an index move they are ONE bet — the 8/14 morning bought
   // three tech puts in 28 minutes and one fake breakdown stopped all three. At most 2
