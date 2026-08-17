@@ -75,10 +75,20 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // still goes flat by 15:10.
   if (!longDated && weekday && heldOvernight && (clock.minutes >= EXIT_RULES.mandatoryExitMinutes || (!isSwing && clock.minutes >= 585 && bid <= position.entryPrice))) return "mandatory_time_exit";
   if (!longDated && weekday && !heldOvernight && !isSwing && clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
-  if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
+  // BIG-PREMIUM PROFILE (entry >= $20/contract): the percentage rules were calibrated
+  // on cheap short-dated tapes where ±33% is a wiggle. On a $9k contract, "arm at
+  // +33%" means +$3,000 unprotected — a SNDK call's +$1,250 peak round-tripped to
+  // -$50 on 2026-08-17 without the trail ever waking. High-premium, higher-delta
+  // contracts move less in % terms and each % is real money: stop 12%, arm +10%,
+  // trail 8% off the peak.
+  const bigPremium = position.entryPrice >= 20;
+  const stopPct = bigPremium ? 0.12 : EXIT_RULES.stopLossPct;
+  if (bid <= position.entryPrice * (1 - stopPct)) return "premium_stop";
   if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";
   const gain = position.peakBid / position.entryPrice - 1;
-  const trail = gain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : gain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
+  const trail = bigPremium
+    ? (gain >= 0.10 ? 0.08 : null)
+    : gain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : gain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
   if (trail != null && !(heldOvernight && clock.minutes < 585) && bid <= position.peakBid * (1 - trail)) return "trailing_stop";
   // No-follow-through is an intraday scalp rule; swing, long-dated, and overnight
   // positions are governed by the stop and trails instead.
