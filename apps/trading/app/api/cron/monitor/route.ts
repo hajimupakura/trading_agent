@@ -10,6 +10,7 @@ import { runSectorFlow } from "@/lib/options/sector-flow";
 import { runResearchFetches } from "@/lib/options/research-fetch";
 import { runTradeReviews } from "@/lib/options/trade-review";
 import { reportJobHealth } from "@/lib/ops/heartbeat";
+import { runBlindspotChecks } from "@/lib/ops/blindspot";
 import { runSurgeRadar } from "@/lib/options/surge-radar";
 import { runMetalTriggers } from "@/lib/options/metals-triggers";
 import { runEarningsCalendarCheck } from "@/lib/options/earnings-guard";
@@ -95,6 +96,11 @@ export async function GET(request: Request) {
   const research = minute % 5 === 4 ? await runResearchFetches().catch(error => { console.error("research fetch failed", error); return { processed:null, error:String(error) }; }) : null;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
+  // Blind-spot detectors: in-session data invariants (null priorDay, banned chains,
+  // stale snapshots page critical) + post-close unexplained-miss audit (>=2% movers
+  // with zero entries get a why-not autopsy). Silent failures become loud ones.
+  const blindspots = await runBlindspotChecks().catch(error => { console.error("blindspot checks failed", error); return { invariantViolations: [] as string[], missAudits: [] as string[] }; });
+  void blindspots;
   // Heartbeat: consecutive job failures page the user instead of dying in this JSON.
   await reportJobHealth({
     refresh: results.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []),
