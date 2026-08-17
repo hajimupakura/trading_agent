@@ -30,6 +30,11 @@ async function getPriorDayLevels(symbol: string, headers: Record<string,string>)
     const url = new URL(`${ALPACA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
     url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "5");
     url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "desc");
+    // WITHOUT start, Alpaca returns only TODAY's bars — so "find a bar dated before
+    // today" found nothing and priorDay was silently null for EVERY equity since this
+    // was written (discovered 2026-08-17: it disabled the opening-drive gap math for
+    // all stock names while looking perfectly healthy).
+    url.searchParams.set("start", addDays(dateEt(), -7));
     const response = await fetch(url, { headers, cache:"no-store", signal:AbortSignal.timeout(8000) });
     if (!response.ok) return null;
     const payload = await response.json() as { bars?: Array<{ t:string;h:number;l:number;c:number }> };
