@@ -88,7 +88,12 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // Concurrency: max 3 open positions, in CORRELATION GROUPS — SPY and SPX are the
   // same market (never both open); QQQ/NVDA/TSLA/GOOGL/SPCX each their own slot.
   // The worker keeps rh_position_monitors current within seconds in-session.
-  const { data: openRows } = await admin.from("rh_position_monitors").select("occ_ticker,option_type").in("status", ["monitoring", "closing", "error"]);
+  // FAIL CLOSED (2026-08-18): every gate below treats "query errored" as "do not
+  // trade" — a transient DB error must never read as "no positions open, no recent
+  // closes, cap clear". An 8/18 SPY call entered 4 minutes after an exit despite the
+  // 30-minute cooldown; a silently-failed lookup is the only mechanism left standing.
+  const { data: openRows, error: openError } = await admin.from("rh_position_monitors").select("occ_ticker,option_type").in("status", ["monitoring", "closing", "error"]);
+  if (openError) return { entered: null, skipped: `gate data unavailable (open positions): ${openError.message}` };
   const open = (openRows ?? []).map(row => String(row.occ_ticker));
   if (open.length >= 3) return { entered: null, skipped: "three positions already open" };
   // Groups: SPY/SPX are one market; each other underlying is its own slot. Max 2 open.
@@ -101,8 +106,9 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // 2026-08-17 (the group gate saw no open MU yet; both stopped out, −$173). The journal
   // row exists before placement, so this cannot race: 45-minute per-underlying re-entry
   // cooldown, and a name that already took 2 entries today is DONE for the day.
-  const { data: sameNameToday } = await admin.from("rh_entry_orders").select("id,created_at")
+  const { data: sameNameToday, error: sameNameError } = await admin.from("rh_entry_orders").select("id,created_at")
     .eq("underlying", contract.underlying).neq("status", "rejected").gte("created_at", etDayStartIso());
+  if (sameNameError) return { entered: null, skipped: `gate data unavailable (same-name journal): ${sameNameError.message}` };
   if ((sameNameToday ?? []).length >= 2) return { entered: null, skipped: `${contract.underlying} already traded twice today — done with this name` };
   if ((sameNameToday ?? []).some(row => Date.now() - Date.parse(String(row.created_at)) < 45 * 60_000)) return { entered: null, skipped: `${contract.underlying} re-entry cooldown (45 min)` };
   // SAME-DIRECTION cap (2026-08-14): correlation groups treat QQQ/NVDA/GOOGL as
@@ -120,17 +126,28 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
     admin.from("broker_portfolio_snapshots").select("payload").eq("broker", "robinhood").maybeSingle(),
   ]);
   const equityNow = Number((portfolioRow?.payload as { totalValue?: number } | null)?.totalValue ?? NaN);
-  if (baseline && Number.isFinite(equityNow) && Number(baseline.equity) - equityNow >= settings.rhMaxDailyLoss) {
+  // Breaker fails CLOSED: no baseline or no fresh equity mark = the breaker cannot do
+  // its job, so no entries until the data exists (self-heals within minutes of open).
+  if (!baseline || !Number.isFinite(equityNow)) return { entered: null, skipped: "daily-loss breaker data unavailable — refusing to trade unfenced" };
+  if (Number(baseline.equity) - equityNow >= settings.rhMaxDailyLoss) {
     return { entered: null, skipped: `daily loss breaker: down $${(Number(baseline.equity) - equityNow).toFixed(0)} of $${settings.rhMaxDailyLoss} allowed — no new entries today` };
   }
-  const { count: todayCount } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
+  const { count: todayCount, error: countError } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
+  if (countError) return { entered: null, skipped: `gate data unavailable (trade count): ${countError.message}` };
   if ((todayCount ?? 0) >= settings.rhMaxTradesPerDay) return { entered: null, skipped: "daily trade cap" };
+  // STOP-OUT CIRCUIT (2026-08-18): three stop-outs in one day = the tape is hostile to
+  // the setups (see-saw days flip every 20 minutes) — entries close for the day well
+  // before the dollar breaker lets 2-3 more bites land. Exits keep running.
+  const { count: stopCount, error: stopCountError } = await admin.from("rh_position_monitors").select("occ_ticker", { count: "exact", head: true }).eq("exit_reason", "premium_stop").gte("updated_at", etDayStartIso());
+  if (stopCountError) return { entered: null, skipped: `gate data unavailable (stop count): ${stopCountError.message}` };
+  if ((stopCount ?? 0) >= 3) return { entered: null, skipped: "3 stop-outs today — the tape is hostile, entries closed for the day" };
   // NO PDT GUARD — deliberately. The SEC eliminated the pattern-day-trader rule
   // effective 2026-06-04; there is no day-trade count to protect. A leftover guard
   // here silently blocked real entries on 2026-08-13 (user standing order: never
   // add PDT limits). Daily caps + the loss breaker above are the real risk bounds.
   // Cooldown: no re-entry within 30 minutes of any monitor closing (stop-out or otherwise).
-  const { data: recentClose } = await admin.from("rh_position_monitors").select("id").eq("status", "closed").gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
+  const { data: recentClose, error: recentCloseError } = await admin.from("rh_position_monitors").select("id").in("status", ["closed", "closing"]).gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
+  if (recentCloseError) return { entered: null, skipped: `gate data unavailable (cooldown): ${recentCloseError.message}` };
   if (recentClose) return { entered: null, skipped: "cooldown after exit" };
   // Sizing: fill the debit cap with the best AGGREGATE exposure. For every eligible
   // same-expiry contract (the strict volume/spread/liquidity screen is the
