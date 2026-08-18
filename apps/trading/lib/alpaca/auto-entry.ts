@@ -46,10 +46,13 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   if (existing) return { entered: null, skipped: "signal already traded" };
   const { data: control } = await admin.from("position_manager_control").select("kill_switch").eq("id", true).single();
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
-  const [trading, tradesToday, { data: recentExits }] = await Promise.all([
+  const [trading, tradesToday, { data: recentExits, error: recentExitsError }] = await Promise.all([
     getPaperTradingState(), entriesToday(owner.id),
     admin.from("paper_trade_orders").select("contract_ticker,risk_snapshot,updated_at").eq("user_id", owner.id).eq("action", "sell_to_close").gte("updated_at", new Date(Date.now() - PAPER_RULES.cooldownMinutes * 60_000).toISOString()),
   ]);
+  // FAIL CLOSED (2026-08-18 doctrine): an unanswerable cooldown question means NO —
+  // a transient query error must never read as "no recent exits, clear to enter".
+  if (recentExitsError) return { entered: null, skipped: `cooldown data unavailable: ${recentExitsError.message}` };
   const cooldown = entryCooldownActive({ action: signal.action, recentExits: (recentExits ?? []).map(row => ({ contractTicker: String(row.contract_ticker), exitReason: (row.risk_snapshot as { exitReason?: string } | null)?.exitReason ?? null, at: String(row.updated_at) })) });
   if (cooldown) return { entered: null, skipped: "cooldown" };
   const etMin = (() => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); })();
