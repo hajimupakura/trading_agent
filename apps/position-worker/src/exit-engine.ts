@@ -86,9 +86,18 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   if (bid <= position.entryPrice * (1 - stopPct)) return "premium_stop";
   if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";
   const gain = position.peakBid / position.entryPrice - 1;
+  // REAL-MONEY LANE: arm +20% / trail 15% (2026-08-18) — calibrated on the real
+  // account's OWN 16-trade record, not the replay tapes: five real trades peaked
+  // +20-34% and round-tripped to full stops (~-$400) in the 20-33% dead zone, while
+  // the record contains a single >+65% winner whose exit is IDENTICAL under both
+  // configs. Paper keeps the tape-validated 33/20 and keeps collecting the fat-tail
+  // evidence; if paper's monsters prove the wide arm right, promotion is a data call.
+  const realLane = position.userId === "robinhood";
   const trail = bigPremium
     ? (gain >= 0.10 ? 0.08 : null)
-    : gain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : gain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
+    : realLane
+      ? (gain >= 0.20 ? 0.15 : null)
+      : gain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : gain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
   if (trail != null && !(heldOvernight && clock.minutes < 585) && bid <= position.peakBid * (1 - trail)) return "trailing_stop";
   // No-follow-through is an intraday scalp rule; swing, long-dated, and overnight
   // positions are governed by the stop and trails instead.
