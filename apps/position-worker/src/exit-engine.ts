@@ -29,6 +29,20 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   const now = input.now ?? new Date(); const { position, bid, underlyingPrice } = input; const clock = easternClock(now);
   const openedClock = easternClock(new Date(position.openedAt));
   const heldOvernight = openedClock.dateKey < clock.dateKey;
+  // DOLLAR PROFIT LOCK (2026-08-19, user: "10% of a $90 option is $900. even a $300
+  // increase I will take") — percentages don't express protection on large-dollar
+  // positions, so this speaks dollars: once a position's PEAK unrealized gain reaches
+  // $300, never surrender more than 40% of it — sell if the bid retreats to entry +
+  // 60% of the peak gain. Overlays every managed mode; respects drive's pre-10:15
+  // sleep and the overnight morning grace (peaks reset each session); RIDE (manual)
+  // stays exempt by design. On cheap multi-lot 0DTEs the % trails usually act first —
+  // this lock is the big-premium safety net the % rules structurally can't be.
+  const peakDollarGain = (position.peakBid - position.entryPrice) * position.quantity * 100;
+  const lockSuspended = (position.exitMode === "drive" && clock.minutes < 615) || (heldOvernight && clock.minutes < 585);
+  if (position.exitMode !== "trend" && !lockSuspended && peakDollarGain >= 300) {
+    const lockPrice = position.entryPrice + (position.peakBid - position.entryPrice) * 0.6;
+    if (bid <= lockPrice) return "trailing_stop";
+  }
   if (position.exitMode === "scalp") {
     // The 15:10 flat and overnight guards still apply (a worker outage must never
     // leave a 0DTE position unguarded into the close).
