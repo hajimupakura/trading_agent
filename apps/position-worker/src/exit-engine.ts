@@ -59,6 +59,25 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     }
     return null;
   }
+  if (position.exitMode === "thesis") {
+    // THESIS mode (flow pairs, multi-day conviction trades — 2026-08-19): what the 8/14
+    // "protect profits" change SHOULD have been. Burst mode's scalp reflexes executed
+    // five 1-3 DTE flow theses within 10-24 minutes of entry (the 10-minute follow-
+    // through test + same-day 15:10 flat are 0DTE rules). Thesis = stop 30%, trail arms
+    // +20% / width 15% (the protect-profits calibration), NO 10-minute test, NO same-day
+    // flat; overnight gets the morning grace (losers flat 9:45, winners ride on the new
+    // day's peaks); hard flat 15:10 on EXPIRY day only. Big-premium overlay still applies.
+    const thesisDte = dteFromOcc(position.alpacaSymbol, now) ?? 0;
+    const thesisWeekday = !["Sat","Sun"].includes(clock.weekday);
+    if (thesisWeekday && thesisDte <= 0 && clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
+    if (thesisWeekday && heldOvernight && clock.minutes >= 585 && bid <= position.entryPrice) return "mandatory_time_exit";
+    const thesisBig = position.entryPrice >= 20;
+    if (bid <= position.entryPrice * (1 - (thesisBig ? 0.12 : EXIT_RULES.stopLossPct))) return "premium_stop";
+    const thesisGain = position.peakBid / position.entryPrice - 1;
+    const thesisTrail = thesisBig ? (thesisGain >= 0.10 ? 0.08 : null) : (thesisGain >= 0.20 ? 0.15 : null);
+    if (thesisTrail != null && !(heldOvernight && clock.minutes < 585) && bid <= position.peakBid * (1 - thesisTrail)) return "trailing_stop";
+    return null;
+  }
   // A swing position is one deliberately opened in the late-day window; it is exempt from the
   // same-day 15:10 flat, held overnight, and force-sold by 10:30 the next morning instead of 09:30.
   const isSwing = openedClock.minutes >= EXIT_RULES.swingOpenThresholdMinutes;

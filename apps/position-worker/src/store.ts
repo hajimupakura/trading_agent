@@ -46,7 +46,7 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
     // First sighting (no monitor row yet): scalp signals get the scalp profile, opening
     // drives get the drive profile (trail suspended until 10:00), 3+ day contracts are
     // swings defaulting to trend (RIDE). Existing rows keep their stored mode.
-    exitMode:state ? (state.exit_mode === "trend" ? "trend" : state.exit_mode === "scalp" ? "scalp" : state.exit_mode === "drive" ? "drive" : "burst")
+    exitMode:state ? (["trend","scalp","drive","thesis"].includes(String(state.exit_mode)) ? state.exit_mode as "trend"|"scalp"|"drive"|"thesis" : "burst")
       : ((signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
 }
 export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask:number;quoteAt:number;status:string;exitReason?:string|null;closeOrderId?:string|null;error?:string|null}) {

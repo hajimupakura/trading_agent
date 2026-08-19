@@ -130,12 +130,14 @@ export async function queueFlowFollowPair(input: { symbol: string; direction: "b
     .sort((a, b) => Math.abs(Math.abs(a.delta!) - (low + high) / 2) - Math.abs(Math.abs(b.delta!) - (low + high) / 2))[0];
   const itm = pick(0.6, 0.85); const otm = pick(0.18, 0.38);
   const note = `${input.symbol} flow-follow: $${(input.premium / 1e6).toFixed(1)}M ${input.direction} print`;
-  // Exit mode burst, NOT ride (2026-08-14, user directive "protect whatever profits we
-  // get" — and the lane's own record agrees: AAPL/SPY pairs rode to the -50% floor and
-  // the TSLA pair gave back $1,225 of $1,541; a standard trail banks ~3x more here).
+  // Exit mode THESIS (2026-08-19): protected but patient. RIDE gave back $1,225 of
+  // $1,541 (8/14); burst's scalp reflexes then executed five flow theses within 10-24
+  // minutes of entry (8/19 — the 10-minute follow-through test is a 0DTE rule). Thesis
+  // = 30% stop, trail arms +20%/width 15%, no 10-minute test, no same-day flat,
+  // morning grace overnight, hard flat on expiry day only.
   const rows = [
-    itm ? { contract_ticker: itm.ticker, quantity: 1, strategy: "flow-itm", exit_mode: "burst", note } : null,
-    otm ? { contract_ticker: otm.ticker, quantity: 1, strategy: "flow-otm", exit_mode: "burst", note } : null,
+    itm ? { contract_ticker: itm.ticker, quantity: 1, strategy: "flow-itm", exit_mode: "thesis", note } : null,
+    otm ? { contract_ticker: otm.ticker, quantity: 1, strategy: "flow-otm", exit_mode: "thesis", note } : null,
   ].filter(Boolean);
   if (rows.length) await admin.from("paper_ticket_queue").insert(rows as Array<Record<string, unknown>>).then(({ error }) => { if (error) console.error("flow follow queue failed", error.message); });
 }
