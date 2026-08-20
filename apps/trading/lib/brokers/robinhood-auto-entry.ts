@@ -146,7 +146,11 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   // here silently blocked real entries on 2026-08-13 (user standing order: never
   // add PDT limits). Daily caps + the loss breaker above are the real risk bounds.
   // Cooldown: no re-entry within 30 minutes of any monitor closing (stop-out or otherwise).
-  const { data: recentClose, error: recentCloseError } = await admin.from("rh_position_monitors").select("id").in("status", ["closed", "closing"]).gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
+  // select occ_ticker — this table's PK; the original select("id") referenced a column
+  // that NEVER existed, so this gate errored on every call since it was written. Under
+  // fail-open that read as "clear to trade" (the cooldown never once worked — Monday's
+  // 4-minute re-entry, the MU flip-flops); fail-closed surfaced it in one session.
+  const { data: recentClose, error: recentCloseError } = await admin.from("rh_position_monitors").select("occ_ticker").in("status", ["closed", "closing"]).gte("updated_at", new Date(Date.now() - 30 * 60_000).toISOString()).limit(1).maybeSingle();
   if (recentCloseError) return { entered: null, skipped: `gate data unavailable (cooldown): ${recentCloseError.message}` };
   if (recentClose) return { entered: null, skipped: "cooldown after exit" };
   // Sizing: fill the debit cap with the best AGGREGATE exposure. For every eligible
