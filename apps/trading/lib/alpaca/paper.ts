@@ -54,3 +54,12 @@ export async function submitPaperOptionSell(input: { symbol:string; limitPrice:n
   }) });
 }
 export async function getRecentPaperOrders(){return alpaca<AlpacaOrder[]>("/v2/orders?status=all&limit=100&direction=desc&nested=true");}
+
+export interface AlpacaPortfolioHistory { timestamp:number[]; equity:number[]; profit_loss:number[]; profit_loss_pct:number[] }
+export async function getPaperEquityHistory() {
+  const [account, history] = await Promise.all([
+    alpaca<AlpacaAccount>("/v2/account"),
+    alpaca<AlpacaPortfolioHistory>("/v2/account/portfolio/history?period=1M&timeframe=1D"),
+  ]);
+  return { account, history };
+}

@@ -17,6 +17,7 @@ import { runEarningsCalendarCheck } from "@/lib/options/earnings-guard";
 import { runFlowWatchScoring } from "@/lib/options/flow-watch";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
 import { runPaperTicketQueue } from "@/lib/alpaca/ticket-queue";
+import { runPaperEquitySnapshot } from "@/lib/alpaca/equity-snapshot";
 import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -94,6 +95,10 @@ export async function GET(request: Request) {
   const sectors = minute % 5 === 1 ? await runSectorFlow().catch(error => { console.error("sector flow failed", error); return { fired:[] as string[], errors:[String(error)] }; }) : null;
   // Ad-hoc research fetch queue: one job per tick on its own light minute.
   const research = minute % 5 === 4 ? await runResearchFetches().catch(error => { console.error("research fetch failed", error); return { processed:null, error:String(error) }; }) : null;
+  // Ground-truth paper equity snapshot: broker's own equity curve, so P&L audits
+  // reconcile against the account instead of our (gap-prone) order journal.
+  const equitySnapshot = minute % 5 === 2 ? await runPaperEquitySnapshot().catch(error => { console.error("paper equity snapshot failed", error); return { ok:false, error:String(error) }; }) : null;
+  void equitySnapshot;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
   // Blind-spot detectors: in-session data invariants (null priorDay, banned chains,
