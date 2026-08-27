@@ -36,10 +36,18 @@ export async function runRobinhoodAutoEntry(snapshot: CommandCenter | null): Pro
   // single-name gap mania. Single names live on paper until their record earns a
   // promotion the user approves.
   if (!["SPX", "SPY", "QQQ"].includes(contract.underlying)) return { entered: null, skipped: "not in RH universe (index-only)" };
+  // PROMOTION GATE (user call, 2026-08-27): real-money entries are PAUSED. The
+  // account rode unvalidated strategies from $966 to $112 (26% lifetime win rate;
+  // no strategy net-positive on paper either). Real dollars resume only when a
+  // setup shows a positive multi-week PAPER record and the user promotes it.
+  // Journaled below like every skip; worker exits keep guarding open positions.
+  const PROMOTION_GATE_ACTIVE = true;
   // Real-money lane: every decision on a real signal is journaled, and an unexpected
   // throw pages as critical — a silent miss here is itself an incident (2026-08-11:
   // a $180 in-cap signal at 10:25 skipped with no trace; cause unrecoverable).
-  const outcome = await runGates(snapshot, signal, contract).catch(async error => {
+  const outcome = PROMOTION_GATE_ACTIVE
+    ? { entered: null, skipped: "promotion gate: real entries paused until a strategy earns a positive multi-week paper record (2026-08-27)" }
+    : await runGates(snapshot, signal, contract).catch(async error => {
     const message = error instanceof Error ? error.message : String(error);
     const { data: owner } = await createAdminClient().from("profiles").select("id").limit(1).maybeSingle();
     if (owner) await createAlert({

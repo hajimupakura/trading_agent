@@ -56,6 +56,12 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   const cooldown = entryCooldownActive({ action: signal.action, recentExits: (recentExits ?? []).map(row => ({ contractTicker: String(row.contract_ticker), exitReason: (row.risk_snapshot as { exitReason?: string } | null)?.exitReason ?? null, at: String(row.updated_at) })) });
   if (cooldown) return { entered: null, skipped: "cooldown" };
   const etMin = (() => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); })();
+  // MORNING-ONLY ENTRIES (2026-08-27): two weeks of round trips split cleanly by
+  // entry time — 9:30-9:59 made +$2,212 (52% wins) while 10:00-10:59 lost -$4,532
+  // (26% wins): after 10:00 the system chases moves that already happened. Opening
+  // drives keep their measured 10:14 handoff window; everything else stops at 10:00.
+  const entryWindowEnd = signal.setup === "opening_drive" ? 615 : 600;
+  if (etMin >= entryWindowEnd) return { entered: null, skipped: `outside morning entry window (${signal.setup} entries close at ${entryWindowEnd === 615 ? "10:15" : "10:00"} ET)` };
   const earningsBlock = await activeEarningsGuard(underlying, { swingEntry: etMin >= 930 });
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   // Never re-enter a contract already held: with maxOpenPositions > 1 the global cap

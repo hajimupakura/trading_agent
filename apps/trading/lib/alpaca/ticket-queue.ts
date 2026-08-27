@@ -105,6 +105,12 @@ export async function runPaperTicketQueue(): Promise<{ placed: number; skipped: 
 // direction and expiry. The paired records answer "if whales are worth following,
 // which moneyness pays?" Max 3 pairs/day; one pair per symbol per day.
 export async function queueFlowFollowPair(input: { symbol: string; direction: "bullish" | "bearish"; expirationDate: string; premium: number }): Promise<void> {
+  // EXPERIMENT CONCLUDED 2026-08-27: OFF. The follows produced -$6,201 across 70
+  // trades (81% of all paper volume) while the observation-only scoreboard reached
+  // 220 graded prints: 16% confirmed / 18% refuted / 66% fizzled — no edge to follow.
+  // Scoreboard grading continues (recordFlowWatch is untouched); we just stop BUYING.
+  // Re-enable only if a re-graded scoreboard someday shows a followable subset.
+  return;
   // Session gate: chains keep refreshing overnight with the day's FINAL tape, so
   // recordFlowWatch fires off stale prints at 9 PM/midnight. A follow is only valid
   // while the print is fresh — queue during the session only (9:35-15:30 ET, weekdays).
