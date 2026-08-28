@@ -166,6 +166,52 @@ async function scanVolumeIgnitions(): Promise<string[]> {
   return ignited;
 }
 
+// ---------- Lottery expression (2026-08-28, user call) ----------
+// The DKNG trade that named the pattern: a $0.01 nearest-expiry 25C bought minutes
+// after ignition, peaked 159x. For every graded ignition, also price what the
+// "catalyst lottery" — nearest expiry, first strike ~0.5%+ OTM in the trigger's
+// direction, filled at the close of the bar 5 minutes post-ignition — would have
+// done. Informational only (stored in detail.lottery, surfaced in the alert):
+// the verdict stays on the underlying sim, but the scoreboard reports the number
+// that decides whether an auto ignition-lottery lane ($50-100/trigger) is worth
+// promoting. Fill-price honesty: bar closes, not bottom-of-book luck.
+interface LotteryGrade { ticker: string; entry: number; peakX: number; closeX: number }
+async function lotteryExpression(symbol: string, direction: "bullish" | "bearish", watchDate: string, triggeredAtMs: number, refPrice: number): Promise<LotteryGrade | { error: string }> {
+  const key = process.env.MASSIVE_API_KEY;
+  if (!key) return { error: "no data key" };
+  const side = direction === "bullish" ? "call" : "put";
+  const weekOut = new Intl.DateTimeFormat("en-CA", { timeZone: ET }).format(new Date(Date.parse(watchDate) + 8 * 86_400_000));
+  const listUrl = new URL("https://api.massive.com/v3/reference/options/contracts");
+  listUrl.searchParams.set("underlying_ticker", symbol); listUrl.searchParams.set("contract_type", side);
+  listUrl.searchParams.set("expiration_date.gte", watchDate); listUrl.searchParams.set("expiration_date.lte", weekOut);
+  listUrl.searchParams.set("limit", "250"); listUrl.searchParams.set("apiKey", key);
+  const listResponse = await fetch(listUrl, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+  if (!listResponse.ok) return { error: `contract list ${listResponse.status}` };
+  const listing = await listResponse.json() as { results?: Array<{ ticker: string; strike_price: number; expiration_date: string }> };
+  const contracts = listing.results ?? [];
+  if (!contracts.length) return { error: "no contracts listed" };
+  const nearestExpiry = contracts.map(contract => contract.expiration_date).sort()[0];
+  const atExpiry = contracts.filter(contract => contract.expiration_date === nearestExpiry);
+  const pick = direction === "bullish"
+    ? atExpiry.filter(contract => contract.strike_price >= refPrice * 1.005).sort((a, b) => a.strike_price - b.strike_price)[0]
+    : atExpiry.filter(contract => contract.strike_price <= refPrice * 0.995).sort((a, b) => b.strike_price - a.strike_price)[0];
+  if (!pick) return { error: "no OTM strike listed" };
+  const aggsUrl = new URL(`https://api.massive.com/v2/aggs/ticker/${encodeURIComponent(pick.ticker)}/range/1/minute/${watchDate}/${watchDate}`);
+  aggsUrl.searchParams.set("adjusted", "true"); aggsUrl.searchParams.set("sort", "asc"); aggsUrl.searchParams.set("limit", "1000"); aggsUrl.searchParams.set("apiKey", key);
+  const aggsResponse = await fetch(aggsUrl, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+  if (!aggsResponse.ok) return { error: `option tape ${aggsResponse.status}` };
+  const aggs = await aggsResponse.json() as { results?: Array<{ t: number; h: number; c: number }> };
+  const tape = (aggs.results ?? []).filter(bar => bar.c > 0);
+  const entryIndex = tape.findIndex(bar => bar.t >= triggeredAtMs + 5 * 60_000);
+  if (entryIndex < 0) return { error: "no post-ignition option prints" };
+  const entry = tape[entryIndex].c;
+  if (!(entry > 0)) return { error: "unpriceable entry" };
+  const rest = tape.slice(entryIndex + 1);
+  const peak = rest.length ? Math.max(...rest.map(bar => bar.h)) : entry;
+  const close = rest.length ? rest[rest.length - 1].c : entry;
+  return { ticker: pick.ticker, entry, peakX: Number((peak / entry).toFixed(1)), closeX: Number((close / entry).toFixed(1)) };
+}
+
 // ---------- Post-close grading (16:10-16:40) ----------
 // Managed-exit simulation on the UNDERLYING (thresholds sized so ~+1.2% underlying
 // on a mover approximates a +25-40% ATM weekly option): stop -1.5%; trail arms at
@@ -216,12 +262,19 @@ async function gradeTodaysWatches(): Promise<string[]> {
       }
       const result = simulateManaged(bars, entryIndex, entryPrice, watch.direction as "bullish" | "bearish");
       const verdict = result.managed >= 1.2 ? "confirmed" : result.managed <= -0.75 ? "refuted" : "neutral";
+      // Ignitions also get the lottery expression priced (failure never blocks the grade).
+      let lottery: LotteryGrade | { error: string } | null = null;
+      if (watch.kind === "volume_ignition") {
+        lottery = await lotteryExpression(String(watch.symbol), watch.direction as "bullish" | "bearish", String(watch.watch_date), Date.parse(String(watch.triggered_at)), Number(watch.trigger_price))
+          .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
+      }
       await admin.from("setup_watches").update({
         status: "graded", entry_price: entryPrice,
         managed_ret: Number(result.managed.toFixed(2)), ret_peak: Number(result.peak.toFixed(2)), ret_close: Number(result.close.toFixed(2)),
-        verdict,
+        verdict, detail: { ...(watch.detail as object), ...(lottery ? { lottery } : {}) },
       }).eq("id", watch.id);
-      graded.push(`${watch.symbol}:${verdict}(${result.managed.toFixed(1)}%)`);
+      const lotteryNote = lottery && "peakX" in lottery ? ` [lottery ${lottery.ticker.replace("O:", "")}: $${lottery.entry.toFixed(2)} → peak ${lottery.peakX}x, close ${lottery.closeX}x]` : "";
+      graded.push(`${watch.symbol}:${verdict}(${result.managed.toFixed(1)}%)${lotteryNote}`);
     } catch (gradeError) {
       await admin.from("setup_watches").update({ status: "error", detail: { ...(watch.detail as object), error: gradeError instanceof Error ? gradeError.message : String(gradeError) } }).eq("id", watch.id);
     }
