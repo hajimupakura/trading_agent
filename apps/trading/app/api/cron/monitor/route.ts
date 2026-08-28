@@ -101,7 +101,7 @@ export async function GET(request: Request) {
   const equitySnapshot = minute % 5 === 2 ? await runPaperEquitySnapshot().catch(error => { console.error("paper equity snapshot failed", error); return { ok:false, error:String(error) }; }) : null;
   void equitySnapshot;
   // Afternoon-setup scoreboard: observation-only watchers (earnings-gap continuation,
-  // volume ignition) — arm at 9:44, scan every 5 min, grade post-close. Trades nothing.
+  // volume ignition) — arm at 9:35, scan every 5 min 9:35-15:50, grade post-close. Trades nothing.
   const setupWatches = await runSetupWatches().catch(error => { console.error("setup watches failed", error); return { armed:[] as string[], ignited:[] as string[], graded:[] as string[] }; });
   void setupWatches;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.

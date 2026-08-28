@@ -35,12 +35,13 @@ function alpacaHeaders() {
   return { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
 }
 
-// Today's regular-session minute bars for an equity (IEX feed — partial volume,
-// but spikes stay proportional so N-x multiples remain detectable).
-async function todayMinuteBars(symbol: string): Promise<MinuteBar[]> {
+// Regular-session minute bars for an equity (IEX feed — partial volume, but
+// spikes stay proportional so N-x multiples remain detectable). daysBack > 0
+// reaches into prior sessions (weekends included — callers split by date).
+async function sessionMinuteBars(symbol: string, daysBack = 0): Promise<MinuteBar[]> {
   const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
   url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", "iex");
-  url.searchParams.set("start", `${etToday()}T09:30:00-04:00`); url.searchParams.set("limit", "10000");
+  url.searchParams.set("start", `${etToday(daysBack)}T09:30:00-04:00`); url.searchParams.set("limit", "10000");
   const response = await fetch(url, { headers: alpacaHeaders(), cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca bars ${response.status} for ${symbol}`);
   const payload = await response.json() as { bars?: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> };
@@ -53,7 +54,7 @@ async function owner(admin: ReturnType<typeof createAdminClient>) {
   return data ? String(data.id) : null;
 }
 
-// ---------- Watcher 1: earnings-gap continuation (arms 9:44-9:52) ----------
+// ---------- Watcher 1: earnings-gap continuation (arms 9:35-9:43) ----------
 // A watchlist name that reported earnings (AMC yesterday or BMO today) and gapped
 // |>=3%| gets a watch row. Graded later on the "first new extreme after 10:00"
 // continuation rule — the NVDA pattern.
@@ -96,11 +97,14 @@ async function armEarningsGapWatches(): Promise<string[]> {
   return armed;
 }
 
-// ---------- Watcher 2: volume ignition (every 5 min, 10:30-15:30) ----------
+// ---------- Watcher 2: volume ignition (every 5 min, 9:35-15:50) ----------
 // Scan Alpaca's top movers; a candidate ignites when a minute bar in the last 15
-// minutes printed >=15x its own day's median volume alongside a >=0.8% one-bar
-// (or >=1.5% three-bar) thrust — the DKNG pattern. Alerted live so the user can
-// choose to act manually; the watcher itself only records.
+// minutes printed an outsized multiple of the PRIOR session's median minute
+// volume alongside a >=0.8% one-bar (or >=1.5% three-bar) thrust — the DKNG
+// pattern. Prior-session baseline (not same-day) so the scan works from 9:35:
+// the first half hour naturally runs ~5-20x midday volume, so before 10:00 the
+// required multiple is 25x vs 15x after. Alerted live so the user can act
+// manually; the watcher itself only records.
 async function scanVolumeIgnitions(): Promise<string[]> {
   const admin = createAdminClient();
   const response = await fetch("https://data.alpaca.markets/v1beta1/screener/stocks/movers?top=12", { headers: alpacaHeaders(), cache: "no-store", signal: AbortSignal.timeout(10_000) });
@@ -116,16 +120,25 @@ async function scanVolumeIgnitions(): Promise<string[]> {
   const ignited: string[] = [];
   for (const mover of fresh) {
     try {
-      const bars = await todayMinuteBars(mover.symbol);
-      if (bars.length < 45) continue;
-      const recent = bars.slice(-15);
-      const baseline = bars.slice(0, -15).map(bar => bar.v).sort((a, b) => a - b);
-      const median = Math.max(baseline[Math.floor(baseline.length / 2)] ?? 0, 30);
+      // ~5 calendar days of bars: the most recent PRIOR session is the volume
+      // baseline (survives Mondays/holidays); today's bars carry the ignition.
+      const all = await sessionMinuteBars(mover.symbol, 5);
+      const today = etToday();
+      const dayOf = (bar: MinuteBar) => new Intl.DateTimeFormat("en-CA", { timeZone: ET }).format(new Date(bar.t));
+      const todayBars = all.filter(bar => dayOf(bar) === today);
+      const priorDays = all.filter(bar => dayOf(bar) !== today);
+      const lastPriorDay = priorDays.length ? dayOf(priorDays[priorDays.length - 1]) : null;
+      const baselineBars = lastPriorDay ? priorDays.filter(bar => dayOf(bar) === lastPriorDay) : [];
+      if (todayBars.length < 5 || baselineBars.length < 60) continue;
+      const sorted = baselineBars.map(bar => bar.v).sort((a, b) => a - b);
+      const median = Math.max(sorted[Math.floor(sorted.length / 2)] ?? 0, 30);
+      const recent = todayBars.slice(-15);
       const ignition = recent.find((bar, index) => {
+        const requiredMultiple = etMinuteOf(bar.t) < 600 ? 25 : 15; // opening bars run hot naturally
         const oneBarMove = Math.abs((bar.c - bar.o) / bar.o) * 100;
         const from = recent[Math.max(0, index - 2)];
         const threeBarMove = Math.abs((bar.c - from.o) / from.o) * 100;
-        return bar.v >= 15 * median && (oneBarMove >= 0.8 || threeBarMove >= 1.5);
+        return bar.v >= requiredMultiple * median && (oneBarMove >= 0.8 || threeBarMove >= 1.5);
       });
       if (!ignition) continue;
       const direction = ignition.c >= ignition.o ? "bullish" : "bearish";
@@ -183,7 +196,7 @@ async function gradeTodaysWatches(): Promise<string[]> {
   const graded: string[] = [];
   for (const watch of watching ?? []) {
     try {
-      const bars = await todayMinuteBars(String(watch.symbol));
+      const bars = await sessionMinuteBars(String(watch.symbol));
       if (bars.length < 60) throw new Error("insufficient bars");
       let entryIndex = -1; let entryPrice: number | null = null;
       if (watch.kind === "earnings_gap") {
@@ -237,8 +250,8 @@ export async function runSetupWatches(): Promise<{ armed: string[]; ignited: str
   const { weekday, minutes } = etParts();
   const result = { armed: [] as string[], ignited: [] as string[], graded: [] as string[] };
   if (["Sat", "Sun"].includes(weekday)) return result;
-  if (minutes >= 584 && minutes <= 592) result.armed = await armEarningsGapWatches();
-  if (minutes >= 630 && minutes <= 930 && minutes % 5 === 0) result.ignited = await scanVolumeIgnitions();
+  if (minutes >= 575 && minutes <= 583) result.armed = await armEarningsGapWatches();
+  if (minutes >= 575 && minutes <= 950 && minutes % 5 === 0) result.ignited = await scanVolumeIgnitions();
   if (minutes >= 970 && minutes <= 1000) result.graded = await gradeTodaysWatches();
   return result;
 }
