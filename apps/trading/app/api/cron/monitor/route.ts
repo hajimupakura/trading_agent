@@ -18,6 +18,7 @@ import { runFlowWatchScoring } from "@/lib/options/flow-watch";
 import { runAutoEntry } from "@/lib/alpaca/auto-entry";
 import { runPaperTicketQueue } from "@/lib/alpaca/ticket-queue";
 import { runPaperEquitySnapshot } from "@/lib/alpaca/equity-snapshot";
+import { runSetupWatches } from "@/lib/options/setup-watch";
 import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -99,6 +100,10 @@ export async function GET(request: Request) {
   // reconcile against the account instead of our (gap-prone) order journal.
   const equitySnapshot = minute % 5 === 2 ? await runPaperEquitySnapshot().catch(error => { console.error("paper equity snapshot failed", error); return { ok:false, error:String(error) }; }) : null;
   void equitySnapshot;
+  // Afternoon-setup scoreboard: observation-only watchers (earnings-gap continuation,
+  // volume ignition) — arm at 9:44, scan every 5 min, grade post-close. Trades nothing.
+  const setupWatches = await runSetupWatches().catch(error => { console.error("setup watches failed", error); return { armed:[] as string[], ignited:[] as string[], graded:[] as string[] }; });
+  void setupWatches;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
   // Blind-spot detectors: in-session data invariants (null priorDay, banned chains,
