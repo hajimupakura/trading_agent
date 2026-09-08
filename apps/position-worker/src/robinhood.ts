@@ -90,6 +90,7 @@ export class RobinhoodExitManager {
     const openTickers = positions.map(position => position.occTicker);
     await db.from("rh_position_monitors").update({ status: "closed", updated_at: new Date().toISOString() }).eq("status", "monitoring").not("occ_ticker", "in", `(${openTickers.length ? openTickers.map(ticker => `"${ticker}"`).join(",") : '""'})`);
     await db.from("rh_position_monitors").update({ status: "closed", updated_at: new Date().toISOString() }).eq("status", "closing").not("occ_ticker", "in", `(${openTickers.length ? openTickers.map(ticker => `"${ticker}"`).join(",") : '""'})`);
+    await db.from("rh_position_monitors").update({ status: "closed", updated_at: new Date().toISOString() }).eq("status", "manual_hold").not("occ_ticker", "in", `(${openTickers.length ? openTickers.map(ticker => `"${ticker}"`).join(",") : '""'})`);
     for (const position of positions) {
       try {
         if (manageExits) {
@@ -101,7 +102,7 @@ export class RobinhoodExitManager {
           const monitor = await loadMonitor(position.occTicker);
           const orderOpenedAt = openedAtFromOrders(position, orders);
           const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? Date.now();
-          await saveMonitor(position, { status: "monitoring", last_error: null, opened_at: new Date(openedAt).toISOString(), opened_at_exact: monitor?.opened_at_exact ?? orderOpenedAt != null });
+          await saveMonitor(position, { status: monitor?.status === "manual_hold" ? "manual_hold" : "monitoring", last_error: null, opened_at: new Date(openedAt).toISOString(), opened_at_exact: monitor?.opened_at_exact ?? orderOpenedAt != null });
         }
         this.managedCount++;
       } catch (error) {
@@ -116,6 +117,14 @@ export class RobinhoodExitManager {
   private async manage(position: RhPosition, orders: RhOrder[], quotes: MassiveQuoteStream) {
     const now = Date.now();
     const monitor = await loadMonitor(position.occTicker);
+    // MANUAL HOLD (user call, 2026-09-08): a monitor row set to status 'manual_hold'
+    // belongs to the human — the worker keeps the row registered (visible on the
+    // dashboard, closed-swept when it leaves the broker) but NEVER evaluates exits
+    // or places orders on it. Hand control back by setting status to 'monitoring'.
+    if (monitor?.status === "manual_hold") {
+      await saveMonitor(position, { status: "manual_hold", last_error: null });
+      return;
+    }
     // Autonomous entries record their strategy; scalp entries get the scalp exit
     // envelope (2x target, 25% stop, 30-min box) instead of the burst profile.
     const { data: entryOrder } = await db.from("rh_entry_orders").select("strategy")
