@@ -117,7 +117,7 @@ button { cursor: pointer; }
 .morning-card-strip.stand-down strong { color:#7e8998; }
 .morning-card-strip p { margin:0; white-space:pre-line; font-size:12px; line-height:1.55; color:#aeb9c8; }
 .morning-card-strip em { display:block; margin-top:8px; font-size:10px; color:#657284; font-style:normal; }
-.kicker-pick { margin-top:14px; padding:12px 14px; border:1px solid #8a6d1f; border-radius:9px; background:linear-gradient(180deg,#1c170a,#141109); box-shadow:0 0 0 1px #ffd43b14, inset 0 1px 0 #ffd43b1a; }
+.kicker-pick { margin-top:14px; padding:12px 14px; border:1px solid #8a6d1f; border-radius:9px; background:linear-gradient(180deg,#0c0a05,#060503); box-shadow:0 0 0 1px #ffd43b14, inset 0 1px 0 #ffd43b1a; }
 .kicker-pick .card-heading span { color:#ffd43b; }
 .kicker-pick .card-heading .price-cap { color:#e7c54b; border-color:#8a6d1f; }
 .kicker-row { display:grid; gap:4px; margin-top:4px; }
