@@ -42,8 +42,15 @@ export async function logout() { const supabase = await createClient(); await su
 export async function requestPasswordReset(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
   if (!email) redirect(`/login?error=${encodeURIComponent("Type your email above, then press the reset button")}`);
-  const requestHeaders = await headers();
-  const origin = requestHeaders.get("origin") ?? `https://${requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? ""}`;
+  // Reset-poisoning guard (security review): the emailed link's origin must come
+  // from platform config, never request headers an attacker can spoof. The
+  // Vercel-set production domain is canonical; headers are only a localhost
+  // dev fallback. Supabase's redirect allowlist remains the server-side backstop.
+  const productionDomain = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  const devHost = (await headers()).get("host") ?? "";
+  const origin = productionDomain ? `https://${productionDomain}`
+    : /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(devHost) ? `http://${devHost}` : null;
+  if (!origin) redirect(`/login?error=${encodeURIComponent("Reset is not configured on this deployment")}`);
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${origin}/auth/confirm?next=/reset-password` });
   if (error) redirect(`/login?error=${encodeURIComponent(error.message)}`);
