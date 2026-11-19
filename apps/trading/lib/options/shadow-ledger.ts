@@ -35,12 +35,13 @@ export async function recordShadowSkip(input: { signal: Signal; underlying: stri
 }
 
 // Live-marking: each tick, open rows get their contract's current bid from the fresh
-// snapshot (peak_bid ratchets up); rows whose expiry has passed in ET close for good.
-export async function markShadowLedger(snapshot: CommandCenter | null, underlying: string): Promise<{ marked: number; closed: number }> {
+// SPX snapshot or (any other underlying, and SPX tickers that left the snapshot) a
+// direct Alpaca quote; peak_bid ratchets up. Rows whose expiry has passed in ET close.
+export async function markShadowLedger(snapshot: CommandCenter | null): Promise<{ marked: number; closed: number }> {
   const admin = createAdminClient();
   const { data: open, error } = await admin.from("signal_shadow_ledger")
     .select("id, contract_ticker, expiration_date, peak_bid")
-    .eq("underlying", underlying).eq("status", "open").limit(100);
+    .eq("status", "open").limit(200);
   if (error) throw new Error(`Shadow ledger read failed: ${error.message}`);
   if (!open?.length) return { marked: 0, closed: 0 };
   const etToday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());

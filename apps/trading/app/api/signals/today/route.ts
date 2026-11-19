@@ -17,7 +17,7 @@ export async function GET() {
     admin.from("paper_trade_orders").select("action,contract_ticker,quantity,limit_price,status,risk_snapshot,created_at")
       .eq("user_id", user.id).eq("action", "buy_to_open").gte("created_at", since).order("created_at", { ascending: false }).limit(30),
     admin.from("signal_shadow_ledger").select("action,setup,contract_ticker,entry_ask,last_bid,peak_bid,skip_reason,status,created_at")
-      .gte("created_at", since).order("created_at", { ascending: false }).limit(30),
+      .gte("created_at", since).order("created_at", { ascending: false }).limit(80),
   ]);
   if (ordersError || shadowsError) return Response.json({ error: (ordersError ?? shadowsError)!.message }, { status: 500 });
   const feed = [

@@ -29,23 +29,23 @@ async function entriesToday(userId: string) {
   return count ?? 0;
 }
 
-// Skips that are housekeeping, not misses: the setup is already expressed (holding /
-// duplicate id), the signal is stale, or the lane simply doesn't cover the symbol.
-// Everything else — cooldown, caps, kill switch, risk gate, autonomy off — is a
-// qualified fire the rules refused, so it gets a shadow row and an instant alert.
-const UNREMARKABLE_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off"];
+// Housekeeping skips — the setup is already expressed (holding / duplicate id) or
+// the lane deliberately doesn't cover the symbol. EVERY skip of a fresh qualified
+// fire is recorded and displayed (user call, 2026-11-19: "I want to see those
+// skipped rows"); this list only decides which ones ALSO page Telegram, so a held
+// position doesn't ping the phone every hour while the setup keeps re-firing.
+const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off"];
 
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
   const result = await evaluateAutoEntry(snapshot, underlying);
   const signal = snapshot?.signal;
   if (result.skipped && signal?.contract && ["enter_call", "enter_put"].includes(signal.action)
-    && Date.now() - signal.generatedAt <= 120_000
-    && !UNREMARKABLE_SKIPS.some(prefix => result.skipped!.startsWith(prefix))) {
+    && Date.now() - signal.generatedAt <= 120_000) {
     try {
       // recordShadowSkip dedupes to one row per action+setup per hour; the Telegram
       // alert rides the same gate so a persisting setup pings once, not every minute.
       const { recorded } = await recordShadowSkip({ signal, underlying, skipReason: result.skipped });
-      if (recorded) {
+      if (recorded && !SILENT_SKIPS.some(prefix => result.skipped!.startsWith(prefix))) {
         const { data: owner } = await createAdminClient().from("profiles").select("id").limit(1).maybeSingle();
         if (owner) {
           const side = signal.action === "enter_call" ? "CALL" : "PUT";

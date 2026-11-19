@@ -121,7 +121,7 @@ button { cursor: pointer; }
 .signal-feed header { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
 .signal-feed header strong { font:700 13px "JetBrains Mono",monospace; letter-spacing:.05em; color:#e8edf4; }
 .signal-feed header span { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#657284; }
-.signal-feed-rows { display:flex; flex-direction:column; }
+.signal-feed-rows { display:flex; flex-direction:column; max-height:252px; overflow-y:auto; }
 .signal-feed-row { display:flex; align-items:center; gap:12px; padding:7px 0; border-top:1px solid #161d27; font:500 12px "JetBrains Mono",monospace; flex-wrap:wrap; }
 .signal-feed-row em { font-style:normal; color:#657284; font-size:11px; min-width:62px; }
 .signal-feed-row b { font-weight:700; font-size:11px; letter-spacing:.06em; padding:2px 7px; border-radius:5px; }

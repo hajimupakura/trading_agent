@@ -62,9 +62,9 @@ export async function GET(request: Request) {
     autoEntry = await runAutoEntry(candidate.snapshot, candidate.underlying).catch(error => { console.error("auto entry failed", candidate.underlying, error); return { entered:null, skipped:String(error) }; });
     if (autoEntry.entered) break;
   }
-  // Shadow ledger live-mark: open skipped-signal rows pick up the fresh SPX quotes
-  // (last bid, peak bid) so the dashboard's Signal Feed shows what each veto cost.
-  await markShadowLedger(autoCandidates[0]?.snapshot ?? null, "SPX").catch(error => console.error("shadow ledger mark failed", error));
+  // Shadow ledger live-mark: open skipped-signal rows pick up fresh quotes (last
+  // bid, peak bid) so the dashboard's Signal Feed shows what each veto cost.
+  await markShadowLedger(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("shadow ledger mark failed", error));
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPX first (user preference, 2026-08-13 —
   // 60/40 tax treatment); when no SPX contract fits the per-trade cap the lane skips and
