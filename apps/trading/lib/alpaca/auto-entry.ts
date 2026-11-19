@@ -5,6 +5,7 @@ import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { PAPER_RULES, computePositionSize, entryCooldownActive, validatePaperEntry } from "./risk";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
+import { recordShadowSkip } from "@/lib/options/shadow-ledger";
 import type { CommandCenter } from "@/lib/options/types";
 
 // Fully autonomous PAPER entries — SPY plus every watchlist ticker (SPX excluded:
@@ -28,7 +29,40 @@ async function entriesToday(userId: string) {
   return count ?? 0;
 }
 
+// Skips that are housekeeping, not misses: the setup is already expressed (holding /
+// duplicate id), the signal is stale, or the lane simply doesn't cover the symbol.
+// Everything else — cooldown, caps, kill switch, risk gate, autonomy off — is a
+// qualified fire the rules refused, so it gets a shadow row and an instant alert.
+const UNREMARKABLE_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off"];
+
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
+  const result = await evaluateAutoEntry(snapshot, underlying);
+  const signal = snapshot?.signal;
+  if (result.skipped && signal?.contract && ["enter_call", "enter_put"].includes(signal.action)
+    && Date.now() - signal.generatedAt <= 120_000
+    && !UNREMARKABLE_SKIPS.some(prefix => result.skipped!.startsWith(prefix))) {
+    try {
+      // recordShadowSkip dedupes to one row per action+setup per hour; the Telegram
+      // alert rides the same gate so a persisting setup pings once, not every minute.
+      const { recorded } = await recordShadowSkip({ signal, underlying, skipReason: result.skipped });
+      if (recorded) {
+        const { data: owner } = await createAdminClient().from("profiles").select("id").limit(1).maybeSingle();
+        if (owner) {
+          const side = signal.action === "enter_call" ? "CALL" : "PUT";
+          await createAlert({
+            userId: owner.id, signalId: signal.id, eventKey: `signal-skip-${underlying}-${signal.action}-${signal.generatedAt}`, severity: "warning",
+            title: `SIGNAL fired, NOT traded: ${underlying} ${side} (${signal.setup.replaceAll("_", " ")})`,
+            body: `The engine qualified ${signal.contract.ticker.replace("O:", "")} asking $${signal.contract.ask.toFixed(2)} with ${underlying} at ${signal.market.price.toFixed(2)}, but the paper lane skipped it: ${result.skipped}. ${signal.reasons[0] ?? ""} The miss is now shadow-tracked — the dashboard's Signal Feed shows what it would have done.`,
+            metadata: { kind: "signal_skip", underlying, contractTicker: signal.contract.ticker, ask: signal.contract.ask, skipReason: result.skipped },
+          });
+        }
+      }
+    } catch (shadowError) { console.error("shadow skip recording failed", shadowError instanceof Error ? shadowError.message : shadowError); }
+  }
+  return result;
+}
+
+async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
   // SPX-ONLY (user call, 2026-11-19): the desk trades one index now. Alpaca added
   // index options this year, so the old "SPX excluded — no index options at Alpaca"
   // rule inverted: SPX is the ONLY underlying the paper lane enters. Each qualifying
@@ -61,12 +95,12 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   const cooldown = entryCooldownActive({ action: signal.action, recentExits: (recentExits ?? []).map(row => ({ contractTicker: String(row.contract_ticker), exitReason: (row.risk_snapshot as { exitReason?: string } | null)?.exitReason ?? null, at: String(row.updated_at) })) });
   if (cooldown) return { entered: null, skipped: "cooldown" };
   const etMin = (() => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); })();
-  // MORNING-ONLY ENTRIES (2026-08-27): two weeks of round trips split cleanly by
-  // entry time — 9:30-9:59 made +$2,212 (52% wins) while 10:00-10:59 lost -$4,532
-  // (26% wins): after 10:00 the system chases moves that already happened. Opening
-  // drives keep their measured 10:14 handoff window; everything else stops at 10:00.
-  const entryWindowEnd = signal.setup === "opening_drive" ? 615 : 600;
-  if (etMin >= entryWindowEnd) return { entered: null, skipped: `outside morning entry window (${signal.setup} entries close at ${entryWindowEnd === 615 ? "10:15" : "10:00"} ET)` };
+  // MORNING-ONLY RULE REMOVED (user call, 2026-11-19): the 2026-08-27 cutoff was
+  // measured on 10:00-10:59 CHASES of spent moves; on 11/19 it vetoed a FRESH
+  // 11:55 AM opening-range breakdown (SPX 7275P, +~175% unbought). The engine's
+  // 0.10-0.65 ATR extension gate is the anti-chase control now — it only qualifies
+  // breakouts as they happen, at any hour. The configurable risk-settings window
+  // (currently 9:30-14:45 ET in validatePaperEntry) remains the outer bound.
   const earningsBlock = await activeEarningsGuard(underlying, { swingEntry: etMin >= 930 });
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   // Never re-enter a contract already held: with maxOpenPositions > 1 the global cap

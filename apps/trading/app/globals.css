@@ -117,6 +117,21 @@ button { cursor: pointer; }
 .morning-card-strip.stand-down strong { color:#7e8998; }
 .morning-card-strip p { margin:0; white-space:pre-line; font-size:12px; line-height:1.55; color:#aeb9c8; }
 .morning-card-strip em { display:block; margin-top:8px; font-size:10px; color:#657284; font-style:normal; }
+.signal-feed { margin:14px 0 0; border:1px solid var(--line); border-radius:10px; padding:12px 16px 10px; background:#0d1118; }
+.signal-feed header { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+.signal-feed header strong { font:700 13px "JetBrains Mono",monospace; letter-spacing:.05em; color:#e8edf4; }
+.signal-feed header span { font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#657284; }
+.signal-feed-rows { display:flex; flex-direction:column; }
+.signal-feed-row { display:flex; align-items:center; gap:12px; padding:7px 0; border-top:1px solid #161d27; font:500 12px "JetBrains Mono",monospace; flex-wrap:wrap; }
+.signal-feed-row em { font-style:normal; color:#657284; font-size:11px; min-width:62px; }
+.signal-feed-row b { font-weight:700; font-size:11px; letter-spacing:.06em; padding:2px 7px; border-radius:5px; }
+.signal-feed-row b.call { color:#63e6be; background:#63e6be1a; }
+.signal-feed-row b.put { color:#f28b8b; background:#ef44441a; }
+.signal-feed-row .feed-setup { color:#7e8998; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+.signal-feed-row .feed-contract { color:#dfe6ef; font-weight:700; }
+.signal-feed-row .feed-status { font-size:11px; color:#aeb9c8; }
+.signal-feed-row .feed-status.traded { color:#9de7d2; font-weight:700; }
+.signal-feed-row .feed-status.skipped i { font-style:normal; font-weight:700; color:#e8c86b; margin-left:6px; }
 .kicker-pick { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
 .kicker-pick .card-heading { margin-bottom:10px; }
 th.sortable { cursor:pointer; user-select:none; }

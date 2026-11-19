@@ -1,0 +1,66 @@
+import "server-only";
+import { createAdminClient } from "@/lib/supabase/admin";
+import type { CommandCenter, Signal } from "./types";
+
+// SHADOW LEDGER (2026-11-19, user call): when the engine fires a qualified entry
+// signal and the paper lane skips it (cooldown, caps, kill switch, risk gate), the
+// miss is recorded with its entry prices and live-marked every cron tick until the
+// contract expires. Born from the 11:55 AM SPX 7275P put that fired, was vetoed by
+// the (since removed) morning-only rule, and ran ~+175% unbought. The ledger turns
+// every future veto into a measured counterfactual instead of an anecdote.
+
+// One shadow row per action+setup per hour — the engine re-fires every minute while
+// a setup holds, and a row per minute would be noise, not a record.
+const DEDUPE_MS = 60 * 60_000;
+
+export async function recordShadowSkip(input: { signal: Signal; underlying: string; skipReason: string }): Promise<{ recorded: boolean }> {
+  const { signal, underlying, skipReason } = input;
+  const contract = signal.contract;
+  if (!contract) return { recorded: false };
+  const admin = createAdminClient();
+  const { data: recent, error: recentError } = await admin.from("signal_shadow_ledger").select("id")
+    .eq("underlying", underlying).eq("action", signal.action).eq("setup", signal.setup)
+    .gte("created_at", new Date(Date.now() - DEDUPE_MS).toISOString()).limit(1).maybeSingle();
+  if (recentError) throw new Error(`Shadow ledger dedupe check failed: ${recentError.message}`);
+  if (recent) return { recorded: false };
+  const { error } = await admin.from("signal_shadow_ledger").insert({
+    signal_id: signal.id, underlying, action: signal.action, setup: signal.setup,
+    contract_ticker: contract.ticker, expiration_date: contract.expirationDate ?? null,
+    entry_ask: contract.ask, entry_bid: contract.bid, underlying_price: signal.market.price,
+    skip_reason: skipReason, last_bid: contract.bid, peak_bid: contract.bid,
+  });
+  if (error) throw new Error(`Shadow ledger insert failed: ${error.message}`);
+  return { recorded: true };
+}
+
+// Live-marking: each tick, open rows get their contract's current bid from the fresh
+// snapshot (peak_bid ratchets up); rows whose expiry has passed in ET close for good.
+export async function markShadowLedger(snapshot: CommandCenter | null, underlying: string): Promise<{ marked: number; closed: number }> {
+  const admin = createAdminClient();
+  const { data: open, error } = await admin.from("signal_shadow_ledger")
+    .select("id, contract_ticker, expiration_date, peak_bid")
+    .eq("underlying", underlying).eq("status", "open").limit(100);
+  if (error) throw new Error(`Shadow ledger read failed: ${error.message}`);
+  if (!open?.length) return { marked: 0, closed: 0 };
+  const etToday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  const byTicker = new Map((snapshot?.contracts ?? []).map(contract => [contract.ticker, contract]));
+  let marked = 0, closed = 0;
+  for (const row of open) {
+    const expired = row.expiration_date != null && String(row.expiration_date) < etToday;
+    if (expired) {
+      const { error: closeError } = await admin.from("signal_shadow_ledger")
+        .update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", row.id);
+      if (closeError) console.error("shadow ledger close failed", row.id, closeError.message);
+      else closed += 1;
+      continue;
+    }
+    const quote = byTicker.get(String(row.contract_ticker));
+    if (!quote || !(quote.bid > 0)) continue;
+    const peak = Math.max(Number(row.peak_bid ?? 0), quote.bid);
+    const { error: markError } = await admin.from("signal_shadow_ledger")
+      .update({ last_bid: quote.bid, peak_bid: peak }).eq("id", row.id);
+    if (markError) console.error("shadow ledger mark failed", row.id, markError.message);
+    else marked += 1;
+  }
+  return { marked, closed };
+}

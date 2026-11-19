@@ -24,7 +24,10 @@ export function isInstantAlert(row: { severity: string; event_key: string }): bo
     // worthless after a 30-minute digest sweep.
     || String(row.event_key).startsWith("overnight-")
     || String(row.event_key).startsWith("spx-morning-card-")
-    || String(row.event_key).startsWith("setup-watch-");
+    || String(row.event_key).startsWith("setup-watch-")
+    // Qualified engine fire the paper lane skipped (2026-11-19): actionable NOW as a
+    // manual play — a digest sweep would deliver it after the move.
+    || String(row.event_key).startsWith("signal-skip-");
 }
 
 const ICON: Record<string, string> = { info: "ℹ️", success: "✅", warning: "⚠️", critical: "🚨" };
@@ -45,7 +48,7 @@ export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPen
   const { data: pending, error } = await admin.from("alerts")
     .select("id,event_key,severity,title,body,created_at")
     .is("notified_at", null)
-    .or("severity.in.(success,critical),event_key.like.radar-%,event_key.like.ai-%,event_key.like.overnight-%,event_key.like.spx-morning-card-%,event_key.like.setup-watch-%")
+    .or("severity.in.(success,critical),event_key.like.radar-%,event_key.like.ai-%,event_key.like.overnight-%,event_key.like.spx-morning-card-%,event_key.like.setup-watch-%,event_key.like.signal-skip-%")
     .order("created_at", { ascending: true })
     .limit(25);
   if (error) throw new Error(`Alert dispatch query failed: ${error.message}`);

@@ -49,6 +49,9 @@ interface RobinhoodState {connected:boolean;executionReady?:boolean;error?:strin
 interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;read_at:string|null;created_at:string}
 interface MorningCard{severity:string;title:string;body:string;created_at:string}
 interface AlertState{alerts:AlertItem[];unread:number;morningCard?:MorningCard|null}
+interface SignalFeedItem{kind:"traded"|"skipped";at:string;action:string;setup:string;ticker:string;quantity?:number;price:number;lastBid?:number|null;peakBid?:number|null;skipReason?:string;status?:string}
+// O:SPX261120P07275000 -> "SPX 11/20 7275P"
+const shortOcc=(ticker:string)=>{const match=/^([A-Z]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/.exec(ticker.replace(/^O:/,""));return match?`${match[1].replace(/W$/,"")} ${Number(match[3])}/${Number(match[4])} ${Number(match[6])/1000}${match[5]}`:ticker.replace(/^O:/,"");};
 
 export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [underlying, setUnderlying] = useState<Underlying>("SPX");
@@ -59,6 +62,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [manager, setManager] = useState<ManagerState | null>(null);
   const [robinhood,setRobinhood]=useState<RobinhoodState|null>(null);
   const [alerts,setAlerts]=useState<AlertState>({alerts:[],unread:0});
+  const [signalFeed,setSignalFeed]=useState<SignalFeedItem[]>([]);
   const [alertsOpen,setAlertsOpen]=useState(false);
   const [leaderboardSort,setLeaderboardSort]=useState<"rank"|"volume">("rank");
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -94,8 +98,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const horizonTabs: HorizonTab[] = [0,1,2,"1M","3M","6M","9M","1Y"];
 
   const refreshPaper = useCallback(async () => {
-    const [paperResponse,managerResponse,alertResponse,robinhoodResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"}),fetch("/api/brokers/robinhood/status",{cache:"no-store"})]);
-    setPaper(await paperResponse.json()); setManager(await managerResponse.json());if(alertResponse.ok)setAlerts(await alertResponse.json());setRobinhood(await robinhoodResponse.json());
+    const [paperResponse,managerResponse,alertResponse,robinhoodResponse,feedResponse] = await Promise.all([fetch("/api/paper-trading",{cache:"no-store"}),fetch("/api/position-manager",{cache:"no-store"}),fetch("/api/alerts",{cache:"no-store"}),fetch("/api/brokers/robinhood/status",{cache:"no-store"}),fetch("/api/signals/today",{cache:"no-store"})]);
+    setPaper(await paperResponse.json()); setManager(await managerResponse.json());if(alertResponse.ok)setAlerts(await alertResponse.json());setRobinhood(await robinhoodResponse.json());if(feedResponse.ok)setSignalFeed((await feedResponse.json()).feed??[]);
   }, []);
   const markAlertsRead=useCallback(async(id?:string)=>{await fetch("/api/alerts",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(id?{id}:{all:true})});await refreshPaper();},[refreshPaper]);
   const setKillSwitch = useCallback(async (killSwitch:boolean) => {
@@ -290,6 +294,24 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           <strong>{alerts.morningCard.title}</strong>
           <p>{alerts.morningCard.body}</p>
           <em>{new Date(alerts.morningCard.created_at).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} ET</em>
+        </section> : null}
+
+        {signalFeed.length ? <section className="signal-feed">
+          <header><strong>SIGNAL FEED</strong><span>today&apos;s engine fires — traded and skipped</span></header>
+          <div className="signal-feed-rows">
+            {signalFeed.map(item=>{
+              const pct=(value:number|null|undefined)=>item.kind==="skipped"&&value!=null&&item.price>0?`${value>=item.price?"+":"−"}${Math.abs((value/item.price-1)*100).toFixed(0)}%`:null;
+              return <div key={`${item.kind}-${item.at}-${item.ticker}`} className={`signal-feed-row ${item.kind}`}>
+                <em>{new Date(item.at).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</em>
+                <b className={item.action==="enter_put"?"put":"call"}>{item.action==="enter_put"?"PUT":"CALL"}</b>
+                <span className="feed-setup">{item.setup.replaceAll("_"," ")}</span>
+                <span className="feed-contract">{shortOcc(item.ticker)} @ ${item.price.toFixed(2)}</span>
+                {item.kind==="traded"
+                  ? <span className="feed-status traded">TRADED {item.quantity ?? 1}×{item.status && !["filled","new","accepted"].includes(item.status)?` · ${item.status}`:""}</span>
+                  : <span className="feed-status skipped" title={item.skipReason}>SKIPPED — {item.skipReason}{pct(item.lastBid)?<i> now {pct(item.lastBid)} · peak {pct(item.peakBid)}</i>:null}</span>}
+              </div>;
+            })}
+          </div>
         </section> : null}
 
         <main className="dashboard">
