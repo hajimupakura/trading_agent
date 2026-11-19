@@ -7,7 +7,12 @@ import { createClient } from "@/lib/supabase/server";
 // email template). Exchange it for a session, then forward to ?next.
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const next = url.searchParams.get("next") ?? "/dashboard";
+  // Open-redirect guard: `next` rides in a link users click from email, so it
+  // must never leave this origin — relative paths only ("//host" and "/\host"
+  // are protocol-relative escapes browsers honor).
+  const rawNext = url.searchParams.get("next") ?? "/dashboard";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") && !rawNext.startsWith("/\\") && new URL(rawNext, url.origin).origin === url.origin
+    ? rawNext : "/dashboard";
   const code = url.searchParams.get("code");
   const tokenHash = url.searchParams.get("token_hash");
   const type = url.searchParams.get("type") as EmailOtpType | null;
