@@ -1,6 +1,6 @@
 import { ShieldCheck, Zap } from "lucide-react";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { login, signup } from "./actions";
+import { login, requestPasswordReset, signup } from "./actions";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; message?: string }> }) {
   const params = await searchParams;
@@ -21,6 +21,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <input id="password" name="password" type="password" autoComplete={ownerExists ? "current-password" : "new-password"} minLength={ownerExists ? 6 : 12} required />
         {!ownerExists ? <><label htmlFor="setupCode">Owner setup code</label><input id="setupCode" name="setupCode" type="password" autoComplete="off" required /></> : null}
         <button formAction={ownerExists ? login : signup}>{ownerExists ? "Log in" : "Create private account"}</button>
+        {ownerExists ? <button formAction={requestPasswordReset} formNoValidate className="auth-link" type="submit">Forgot password? Email me a reset link</button> : null}
       </form>
       <div className="auth-security"><ShieldCheck size={16}/><span>Only the first account can register. Use TRADING_OWNER_SETUP_CODE or your current CRON_SECRET once; it is never stored.</span></div>
     </section>
