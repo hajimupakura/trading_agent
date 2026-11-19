@@ -62,10 +62,18 @@ async function alpacaChainRows(underlying: Underlying, expiration: string, dte: 
   let pageToken: string | undefined; let pages = 0;
   do {
     const url = new URL(`${ALPACA_BASE}/v1beta1/options/snapshots/${encodeURIComponent(underlying)}`);
-    url.searchParams.set("feed", "indicative"); url.searchParams.set("limit", "1000");
+    // OPRA when the account is entitled (real greeks/IV), else the free indicative
+    // feed (greeks absent -> pseudo-deltas estimated below). Probed once per process.
+    url.searchParams.set("feed", opraAvailable === false ? "indicative" : "opra");
+    url.searchParams.set("limit", "1000");
     url.searchParams.set("expiration_date", expiration);
     if (pageToken) url.searchParams.set("page_token", pageToken);
-    const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+    let response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+    if (!response.ok && opraAvailable == null && [400, 401, 403].includes(response.status)) {
+      opraAvailable = false;
+      url.searchParams.set("feed", "indicative");
+      response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+    } else if (response.ok && opraAvailable == null) opraAvailable = true;
     if (!response.ok) throw new Error(`Alpaca option chain ${response.status} for ${underlying} ${expiration}`);
     const payload = await response.json() as { snapshots?: Record<string, AlpacaOptionSnapshot>; next_page_token?: string | null };
     for (const [occ, snap] of Object.entries(payload.snapshots ?? {})) {
@@ -92,7 +100,39 @@ async function alpacaChainRows(underlying: Underlying, expiration: string, dte: 
     }
     pageToken = payload.next_page_token ?? undefined;
   } while (pageToken && ++pages < 4);
+  if (rows.length && rows.every(row => row.delta == null)) estimateDeltas(rows);
   return rows;
+}
+let opraAvailable: boolean | null = null;
+// Moneyness-based delta ESTIMATE for feeds without greeks (the indicative feed).
+// Forward from ATM put-call parity, dollar-sigma from the ATM straddle (straddle
+// price ~ expected move ~ 0.8 sigma), delta_call ~ Phi((F-K)/sigma). Coarse, but
+// it restores delta-nearness RANKING (quality picks around 0.4) — it is never
+// used as a greek for pricing. Marked by leaving gamma/theta null.
+function estimateDeltas(rows: Parameters<typeof rankContracts>[0]): void {
+  const byStrike = new Map<number, { call?: number; put?: number }>();
+  for (const row of rows) {
+    if (row.bid <= 0 || row.ask <= 0) continue;
+    const entry = byStrike.get(row.strike) ?? {};
+    entry[row.side] = row.midpoint; byStrike.set(row.strike, entry);
+  }
+  const pairs = [...byStrike.entries()].filter(([, pair]) => pair.call != null && pair.put != null)
+    .map(([strike, pair]) => ({ strike, call: pair.call!, put: pair.put!, distance: Math.abs(pair.call! - pair.put!) }))
+    .sort((a, b) => a.distance - b.distance);
+  const atm = pairs[0];
+  if (!atm) return;
+  const forward = atm.strike + atm.call - atm.put;
+  const sigma = Math.max((atm.call + atm.put) / 0.8, forward * 0.001);
+  const phi = (z: number) => { // Abramowitz–Stegun normal CDF approximation
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
+    const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    return z >= 0 ? 1 - p : p;
+  };
+  for (const row of rows) {
+    const callDelta = phi((forward - row.strike) / sigma);
+    row.delta = Number((row.side === "call" ? callDelta : callDelta - 1).toFixed(3));
+  }
 }
 export async function getMarketState(underlying: Underlying): Promise<MarketState> {
   if (underlying === "SPX") return getSpxMarketState();
@@ -219,6 +259,19 @@ async function getSpxMarketState():Promise<MarketState> {
   // SPX is a calculated index, not a traded instrument, so native volume/VWAP do not exist.
   // Price-only momentum remains usable; volume confirmation is deliberately treated as unavailable.
   const regime=bars.length<15?"opening":current.close>referencePrice&&technicals.ema8>technicals.ema21?"uptrend":current.close<referencePrice&&technicals.ema8<technicals.ema21?"downtrend":"range";
+  // SPX PARTICIPATION PROXY (2026-11-19): a calculated index has no volume, so SPX's
+  // own volume math is noise. Borrow SPY's fresh (<=5 min) confirmation — it is the
+  // same market with a real tape. null means "proxy unavailable" and the signal layer
+  // keeps the historical waiver in that case.
+  technicals.volumeConfirmation=null; technicals.relativeVolume=null;
+  try{
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const { data: spyRow } = await createAdminClient().from("options_monitor_snapshots").select("payload,updated_at").eq("underlying","SPY").maybeSingle();
+    if(spyRow&&Date.now()-Date.parse(String(spyRow.updated_at))<5*60_000){
+      const spyTech=(spyRow.payload as {market?:{technicals?:{volumeConfirmation?:boolean|null;relativeVolume?:number|null}}}|null)?.market?.technicals;
+      if(spyTech){technicals.volumeConfirmation=spyTech.volumeConfirmation??null;technicals.relativeVolume=spyTech.relativeVolume??null;}
+    }
+  }catch{/* proxy unavailable -> waiver */}
   const priorDay=await getSpxPriorDay(date);
   return {symbol:"SPX",chartSymbol:"SPX",asOf:current.timestamp,price:current.close,displayPrice:current.close,referencePrice,referenceLabel:"SESSION MEAN",openingRangeHigh,openingRangeLow,regime,technicals,bars:bars.slice(-120),priorDay};
 }

@@ -34,7 +34,11 @@ export function rankContracts(contracts: RawContract[], settings:RiskSettings=DE
     // sizing caps decide HOW MANY, never whether the chain exists). SPY/SPX keep the
     // flat replay-validated cap; the blind-spot invariant pages if a liquid chain ever
     // rejects 100% of contracts.
-    if (!monitorOnly && ["SPY","SPX"].includes(contract.underlying) && contract.ask > settings.maxOptionAsk) rejectionReasons.push(`Ask exceeds $${settings.maxOptionAsk.toFixed(2)}`);
+    // SPX trades ~10x SPY's price scale, so a flat SPY-sized ask ceiling ($8) banned
+    // every contract within 100+ points of the money and left only lottery strikes
+    // rankable (seen live 2026-11-19: "best" pick was 160 pts OTM). Scale it 10x.
+    const askCeiling = contract.underlying === "SPX" ? settings.maxOptionAsk * 10 : settings.maxOptionAsk;
+    if (!monitorOnly && ["SPY","SPX"].includes(contract.underlying) && contract.ask > askCeiling) rejectionReasons.push(`Ask exceeds $${askCeiling.toFixed(2)}${contract.underlying === "SPX" ? " (10x SPY ceiling for SPX scale)" : ""}`);
     if (!monitorOnly && (contract.quoteUpdatedAt == null || Date.now() - contract.quoteUpdatedAt > 30_000)) rejectionReasons.push("Quote is older than 30 seconds");
     if (!monitorOnly && contract.delta != null && (Math.abs(contract.delta) < .25 || Math.abs(contract.delta) > .70)) rejectionReasons.push("Absolute delta outside 0.25–0.70");
     const score = clamp(

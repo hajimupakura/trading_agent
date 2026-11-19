@@ -22,11 +22,18 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   const twoClosesAbove = latestBars.length === 2 && latestBars.every(bar => bar.close > market.openingRangeHigh && bar.close > market.referencePrice);
   const twoClosesBelow = latestBars.length === 2 && latestBars.every(bar => bar.close < market.openingRangeLow && bar.close < market.referencePrice);
   const breakoutControlled = technicals.breakoutAtr != null && technicals.breakoutAtr >= .1 && technicals.breakoutAtr <= .65;
-  // Participation: SPY keeps the validated 1.2x burst gate; SPX has no native volume;
-  // single names accept SUSTAINED participation (>=0.7x median) everywhere — the burst
-  // gate blinded three paths in three days to steady single-name moves (SPCX 8/12
-  // trend, SNDK 8/14 drive, TSLA 8/14 breakout). One rule, applied once, for all paths.
-  const participationConfirmed = market.symbol === "SPX" ? true
+  // Participation: SPY keeps the validated 1.2x burst gate; single names accept
+  // SUSTAINED participation (>=0.7x median) everywhere — the burst gate blinded three
+  // paths in three days to steady single-name moves (SPCX 8/12 trend, SNDK 8/14 drive,
+  // TSLA 8/14 breakout). One rule, applied once, for all paths.
+  // SPX (2026-11-19): no native volume exists on a calculated index, so its
+  // volumeConfirmation is PROXIED from SPY (same market, real volume) by the provider.
+  // true = SPY confirms participation; false = SPY says the move is volumeless, block
+  // it (this was the old blind spot: SPX used to waive participation entirely and buy
+  // chop); null = proxy unavailable, keep the historical waiver rather than silently
+  // freezing all SPX signals on a SPY data hiccup.
+  const participationConfirmed = market.symbol === "SPX"
+    ? technicals.volumeConfirmation !== false
     : technicals.volumeConfirmation === true
     || (!["SPY", "SPX"].includes(market.symbol) && (technicals.relativeVolume ?? 0) >= 0.7);
   const callMomentum = technicals.rsi14 != null && technicals.rsi14 >= 52 && technicals.rsi14 <= 72 && technicals.macd != null && technicals.macdSignal != null && technicals.macd > technicals.macdSignal && technicals.vwapSlope != null && technicals.vwapSlope > 0 && participationConfirmed && breakoutControlled && !["bearish_engulfing","shooting_star"].includes(technicals.candlePattern);
