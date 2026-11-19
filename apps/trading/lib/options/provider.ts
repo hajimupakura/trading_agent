@@ -104,6 +104,27 @@ async function alpacaChainRows(underlying: Underlying, expiration: string, dte: 
   return rows;
 }
 let opraAvailable: boolean | null = null;
+// Latest quotes for specific OCC symbols. Needed by the shadow ledger: a skipped
+// contract that goes deep ITM (exactly the big counterfactual winners) drops out
+// of the snapshot's ranked top-40, so marking must quote it directly.
+export async function alpacaLatestOptionQuotes(tickers: string[]): Promise<Map<string, { bid: number; ask: number }>> {
+  const quotes = new Map<string, { bid: number; ask: number }>();
+  if (!tickers.length) return quotes;
+  const headers = alpacaKeys();
+  const url = new URL(`${ALPACA_BASE}/v1beta1/options/quotes/latest`);
+  url.searchParams.set("symbols", tickers.slice(0, 100).map(ticker => ticker.replace(/^O:/, "")).join(","));
+  url.searchParams.set("feed", opraAvailable === false ? "indicative" : "opra");
+  let response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+  if (!response.ok && opraAvailable == null && [400, 401, 403].includes(response.status)) {
+    opraAvailable = false;
+    url.searchParams.set("feed", "indicative");
+    response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+  }
+  if (!response.ok) throw new Error(`Alpaca latest option quotes ${response.status}`);
+  const payload = await response.json() as { quotes?: Record<string, { bp?: number; ap?: number }> };
+  for (const [occ, quote] of Object.entries(payload.quotes ?? {})) quotes.set(`O:${occ}`, { bid: Number(quote.bp ?? 0), ask: Number(quote.ap ?? 0) });
+  return quotes;
+}
 // Moneyness-based delta ESTIMATE for feeds without greeks (the indicative feed).
 // Forward from ATM put-call parity, dollar-sigma from the ATM straddle (straddle
 // price ~ expected move ~ 0.8 sigma), delta_call ~ Phi((F-K)/sigma). Coarse, but

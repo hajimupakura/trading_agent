@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { alpacaLatestOptionQuotes } from "./provider";
 import type { CommandCenter, Signal } from "./types";
 
 // SHADOW LEDGER (2026-11-19, user call): when the engine fires a qualified entry
@@ -43,7 +44,15 @@ export async function markShadowLedger(snapshot: CommandCenter | null, underlyin
   if (error) throw new Error(`Shadow ledger read failed: ${error.message}`);
   if (!open?.length) return { marked: 0, closed: 0 };
   const etToday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-  const byTicker = new Map((snapshot?.contracts ?? []).map(contract => [contract.ticker, contract]));
+  const byTicker = new Map((snapshot?.contracts ?? []).map(contract => [contract.ticker, { bid: contract.bid }]));
+  // A skipped contract that runs deep ITM (the big counterfactual winners) falls out
+  // of the snapshot's ranked cut — quote those directly or the ledger under-reports
+  // exactly the misses it exists to measure.
+  const missing = open.filter(row => (row.expiration_date == null || String(row.expiration_date) >= etToday) && !byTicker.has(String(row.contract_ticker)));
+  if (missing.length) {
+    const direct = await alpacaLatestOptionQuotes(missing.map(row => String(row.contract_ticker))).catch(error => { console.error("shadow ledger direct quotes failed", error instanceof Error ? error.message : error); return new Map<string, { bid: number; ask: number }>(); });
+    for (const [ticker, quote] of direct) byTicker.set(ticker, { bid: quote.bid });
+  }
   let marked = 0, closed = 0;
   for (const row of open) {
     const expired = row.expiration_date != null && String(row.expiration_date) < etToday;
