@@ -220,9 +220,13 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
     // Not from `eligible`: the quality screens structurally reject sub-$2 contracts
     // (spread-percent math); the kicker needs a two-sided market and volume, no more.
     const pool = (data?.contracts ?? []).filter(contract => contract.ask > 0 && contract.ask <= 2 && contract.bid > 0 && contract.volume >= 50 && contract.ticker !== primary?.ticker);
-    const scoped = primary
+    // Side-match only when a real ENTRY signal is live; in stand-aside the primary
+    // is just the delta-nearest monitor pick and its side is noise — show the best
+    // wing on the board from the nearest expiry instead of hiding the box.
+    const live = data?.signal?.action?.startsWith("enter") ?? false;
+    const scoped = live && primary
       ? pool.filter(contract => contract.side === primary.side && contract.expirationDate === primary.expirationDate)
-      : pool.filter(contract => contract.dte === Math.min(...pool.map(candidate => candidate.dte)));
+      : pool.length ? pool.filter(contract => contract.dte === Math.min(...pool.map(candidate => candidate.dte))) : [];
     return scoped.sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0] ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);

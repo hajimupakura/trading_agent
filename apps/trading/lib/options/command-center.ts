@@ -50,9 +50,12 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
     // box + the paper pair's second leg) was EMPTY. Keep the best cheap wings —
     // two-sided market and real volume, highest delta first — alongside the ranked set.
     const kept = new Set(ranked.map(contract => contract.ticker));
-    const cheapWings = bucket
-      .filter(contract => !kept.has(contract.ticker) && contract.ask > 0 && contract.ask <= 2 && contract.bid > 0 && contract.volume >= 50)
-      .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0)).slice(0, 12);
+    // PER SIDE: on a trending day one side's wings carry all the delta and would
+    // monopolize a single quota (seen live 2026-11-19: 12 call wings, 0 put wings —
+    // the kicker box went blank the moment the primary pick was a put).
+    const cheapWings = (["call", "put"] as const).flatMap(side => bucket
+      .filter(contract => contract.side === side && !kept.has(contract.ticker) && contract.ask > 0 && contract.ask <= 2 && contract.bid > 0 && contract.volume >= 50)
+      .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0)).slice(0, 8));
     return [...ranked, ...cheapWings];
   });
   const admin = createAdminClient();
