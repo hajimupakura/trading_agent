@@ -65,6 +65,13 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
   const [contractQuery, setContractQuery] = useState("");
+  // Leaderboard filters (user call, 2026-11-19): side, min volume, max ask, max DTE, strike band.
+  const [filterSide, setFilterSide] = useState<"all"|"call"|"put">("all");
+  const [filterMinVolume, setFilterMinVolume] = useState("");
+  const [filterMaxAsk, setFilterMaxAsk] = useState("");
+  const [filterMaxDte, setFilterMaxDte] = useState("");
+  const [filterStrikeMin, setFilterStrikeMin] = useState("");
+  const [filterStrikeMax, setFilterStrikeMax] = useState("");
   const [inspected, setInspected] = useState<Contract | null>(null);
   const [ticket, setTicket] = useState({ quantity:"1", limitPrice:"" });
   const [ticketBusy, setTicketBusy] = useState<"alpaca"|"robinhood"|null>(null);
@@ -234,6 +241,12 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const query = contractQuery.trim().toLowerCase();
   const selectedContracts = (data?.contracts.filter(contract => contract.dte >= horizonLo && contract.dte <= horizonHi) ?? [])
     .filter(contract => !query || `${contract.ticker} ${contract.strike} ${contract.side} ${contract.expirationDate}`.toLowerCase().includes(query))
+    .filter(contract => filterSide === "all" || contract.side === filterSide)
+    .filter(contract => !filterMinVolume || contract.volume >= Number(filterMinVolume))
+    .filter(contract => !filterMaxAsk || contract.ask <= Number(filterMaxAsk))
+    .filter(contract => !filterMaxDte || contract.dte <= Number(filterMaxDte))
+    .filter(contract => !filterStrikeMin || contract.strike >= Number(filterStrikeMin))
+    .filter(contract => !filterStrikeMax || contract.strike <= Number(filterStrikeMax))
     .sort((a, b) => leaderboardSort === "volume" ? b.volume - a.volume : 0); // "rank" keeps snapshot (ranked) order
   const actionTone = signal?.action === "enter_call" ? "call" : signal?.action === "enter_put" ? "put" : "wait";
   const actionLabel = signal?.action === "enter_call" ? "CALL SETUP" : signal?.action === "enter_put" ? "PUT SETUP" : "STAND ASIDE";
@@ -396,6 +409,16 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
 
           <section className="contracts-card">
             <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {horizonLabel(selectedHorizon)} CONTRACTS</strong></div><div className="table-tools"><input className="contract-search" placeholder="Search strike, C/P, expiry…" value={contractQuery} onChange={event => setContractQuery(event.target.value)} aria-label="Search contracts"/><p>Click a row to inspect &amp; trade</p></div></div>
+            <div className="filter-bar" aria-label="Filter contracts">
+              <div className="filter-seg" role="group" aria-label="Side">
+                {(["all","call","put"] as const).map(side => <button key={side} className={filterSide === side ? "selected" : ""} onClick={() => setFilterSide(side)}>{side.toUpperCase()}</button>)}
+              </div>
+              <label>Vol ≥<input inputMode="numeric" placeholder="0" value={filterMinVolume} onChange={event => setFilterMinVolume(event.target.value.replace(/[^0-9]/g,""))}/></label>
+              <label>Ask ≤ $<input inputMode="decimal" placeholder="any" value={filterMaxAsk} onChange={event => setFilterMaxAsk(event.target.value.replace(/[^0-9.]/g,""))}/></label>
+              <label>DTE ≤<input inputMode="numeric" placeholder="any" value={filterMaxDte} onChange={event => setFilterMaxDte(event.target.value.replace(/[^0-9]/g,""))}/></label>
+              <label>Strike<input inputMode="decimal" placeholder="min" value={filterStrikeMin} onChange={event => setFilterStrikeMin(event.target.value.replace(/[^0-9.]/g,""))}/>–<input inputMode="decimal" placeholder="max" value={filterStrikeMax} onChange={event => setFilterStrikeMax(event.target.value.replace(/[^0-9.]/g,""))}/></label>
+              {(filterSide !== "all" || filterMinVolume || filterMaxAsk || filterMaxDte || filterStrikeMin || filterStrikeMax) ? <button className="filter-clear" onClick={() => { setFilterSide("all"); setFilterMinVolume(""); setFilterMaxAsk(""); setFilterMaxDte(""); setFilterStrikeMin(""); setFilterStrikeMax(""); }}>Clear</button> : null}
+            </div>
             <div className="dte-tabs" role="tablist" aria-label="Filter contracts by expiration horizon">{horizonTabs.map(tab => { const [lo,hi] = horizonRange(tab); const count = data?.contracts.filter(contract => contract.dte >= lo && contract.dte <= hi).length ?? 0; return <button key={String(tab)} role="tab" aria-selected={selectedHorizon === tab} className={selectedHorizon === tab ? "selected":""} onClick={()=>setSelectedHorizon(tab)}>{horizonLabel(tab)} <span>{count}</span></button>; })}</div>
             <div className="table-wrap"><table>
               <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => {
