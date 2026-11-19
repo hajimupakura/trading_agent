@@ -20,6 +20,80 @@ async function massive<T>(pathOrUrl: string): Promise<T> {
   if (!response.ok) throw new Error(`Massive API ${response.status}`);
   return response.json() as Promise<T>;
 }
+
+// ---- ALPACA OPTION CHAINS (2026-11-19). The Massive key 403'd ~Sep 11 and the
+// user is not renewing; Alpaca added index options (SPX/SPXW/XSP/VIX) this year
+// and serves chains for every underlying we care about through the options data
+// API we already hold keys for. Snapshots carry quotes/greeks/IV/day-volume;
+// open interest rides the trading API's contracts listing (best-effort merge).
+// Contract identity (side/strike/expiry) is parsed from the OCC symbol itself.
+const PAPER_TRADING_BASE = "https://paper-api.alpaca.markets";
+function alpacaKeys() {
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
+  return { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
+}
+const OCC_RE = /^([A-Z]+?)(\d{6})([CP])(\d{8})$/;
+interface AlpacaOptionSnapshot {
+  latestQuote?: { t?: string; bp?: number; ap?: number };
+  dailyBar?: { v?: number };
+  impliedVolatility?: number | null;
+  greeks?: { delta?: number | null; gamma?: number | null; theta?: number | null } | null;
+}
+async function alpacaChainRows(underlying: Underlying, expiration: string, dte: number): Promise<Parameters<typeof rankContracts>[0]> {
+  const headers = alpacaKeys();
+  // Open interest enrichment (trading API). Failure never blocks the chain.
+  const openInterestBySymbol = new Map<string, number>();
+  try {
+    let pageToken: string | undefined; let pages = 0;
+    do {
+      const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
+      url.searchParams.set("underlying_symbols", underlying); url.searchParams.set("expiration_date", expiration);
+      url.searchParams.set("limit", "1000");
+      if (pageToken) url.searchParams.set("page_token", pageToken);
+      const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+      if (!response.ok) break;
+      const payload = await response.json() as { option_contracts?: Array<{ symbol: string; open_interest?: string | number | null }>; next_page_token?: string | null };
+      for (const contract of payload.option_contracts ?? []) openInterestBySymbol.set(contract.symbol, Number(contract.open_interest ?? 0) || 0);
+      pageToken = payload.next_page_token ?? undefined;
+    } while (pageToken && ++pages < 4);
+  } catch { /* enrichment only */ }
+  const rows: Parameters<typeof rankContracts>[0] = [];
+  let pageToken: string | undefined; let pages = 0;
+  do {
+    const url = new URL(`${ALPACA_BASE}/v1beta1/options/snapshots/${encodeURIComponent(underlying)}`);
+    url.searchParams.set("feed", "indicative"); url.searchParams.set("limit", "1000");
+    url.searchParams.set("expiration_date", expiration);
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Alpaca option chain ${response.status} for ${underlying} ${expiration}`);
+    const payload = await response.json() as { snapshots?: Record<string, AlpacaOptionSnapshot>; next_page_token?: string | null };
+    for (const [occ, snap] of Object.entries(payload.snapshots ?? {})) {
+      const match = OCC_RE.exec(occ);
+      if (!match) continue;
+      const side: Side = match[3] === "C" ? "call" : "put";
+      const strike = Number(match[4]) / 1000;
+      const bid = Number(snap.latestQuote?.bp ?? 0); const ask = Number(snap.latestQuote?.ap ?? 0);
+      const midpoint = bid && ask ? (bid + ask) / 2 : 0;
+      const volume = Number(snap.dailyBar?.v ?? 0);
+      const openInterest = openInterestBySymbol.get(occ) ?? 0;
+      rows.push({ ticker: `O:${occ}`, underlying, expirationDate: expiration, dte, side, strike,
+        exerciseStyle: underlying === "SPX" ? "european" : "american", bid, ask, midpoint,
+        spreadPct: midpoint ? (ask - bid) / midpoint * 100 : 999,
+        quoteUpdatedAt: snap.latestQuote?.t ? Date.parse(snap.latestQuote.t) : null,
+        volume, openInterest, volumeToOpenInterest: openInterest ? volume / openInterest : volume ? 5 : 0,
+        impliedVolatility: snap.impliedVolatility == null ? null : Number(snap.impliedVolatility),
+        delta: snap.greeks?.delta == null ? null : Number(snap.greeks.delta),
+        gamma: snap.greeks?.gamma == null ? null : Number(snap.greeks.gamma),
+        theta: snap.greeks?.theta == null ? null : Number(snap.greeks.theta),
+        // No per-contract underlying price on Alpaca; the SPX sampler derives spot
+        // from ATM put-call parity instead (spx-bars.deriveSpxSpot handles null).
+        underlyingPrice: null });
+    }
+    pageToken = payload.next_page_token ?? undefined;
+  } while (pageToken && ++pages < 4);
+  return rows;
+}
 export async function getMarketState(underlying: Underlying): Promise<MarketState> {
   if (underlying === "SPX") return getSpxMarketState();
   return getEquityMarketState(underlying);
@@ -98,7 +172,27 @@ async function getSpxPriorDay(today:string):Promise<MarketState["priorDay"]> {
     const value=prior?{high:prior.h,low:prior.l,close:prior.c}:null;
     spxPriorDayCache={date:today,value};
     return value;
-  }catch{return null;}
+  }catch{
+    // No Massive (2026-11-19: subscription dropped, not coming back): rebuild the
+    // prior session from our own chain-sampled minute prices. High/low are the
+    // sampled extremes (slightly inside the true wicks), close is the last sample
+    // — accurate enough for gap math, which is all priorDay feeds.
+    try{
+      const etOf=(iso:string)=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date(iso));
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const { data } = await createAdminClient().from("index_bar_samples")
+        .select("bar_time,price").eq("symbol","SPX")
+        .lt("bar_time",`${today}T00:00:00-05:00`)
+        .order("bar_time",{ascending:false}).limit(500);
+      const rows=(data??[]).map(row=>({day:etOf(String(row.bar_time)),price:Number(row.price)}));
+      const lastDay=rows[0]?.day;
+      const session=rows.filter(row=>row.day===lastDay&&Number.isFinite(row.price)&&row.price>0);
+      if(!lastDay||session.length<30)return null; // thin sample = no trustworthy levels
+      const value={high:Math.max(...session.map(row=>row.price)),low:Math.min(...session.map(row=>row.price)),close:session[0].price};
+      spxPriorDayCache={date:today,value};
+      return value;
+    }catch{return null;}
+  }
 }
 
 async function getSpxMarketState():Promise<MarketState> {
@@ -163,33 +257,20 @@ export async function getHorizonChains(underlying: Underlying, horizons: Array<"
   const expirations = await Promise.all(targets.map(async ({ horizon, targetDays }) => {
     // Floor scales with the tenor so a short target can't resolve to a near-week expiry.
     const floor = targetDays === 0 ? today : addDays(today, Math.max(0, targetDays - Math.min(21, Math.round(targetDays / 3))));
-    const payload = await massive<{ results?: Array<{ expiration_date?: string }> }>(
-      `/v3/reference/options/contracts?underlying_ticker=${encodeURIComponent(underlying)}&expiration_date.gte=${floor}&limit=1&sort=expiration_date&order=asc`,
-    ).catch(() => null);
-    const expiration = payload?.results?.[0]?.expiration_date;
-    return expiration ? { horizon, expiration } : null;
+    // Nearest listed expiry on/after the floor, via the trading API's contract listing.
+    const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
+    url.searchParams.set("underlying_symbols", underlying); url.searchParams.set("expiration_date_gte", floor);
+    url.searchParams.set("limit", "200");
+    const payload = await fetch(url, { headers: alpacaKeys(), cache: "no-store", signal: AbortSignal.timeout(12_000) })
+      .then(response => response.ok ? response.json() as Promise<{ option_contracts?: Array<{ expiration_date?: string }> }> : null)
+      .catch(() => null);
+    const expirations = (payload?.option_contracts ?? []).map(contract => String(contract.expiration_date ?? "")).filter(Boolean).sort();
+    return expirations.length ? { horizon, expiration: expirations[0] } : null;
   }));
   const unique = [...new Map(expirations.filter((item): item is {horizon:"NEAR"|LongHorizon;expiration:string} => item != null).map(item => [item.expiration, item])).values()];
   const dteOf = (expiration: string) => Math.max(0, Math.round((Date.parse(`${expiration}T16:00:00-04:00`) - Date.now()) / 86_400_000));
   const buckets = await Promise.all(unique.map(async ({ expiration }) => {
-    const rows: Parameters<typeof rankContracts>[0] = [];
-    let next: string | undefined = `${BASE}/v3/snapshot/options/${underlying}?expiration_date=${expiration}&limit=250&sort=strike_price`; let pages = 0;
-    while (next && pages++ < 2) {
-      const payload: any = await massive<any>(next);
-      for (const item of payload.results ?? []) {
-        const details = item.details ?? {}; const quote = item.last_quote ?? {}; const day = item.day ?? item.session ?? {};
-        const side = details.contract_type as Side; const expirationDate = String(details.expiration_date ?? "");
-        if (!expirationDate || !["call","put"].includes(side)) continue;
-        const bid = Number(quote.bid ?? 0); const ask = Number(quote.ask ?? 0); const midpoint = Number(quote.midpoint ?? (bid && ask ? (bid + ask) / 2 : 0));
-        const volume = Number(day.volume ?? 0); const openInterest = Number(item.open_interest ?? 0);
-        rows.push({ ticker:String(details.ticker ?? item.ticker ?? ""), underlying, expirationDate, dte:dteOf(expirationDate),
-          side, strike:Number(details.strike_price ?? 0), exerciseStyle:String(details.exercise_style ?? "unknown"), bid, ask, midpoint,
-          spreadPct:midpoint ? (ask - bid) / midpoint * 100 : 999, quoteUpdatedAt:quote.last_updated == null ? null : Math.floor(Number(quote.last_updated) / 1_000_000),
-          volume, openInterest, volumeToOpenInterest:openInterest ? volume / openInterest : volume ? 5 : 0, impliedVolatility:item.implied_volatility == null ? null : Number(item.implied_volatility),
-          delta:item.greeks?.delta == null ? null : Number(item.greeks.delta), gamma:item.greeks?.gamma == null ? null : Number(item.greeks.gamma), theta:item.greeks?.theta == null ? null : Number(item.greeks.theta), underlyingPrice:item.underlying_asset?.price == null ? null : Number(item.underlying_asset.price) });
-      }
-      next = payload.next_url;
-    }
+    const rows = await alpacaChainRows(underlying, expiration, dteOf(expiration));
     // Cap per expiration bucket so one horizon cannot starve the others downstream.
     return rankContracts(rows, settings, { monitorOnly:true }).slice(0, 80);
   }));
@@ -208,27 +289,7 @@ export async function getOptionChain(underlying: Underlying,settings:RiskSetting
     if (weekday === 0 || weekday === 6) continue;
     sessions.push({ expiration: candidate, dte: offset });
   }
-  const buckets = await Promise.all(sessions.map(async ({ expiration, dte }) => {
-    const rows: Parameters<typeof rankContracts>[0] = [];
-    let next:string|undefined = `${BASE}/v3/snapshot/options/${underlying}?expiration_date=${expiration}&limit=250&sort=strike_price`; let pages=0;
-    while(next && pages++ < 4) {
-      const payload:any = await massive<any>(next);
-      for(const item of payload.results ?? []) {
-        const details=item.details ?? {}; const quote=item.last_quote ?? {}; const day=item.day ?? item.session ?? {};
-        const side=details.contract_type as Side; const expirationDate=String(details.expiration_date ?? "");
-        if(!expirationDate || !["call","put"].includes(side)) continue;
-        const bid=Number(quote.bid ?? 0); const ask=Number(quote.ask ?? 0); const midpoint=Number(quote.midpoint ?? (bid && ask ? (bid+ask)/2:0));
-        const volume=Number(day.volume ?? 0); const openInterest=Number(item.open_interest ?? 0);
-        rows.push({ ticker:String(details.ticker ?? item.ticker ?? ""),underlying,expirationDate,dte,
-          side,strike:Number(details.strike_price ?? 0),exerciseStyle:String(details.exercise_style ?? "unknown"),bid,ask,midpoint,
-          spreadPct:midpoint ? (ask-bid)/midpoint*100:999,quoteUpdatedAt:quote.last_updated==null?null:Math.floor(Number(quote.last_updated)/1_000_000),
-          volume,openInterest,volumeToOpenInterest:openInterest?volume/openInterest:volume?5:0,impliedVolatility:item.implied_volatility==null?null:Number(item.implied_volatility),
-          delta:item.greeks?.delta==null?null:Number(item.greeks.delta),gamma:item.greeks?.gamma==null?null:Number(item.greeks.gamma),theta:item.greeks?.theta==null?null:Number(item.greeks.theta),underlyingPrice:item.underlying_asset?.price==null?null:Number(item.underlying_asset.price) });
-      }
-      next=payload.next_url;
-    }
-    return rows;
-  }));
+  const buckets = await Promise.all(sessions.map(({ expiration, dte }) => alpacaChainRows(underlying, expiration, dte)));
   const raw=buckets.flat();
   return rankContracts(raw,settings,{monitorOnly:options?.monitorOnly});
 }
