@@ -132,6 +132,9 @@ button { cursor: pointer; }
 .signal-feed-row .feed-status { font-size:11px; color:#aeb9c8; }
 .signal-feed-row .feed-status.traded { color:#9de7d2; font-weight:700; }
 .signal-feed-row .feed-status.skipped i { font-style:normal; font-weight:700; color:#e8c86b; margin-left:6px; }
+/* No live fire: the spotlight is an instrument pick, not an opinion — dim it and say so. */
+.contract-card.instrument-only .contract-spotlight, .contract-card.instrument-only .kicker-pick { opacity:.55; }
+.instrument-note { margin:10px 0 4px; padding:8px 10px; border:1px solid #3a3420; border-radius:8px; background:#1a1710; font:500 11px "JetBrains Mono",monospace; line-height:1.5; letter-spacing:.02em; color:#d8bf7a; }
 .kicker-pick { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
 .kicker-pick .card-heading { margin-bottom:10px; }
 th.sortable { cursor:pointer; user-select:none; }

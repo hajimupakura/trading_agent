@@ -394,8 +394,9 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
               <div className="invalidation"><strong>INVALIDATION</strong><span>{signal?.invalidation ?? "No trade is active"}</span></div>
             </article>
 
-            <article className="contract-card">
+            <article className={`contract-card ${signal?.contract && !signal.action.startsWith("enter_") ? "instrument-only" : ""}`}>
               <div className="card-heading"><span>BEST EXECUTABLE CONTRACT</span><span className="price-cap">ASK ≤ ${underlying === "SPX" ? "80.00" : "8.00"}</span></div>
+              {signal?.contract && !signal.action.startsWith("enter_") ? <div className="instrument-note">INSTRUMENT ONLY — the rule engine says stand aside. This is the best-ranked contract if you have your own thesis, not a recommendation to trade.</div> : null}
               {signal?.contract ? <><ContractSpotlight contract={signal.contract} />
                 <button className="approve-button" disabled={underlying !== "SPY" || !signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{underlying === "SPX" ? "SPX analysis only" : underlying !== "SPY" ? "Monitor only" : signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
               </> : (
