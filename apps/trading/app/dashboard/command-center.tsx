@@ -212,6 +212,18 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const market = data?.market;
   const technicals = market?.technicals;
   const eligible = data?.contracts.filter((contract) => contract.eligible) ?? [];
+  // CONVEX KICKER pick (mirrors the paper lane's second leg): the highest-delta
+  // eligible contract at ask <= $2 — same side/expiry as the live signal pick when
+  // one exists, else from the nearest expiry (both sides) as a standing read.
+  const kicker = useMemo(() => {
+    const primary = data?.signal?.contract ?? null;
+    const pool = eligible.filter(contract => contract.ask > 0 && contract.ask <= 2 && contract.ticker !== primary?.ticker);
+    const scoped = primary
+      ? pool.filter(contract => contract.side === primary.side && contract.expirationDate === primary.expirationDate)
+      : pool.filter(contract => contract.dte === Math.min(...pool.map(candidate => candidate.dte)));
+    return scoped.sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0] ?? null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
   const [horizonLo, horizonHi] = horizonRange(selectedHorizon);
   const query = contractQuery.trim().toLowerCase();
   const selectedContracts = (data?.contracts.filter(contract => contract.dte >= horizonLo && contract.dte <= horizonHi) ?? [])
@@ -341,12 +353,20 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             </article>
 
             <article className="contract-card">
-              <div className="card-heading"><span>BEST EXECUTABLE CONTRACT</span><span className="price-cap">ASK ≤ $8.00</span></div>
+              <div className="card-heading"><span>BEST EXECUTABLE CONTRACT</span><span className="price-cap">ASK ≤ ${underlying === "SPX" ? "80.00" : "8.00"}</span></div>
               {signal?.contract ? <><ContractSpotlight contract={signal.contract} />
                 <button className="approve-button" disabled={underlying !== "SPY" || !signal.action.startsWith("enter_") || !paper?.configured || submitting} onClick={() => { setOrderMessage(null); setApprovalOpen(true); }}><Send size={14}/>{underlying === "SPX" ? "SPX analysis only" : underlying !== "SPY" ? "Monitor only" : signal.action.startsWith("enter_") ? "Review paper order" : "Waiting for entry signal"}</button>
               </> : (
                 <div className="empty-contract"><Clock3 size={26} /><strong>No contract selected</strong><span>The scanner is waiting for directional confirmation and executable liquidity.</span></div>
               )}
+              {kicker ? <div className="kicker-pick">
+                <div className="card-heading"><span>CONVEX KICKER</span><span className="price-cap">ASK ≤ $2.00</span></div>
+                <div className="kicker-row">
+                  <strong>{kicker.ticker.replace("O:", "")}</strong>
+                  <span>{kicker.side.toUpperCase()} · {kicker.expirationDate} · {kicker.strike.toLocaleString()} strike</span>
+                  <span>${kicker.bid.toFixed(2)} bid / ${kicker.ask.toFixed(2)} ask · ~${(kicker.ask * 100).toFixed(0)}/contract{kicker.delta != null ? ` · Δ ${Math.abs(kicker.delta).toFixed(2)}` : ""}</span>
+                </div>
+              </div> : null}
             </article>
           </section>
 
