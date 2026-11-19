@@ -50,7 +50,7 @@ interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";tit
 interface AlertState{alerts:AlertItem[];unread:number}
 
 export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
-  const [underlying, setUnderlying] = useState<Underlying>("SPY");
+  const [underlying, setUnderlying] = useState<Underlying>("SPX");
   const [data, setData] = useState<CommandCenter | null>(null);
   const [loading, setLoading] = useState(true);
   const [requestError, setRequestError] = useState<string | null>(null);
