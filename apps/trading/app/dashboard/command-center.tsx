@@ -60,6 +60,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [robinhood,setRobinhood]=useState<RobinhoodState|null>(null);
   const [alerts,setAlerts]=useState<AlertState>({alerts:[],unread:0});
   const [alertsOpen,setAlertsOpen]=useState(false);
+  const [leaderboardSort,setLeaderboardSort]=useState<"rank"|"volume">("rank");
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [orderMessage, setOrderMessage] = useState<{ tone:"success"|"error"; text:string } | null>(null);
@@ -232,7 +233,8 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [horizonLo, horizonHi] = horizonRange(selectedHorizon);
   const query = contractQuery.trim().toLowerCase();
   const selectedContracts = (data?.contracts.filter(contract => contract.dte >= horizonLo && contract.dte <= horizonHi) ?? [])
-    .filter(contract => !query || `${contract.ticker} ${contract.strike} ${contract.side} ${contract.expirationDate}`.toLowerCase().includes(query));
+    .filter(contract => !query || `${contract.ticker} ${contract.strike} ${contract.side} ${contract.expirationDate}`.toLowerCase().includes(query))
+    .sort((a, b) => leaderboardSort === "volume" ? b.volume - a.volume : 0); // "rank" keeps snapshot (ranked) order
   const actionTone = signal?.action === "enter_call" ? "call" : signal?.action === "enter_put" ? "put" : "wait";
   const actionLabel = signal?.action === "enter_call" ? "CALL SETUP" : signal?.action === "enter_put" ? "PUT SETUP" : "STAND ASIDE";
   const actionDescription = signal?.action === "enter_call"
@@ -396,7 +398,15 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             <div className="section-heading table-heading"><div><span>LIQUIDITY LEADERBOARD</span><strong>HIGHEST-RANKED {horizonLabel(selectedHorizon)} CONTRACTS</strong></div><div className="table-tools"><input className="contract-search" placeholder="Search strike, C/P, expiry…" value={contractQuery} onChange={event => setContractQuery(event.target.value)} aria-label="Search contracts"/><p>Click a row to inspect &amp; trade</p></div></div>
             <div className="dte-tabs" role="tablist" aria-label="Filter contracts by expiration horizon">{horizonTabs.map(tab => { const [lo,hi] = horizonRange(tab); const count = data?.contracts.filter(contract => contract.dte >= lo && contract.dte <= hi).length ?? 0; return <button key={String(tab)} role="tab" aria-selected={selectedHorizon === tab} className={selectedHorizon === tab ? "selected":""} onClick={()=>setSelectedHorizon(tab)}>{horizonLabel(tab)} <span>{count}</span></button>; })}</div>
             <div className="table-wrap"><table>
-              <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
+              <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => {
+                const sortKey = label === "Rank" ? "rank" as const : label === "Volume" ? "volume" as const : null;
+                return <th key={label}
+                  className={sortKey ? `sortable ${leaderboardSort === sortKey ? "sorted" : ""}` : undefined}
+                  onClick={sortKey ? () => setLeaderboardSort(sortKey) : undefined}
+                  title={sortKey ? `Sort by ${label.toLowerCase()}` : undefined}>
+                  {label}{sortKey && leaderboardSort === sortKey ? " ▼" : ""}
+                </th>;
+              })}</tr></thead>
               <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} onSelect={inspect} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts {query ? "match the search" : "returned in this scan"}.{!query && typeof selectedHorizon === "number" && selectedHorizon > 0 ? " Numeric tabs are sessions ahead (on Fridays, 1DTE = Monday); this session hasn't been returned by the scan yet." : ""}</td></tr>}</tbody>
             </table></div>
           </section>
