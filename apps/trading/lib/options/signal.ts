@@ -68,35 +68,37 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   // consolidation breakout with extension measured from the consolidation, not the range.
   if (!action.startsWith("enter") && options?.trendDayEnabled && market.bars.length >= 45 && technicals.atr14 != null && technicals.atr14 > 0) {
     const atr = technicals.atr14;
-    // SPX RESCALE (user call, 2026-11-19): the 1.5/0.65 ATR consolidation gates were
-    // calibrated on SPY's dollar-scale bars; on SPX's sampled point-scale tape they
-    // never once passed — replayed over every sampled SPX day (Aug 7-14 + 11/19),
-    // the path produced ZERO trades. At 3.0/1.5 ATR the same replay gives 5 trades,
-    // 3 wins, +66 SPX pts, losers cut to ~2.5 pts by the invalidation exit. SPY and
-    // single names keep the validated 1.5/0.65.
+    // SPX RESCALE, PUT SIDE ONLY (user call + 24-day replay, 2026-11-19): the SPY-
+    // calibrated 1.5/0.65 ATR consolidation gates never once passed on SPX's sampled
+    // point-scale tape — the path was structurally dead (0 trades ever). Replay over
+    // all 24 sampled SPX days: loosening BOTH sides scored +33.9 pts at 30% wins, but
+    // split by side the puts made +67 (6W/13, +5.6 even excluding 11/19's +59 monster)
+    // while loosened CALLS went 1-for-10 for -31 — the Aug-Sep grind-up only ever gave
+    // the call side chop fires. Downside legs are impulsive and fit consolidation-
+    // break structure; upside grind doesn't (gap-up mornings stay the opening drive's
+    // job). So: puts 3.0/1.5 ATR on SPX; calls keep 1.5/0.65 everywhere (on SPX that
+    // means effectively dormant, by evidence).
     const spxScale = market.symbol === "SPX";
     const last30 = market.bars.slice(-30);
     const consolidation = market.bars.slice(-10, -1);
     const consHigh = Math.max(...consolidation.map(bar => bar.close));
     const consLow = Math.min(...consolidation.map(bar => bar.close));
-    const tight = consHigh - consLow <= atr * (spxScale ? 3.0 : 1.5);
+    const tightCall = consHigh - consLow <= atr * 1.5;
+    const tightPut = consHigh - consLow <= atr * (spxScale ? 3.0 : 1.5);
     const current = market.bars.at(-1)!;
     const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && participationConfirmed;
     const persistentAbove = last30.every(bar => bar.close > market.openingRangeHigh) && current.close > market.referencePrice;
     const persistentBelow = last30.every(bar => bar.close < market.openingRangeLow) && current.close < market.referencePrice;
-    // SPX RSI bands also widened (calls 50-80 -> 50-85, puts 20-50 -> 15-50): a real
-    // trend day parks RSI near the extreme for hours — on 11/19's -110pt waterfall RSI
-    // sat in the mid-20s, and a 20 floor treats the strongest trends as "exhausted".
-    // The consolidation-then-break structure plus the break cap stay the anti-chase
-    // controls; the shadow ledger + paper record judge whether the widening holds.
-    const breakCap = atr * (spxScale ? 1.5 : .65);
-    const callTrend = persistentAbove && tight && momentumOk && technicals.macd! > technicals.macdSignal! && technicals.vwapSlope! > 0
-      && technicals.rsi14 != null && technicals.rsi14 >= 50 && technicals.rsi14 <= (spxScale ? 85 : 80)
-      && current.close > consHigh && current.close - consHigh <= breakCap
+    // SPX put RSI floor 20 -> 15: a real trend day parks RSI near the extreme for
+    // hours — on 11/19's -110pt waterfall RSI sat in the mid-20s, and a 20 floor
+    // treats the strongest trends as "exhausted". Calls keep the validated 50-80.
+    const callTrend = persistentAbove && tightCall && momentumOk && technicals.macd! > technicals.macdSignal! && technicals.vwapSlope! > 0
+      && technicals.rsi14 != null && technicals.rsi14 >= 50 && technicals.rsi14 <= 80
+      && current.close > consHigh && current.close - consHigh <= atr * .65
       && !["bearish_engulfing","shooting_star"].includes(technicals.candlePattern) && call;
-    const putTrend = persistentBelow && tight && momentumOk && technicals.macd! < technicals.macdSignal! && technicals.vwapSlope! < 0
+    const putTrend = persistentBelow && tightPut && momentumOk && technicals.macd! < technicals.macdSignal! && technicals.vwapSlope! < 0
       && technicals.rsi14 != null && technicals.rsi14 >= (spxScale ? 15 : 20) && technicals.rsi14 <= 50
-      && current.close < consLow && consLow - current.close <= breakCap
+      && current.close < consLow && consLow - current.close <= atr * (spxScale ? 1.5 : .65)
       && !["bullish_engulfing","hammer"].includes(technicals.candlePattern) && put;
     if (callTrend) {
       action = "enter_call"; contract = call; setupOverride = "trend_continuation";
