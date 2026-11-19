@@ -29,7 +29,12 @@ async function entriesToday(userId: string) {
 }
 
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
-  if (underlying === "SPX") return { entered: null };
+  // SPX-ONLY (user call, 2026-11-19): the desk trades one index now. Alpaca added
+  // index options this year, so the old "SPX excluded — no index options at Alpaca"
+  // rule inverted: SPX is the ONLY underlying the paper lane enters. Each qualifying
+  // signal takes a PAIR: the near-the-money quality pick (risk-sized) plus one cheap
+  // away-from-the-money contract under $200 — the convex kicker (DKNG lesson).
+  if (underlying !== "SPX") return { entered: null, skipped: "paper lane is SPX-only" };
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
@@ -88,5 +93,30 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
     risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES }, broker_response: order,
   });
   if (journalError) console.error("auto entry journal failed", journalError);
+  // CONVEX KICKER (user call, 2026-11-19): alongside the quality contract, one cheap
+  // away-from-the-money contract under $200 — highest-delta eligible strike at ask
+  // <= $2.00, same side and expiry. Its failure never voids the primary entry.
+  try {
+    const lottery = (snapshot?.contracts ?? [])
+      .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
+        && candidate.ticker !== contract.ticker && candidate.ask > 0 && candidate.ask <= 2)
+      .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0];
+    if (lottery) {
+      const lotteryLimit = Math.max(0.01, Number(lottery.midpoint.toFixed(2)));
+      const lotteryOrder = await submitPaperOptionOrder({ symbol: lottery.ticker, limitPrice: lotteryLimit, clientOrderId: `velocity-auto-lot-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48), quantity: 1 });
+      await admin.from("paper_trade_orders").insert({
+        user_id: owner.id, signal_id: signal.id, alpaca_order_id: lotteryOrder.id, client_order_id: lotteryOrder.client_order_id,
+        action: "buy_to_open", underlying, contract_ticker: lottery.ticker,
+        quantity: 1, order_type: "limit", limit_price: lotteryLimit, max_debit: lotteryLimit * 100, status: lotteryOrder.status,
+        risk_snapshot: { autonomous: true, strategy: `${signal.setup}-kicker`, pairedWith: contract.ticker }, broker_response: lotteryOrder,
+      }).then(({ error }) => { if (error) console.error("kicker journal failed", error.message); });
+      await createAlert({
+        userId: owner.id, signalId: signal.id, eventKey: `paper-entry-kicker-${lotteryOrder.id}`, severity: "info",
+        title: `Convex kicker: 1 × ${lottery.ticker.replace("O:", "")} at $${lotteryLimit.toFixed(2)}`,
+        body: `Paired with the ${contract.ticker.replace("O:", "")} entry — about $${(lotteryLimit * 100).toFixed(0)} at risk, the ticket IS the stop. If the drive runs, this is the convexity.`,
+        metadata: { kind: "auto_entry_kicker", contractTicker: lottery.ticker, pairedWith: contract.ticker },
+      }).catch(() => undefined);
+    }
+  } catch (kickerError) { console.error("convex kicker failed", kickerError instanceof Error ? kickerError.message : kickerError); }
   return { entered: contract.ticker };
 }

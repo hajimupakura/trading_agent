@@ -48,6 +48,9 @@ export async function GET(request: Request) {
   // entry candidates like any rotation refresh.
   const fastHits = await runFastTriggers([...watchGroup]).catch(error => { console.error("fast triggers failed", error); return []; });
   const autoCandidates: Array<{ underlying: string; snapshot: CommandCenter | null }> = [
+    // SPX first and alone in practice — the paper lane is SPX-only (2026-11-19);
+    // the rest stay listed so their skips remain visible in the cycle result.
+    { underlying: "SPX", snapshot: results[1]?.status === "fulfilled" ? (results[1].value as CommandCenter) : null },
     { underlying: "SPY", snapshot: results[0]?.status === "fulfilled" ? (results[0].value as CommandCenter) : null },
     ...watchGroup.map((symbol, index) => { const result = results[index + 2]; return { underlying: symbol, snapshot: result?.status === "fulfilled" ? (result.value as CommandCenter) : null }; }),
     ...fastHits,

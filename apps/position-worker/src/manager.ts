@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { EXIT_RULES, dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
-import { cancelOrder, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
+import { cancelOrder, getLatestOptionQuote, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
 import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
 import { RobinhoodExitManager } from "./robinhood.js";
@@ -75,7 +75,8 @@ export class PositionManager {
   private async manageEntryOrder(order:AlpacaOrder) {
     const ticker = `O:${order.symbol}`; const now = Date.now();
     const root = order.symbol.replace(/\d{6}[CP]\d{8}$/,"");
-    const quote = fresh(this.quotes.get(ticker),now) ?? await getSnapshotQuote(root === "SPXW" ? "SPX" : root, ticker);
+    // Ladder (2026-11-19, Massive retired): dead WS -> Alpaca REST (fresh, SPXW included) -> minute-stale snapshot.
+    const quote = fresh(this.quotes.get(ticker),now) ?? await getLatestOptionQuote(ticker) ?? await getSnapshotQuote(root === "SPXW" ? "SPX" : root, ticker);
     if (!quote || now - quote.timestamp > 30_000) return; // no fresh quote — try again next cycle
     // Age from the journal's original submission time: an Alpaca replace creates a new
     // broker order with a reset created_at, which would otherwise restart the clock.
@@ -114,7 +115,11 @@ export class PositionManager {
     const root = position.alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"");
     const underlying = root === "SPXW" ? "SPX" : root;
     const underlyingPrice = underlying === "SPX" ? spxPrice : underlying === "SPY" ? spyPrice : null;
-    const quote = fresh(this.quotes.get(position.ticker),now) ?? await getSnapshotQuote(underlying,position.ticker);
+    // Ladder (2026-11-19, Massive retired): the WS yields nothing now, and snapshot quotes
+    // are ~60-90s old — older than the 30s gate below, which would have flagged EVERY
+    // paper position "quote stale". Alpaca's REST quote (works for SPXW index contracts
+    // since this year) is the live source.
+    const quote = fresh(this.quotes.get(position.ticker),now) ?? await getLatestOptionQuote(position.ticker) ?? await getSnapshotQuote(underlying,position.ticker);
     if (!quote || now - quote.timestamp > 30_000) {
       const misses = (this.quoteMisses.get(position.ticker) ?? 0) + 1;
       this.quoteMisses.set(position.ticker, misses);
