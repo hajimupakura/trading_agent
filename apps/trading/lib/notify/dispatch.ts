@@ -18,7 +18,13 @@ const STALE_MS = 6 * 3_600_000;
 export function isInstantAlert(row: { severity: string; event_key: string }): boolean {
   return ["success", "critical"].includes(row.severity)
     || String(row.event_key).startsWith("radar-")
-    || String(row.event_key).startsWith("ai-");
+    || String(row.event_key).startsWith("ai-")
+    // Time-sensitive by construction (2026-11-19): an overnight ignition at 2 AM,
+    // the 9:25 Morning Card, or a 5-minute-latency volume-ignition alert is
+    // worthless after a 30-minute digest sweep.
+    || String(row.event_key).startsWith("overnight-")
+    || String(row.event_key).startsWith("spx-morning-card-")
+    || String(row.event_key).startsWith("setup-watch-");
 }
 
 const ICON: Record<string, string> = { info: "ℹ️", success: "✅", warning: "⚠️", critical: "🚨" };
@@ -39,7 +45,7 @@ export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPen
   const { data: pending, error } = await admin.from("alerts")
     .select("id,event_key,severity,title,body,created_at")
     .is("notified_at", null)
-    .or("severity.in.(success,critical),event_key.like.radar-%,event_key.like.ai-%")
+    .or("severity.in.(success,critical),event_key.like.radar-%,event_key.like.ai-%,event_key.like.overnight-%,event_key.like.spx-morning-card-%,event_key.like.setup-watch-%")
     .order("created_at", { ascending: true })
     .limit(25);
   if (error) throw new Error(`Alert dispatch query failed: ${error.message}`);
