@@ -51,6 +51,14 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
       // structurally rejecting the whole chain (the SNDK ask-ceiling failure mode).
       const eligible = (snap.payload?.contracts ?? []).filter(contract => contract.eligible).length;
       if ((snap.payload?.contracts ?? []).length >= 50 && eligible === 0) problems.push("0 of " + (snap.payload?.contracts ?? []).length + " contracts pass the entry screen — a filter may be structurally rejecting the whole chain");
+      // An EMPTY chain is worse than an all-rejected one and slipped the net above for
+      // two months (2026-09-11: Massive key 403'd; chains came back empty everywhere;
+      // zero signals until 11-19 with no alarm). No contracts in-session = provider down.
+      if ((snap.payload?.contracts ?? []).length === 0) problems.push("option chain is EMPTY — the data provider returned no contracts; the signal engine has nothing to trade");
+      // Provider auth failures sit in payload.errors as text; surface them as the
+      // single root cause they usually are instead of per-symbol mystery symptoms.
+      const providerErrors = (snap.payload?.errors ?? []).filter(message => /403|401|unauthorized|forbidden|entitlement/i.test(String(message)));
+      if (providerErrors.length) problems.push(`data provider is rejecting our access (${String(providerErrors[0]).slice(0, 80)}) — check the Massive subscription/key`);
       // Snapshot staleness beyond the rotation cadence means the refresh loop is sick.
       if (Date.now() - snap.updatedAt > 15 * 60_000) problems.push("snapshot is " + Math.round((Date.now() - snap.updatedAt) / 60_000) + " minutes stale");
       for (const problem of problems) {

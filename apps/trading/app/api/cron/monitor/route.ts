@@ -19,6 +19,7 @@ import { runAutoEntry } from "@/lib/alpaca/auto-entry";
 import { runPaperTicketQueue } from "@/lib/alpaca/ticket-queue";
 import { runPaperEquitySnapshot } from "@/lib/alpaca/equity-snapshot";
 import { runSetupWatches } from "@/lib/options/setup-watch";
+import { runSpxMorningCard } from "@/lib/options/morning-card";
 import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -104,6 +105,10 @@ export async function GET(request: Request) {
   // volume ignition) — arm at 9:35, scan every 5 min 9:35-15:50, grade post-close. Trades nothing.
   const setupWatches = await runSetupWatches().catch(error => { console.error("setup watches failed", error); return { armed:[] as string[], ignited:[] as string[], graded:[] as string[] }; });
   void setupWatches;
+  // SPX Morning Card: one ~9:25 alert with the measured daily checklist (gap read,
+  // drive triggers, levels, econ flags, qualify/stand-down verdict). Trades nothing.
+  const morningCard = await runSpxMorningCard().catch(error => { console.error("morning card failed", error); return { sent:false }; });
+  void morningCard;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
   // Blind-spot detectors: in-session data invariants (null priorDay, banned chains,
