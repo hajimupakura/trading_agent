@@ -47,7 +47,8 @@ interface ManagerState { online:boolean; control?:{auto_exits_enabled:boolean;ki
   rh?:{ portfolio:{totalValue?:number;cash?:number;buyingPower?:number;optionsValue?:number}|null; portfolioAt:string|null; openPositions:Array<{ticker:string;entry:number;bid:number;exitMode:string}>; tradesToday:number; autonomy:boolean; maxTradesPerDay:number; maxTradeDebit:number } }
 interface RobinhoodState {connected:boolean;executionReady?:boolean;error?:string}
 interface AlertItem{id:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;read_at:string|null;created_at:string}
-interface AlertState{alerts:AlertItem[];unread:number}
+interface MorningCard{severity:string;title:string;body:string;created_at:string}
+interface AlertState{alerts:AlertItem[];unread:number;morningCard?:MorningCard|null}
 
 export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   const [underlying, setUnderlying] = useState<Underlying>("SPX");
@@ -252,6 +253,12 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
           </div>
           <div className="topbar-actions"><div className="market-status"><span className="live-dot" /> LIVE DATA <b>{updated}</b></div><div className="alert-menu"><button className={`alert-button ${alerts.unread?"has-alerts":""}`} onClick={()=>setAlertsOpen(open=>!open)} title="Trading alerts"><Bell size={15}/>{alerts.unread?<b>{alerts.unread}</b>:null}</button>{alertsOpen?<div className="alert-popover"><div className="alert-popover-head"><strong>TRADING ALERTS</strong><span style={{display:"inline-flex",gap:10,alignItems:"center"}}>{alerts.unread?<button onClick={()=>void markAlertsRead()}><Check size={12}/> Mark all read</button>:null}<button onClick={()=>setAlertsOpen(false)} title="Close" aria-label="Close alerts" style={{fontSize:14,lineHeight:1}}>✕</button></span></div>{alerts.alerts.length?<div className="alert-list">{alerts.alerts.slice(0,8).map(alert=><button key={alert.id} className={`${alert.severity} ${alert.read_at?"read":""}`} onClick={()=>!alert.read_at&&void markAlertsRead(alert.id)}><i>{alert.severity==="critical"?<AlertTriangle size={13}/>:<Bell size={12}/>}</i><span><strong>{alert.title}</strong><small>{alert.body}</small><em>{new Date(alert.created_at).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</em></span></button>)}</div>:<p>No trading alerts yet.</p>}</div>:null}</div><form action={logout}><button className="logout-button" title={`Sign out${userEmail ? ` ${userEmail}` : ""}`}><LogOut size={14}/> Sign out</button></form></div>
         </header>
+
+        {alerts.morningCard ? <section className={`morning-card-strip ${alerts.morningCard.severity === "warning" ? "qualifies" : "stand-down"}`}>
+          <strong>{alerts.morningCard.title}</strong>
+          <p>{alerts.morningCard.body}</p>
+          <em>{new Date(alerts.morningCard.created_at).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} ET</em>
+        </section> : null}
 
         <main className="dashboard">
           <section className="control-strip">
