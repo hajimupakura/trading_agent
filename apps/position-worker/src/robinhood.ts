@@ -139,7 +139,10 @@ export class RobinhoodExitManager {
     // contracts, <=60s) -> minutes-stale chain snapshot as last resort. The snapshot
     // path alone let a TSLA put spike +55% invisibly on 8/14 (peaks & the 10-minute
     // follow-through test are only as good as the freshest quote the worker sees).
-    const restQuote = position.chainSymbol === "SPXW" ? null : await getLatestOptionQuote(position.occTicker);
+    // 2026-11-19: Alpaca added index options this year, so SPXW contracts now get
+    // live REST quotes like everything else (they were excluded when Alpaca had no
+    // index coverage — which left real SPX positions guarded by stale chain prices).
+    const restQuote = await getLatestOptionQuote(position.occTicker);
     const restFresh = restQuote && now - restQuote.timestamp <= 60_000 ? restQuote : null;
     const quote = fresh(quotes.get(position.occTicker), now) ?? restFresh ?? await getSnapshotQuote(snapshotUnderlying(position.chainSymbol), position.occTicker);
     if (!quote || now - quote.timestamp > 30_000) {
