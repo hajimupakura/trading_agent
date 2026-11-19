@@ -20,6 +20,7 @@ import { runPaperTicketQueue } from "@/lib/alpaca/ticket-queue";
 import { runPaperEquitySnapshot } from "@/lib/alpaca/equity-snapshot";
 import { runSetupWatches } from "@/lib/options/setup-watch";
 import { runSpxMorningCard } from "@/lib/options/morning-card";
+import { runOvernightWatch } from "@/lib/options/overnight-watch";
 import { runFastTriggers } from "@/lib/options/fast-triggers";
 import { runRobinhoodAutoEntry } from "@/lib/brokers/robinhood-auto-entry";
 import type { CommandCenter } from "@/lib/options/types";
@@ -112,6 +113,11 @@ export async function GET(request: Request) {
   // drive triggers, levels, econ flags, qualify/stand-down verdict). Trades nothing.
   const morningCard = await runSpxMorningCard().catch(error => { console.error("morning card failed", error); return { sent:false }; });
   void morningCard;
+  // Overnight SPX watch (Cboe GTH, 8:15 PM-9:25 AM): ES-futures sampling + alerts
+  // (gap thresholds, ignition, open/early reads). Watch-only — overnight execution
+  // is the user's hand on Robinhood; Alpaca can't trade index options off-hours.
+  const overnight = await runOvernightWatch().catch(error => { console.error("overnight watch failed", error); return { active:false, fired:[] as string[] }; });
+  void overnight;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
   // Blind-spot detectors: in-session data invariants (null priorDay, banned chains,
