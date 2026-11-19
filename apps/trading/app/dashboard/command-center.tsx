@@ -370,7 +370,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
                 <div className="kicker-row">
                   <strong>{kicker.ticker.replace("O:", "")}</strong>
                   <span>{kicker.side.toUpperCase()} · {kicker.expirationDate} · {kicker.strike.toLocaleString()} strike</span>
-                  <span>${kicker.bid.toFixed(2)} bid / ${kicker.ask.toFixed(2)} ask · ~${(kicker.ask * 100).toFixed(0)}/contract{kicker.delta != null ? ` · Δ ${Math.abs(kicker.delta).toFixed(2)}` : ""}</span>
+                  <span>${kicker.bid.toFixed(2)} bid / ${kicker.ask.toFixed(2)} ask · ~${(kicker.ask * 100).toFixed(0)}/contract{kicker.delta != null ? ` · Δ ${Math.abs(kicker.delta) < 0.005 ? "<0.01" : Math.abs(kicker.delta).toFixed(2)}` : ""}</span>
                 </div>
               </div> : null}
             </article>
