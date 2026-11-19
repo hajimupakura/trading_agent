@@ -10,7 +10,8 @@ import type { RiskSettings } from "@/lib/settings/config";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 
 export async function refreshCommandCenter(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS,options?:{includeLongHorizons?:boolean}): Promise<CommandCenter> {
-  if (!process.env.MASSIVE_API_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["MASSIVE_API_KEY is not configured"] };
+  // Chains ride Alpaca now (2026-11-19); the Massive key is no longer load-bearing.
+  if (!process.env.ALPACA_API_KEY_ID || !process.env.ALPACA_API_SECRET_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["Alpaca market-data keys are not configured"] };
   if((settings.allowedUnderlyings as readonly string[]).includes(underlying)===false&&(["SPY","SPX"] as readonly string[]).includes(underlying))return {configured:true,asOf:Date.now(),market:null,spotPrice:null,contracts:[],signal:null,errors:[`${underlying} is disabled in risk settings`]};
   // SPX: fetch the chain first and record a spot sample so the market state
   // (which may be built from chain-sampled bars) includes the current minute.
@@ -41,7 +42,19 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   // Cap per expiration session actually present — on Fridays the short chain carries
   // Fri/Mon/Tue as dte 0/3/4, not 0/1/2 (weekends have no expirations).
   const shortDtes = [...new Set(contracts.map(contract => contract.dte))].sort((a, b) => a - b).slice(0, 3);
-  const contractsByDte = shortDtes.flatMap(dte => contracts.filter(contract => contract.dte === dte).slice(0,40));
+  const contractsByDte = shortDtes.flatMap(dte => {
+    const bucket = contracts.filter(contract => contract.dte === dte);
+    const ranked = bucket.slice(0, 40);
+    // CONVEX-KICKER QUOTA (2026-11-19): ranking favors near-the-money liquidity, so
+    // the <= $2 wings never survived the top-40 cut and the kicker pool (dashboard
+    // box + the paper pair's second leg) was EMPTY. Keep the best cheap wings —
+    // two-sided market and real volume, highest delta first — alongside the ranked set.
+    const kept = new Set(ranked.map(contract => contract.ticker));
+    const cheapWings = bucket
+      .filter(contract => !kept.has(contract.ticker) && contract.ask > 0 && contract.ask <= 2 && contract.bid > 0 && contract.volume >= 50)
+      .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0)).slice(0, 12);
+    return [...ranked, ...cheapWings];
+  });
   const admin = createAdminClient();
   // Long-dated (3M/6M/9M/1Y) monitoring contracts: fetched only when the cron asks
   // (every ~15 minutes); otherwise carried over from the previous snapshot. They are

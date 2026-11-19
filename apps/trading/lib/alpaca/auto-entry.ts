@@ -97,9 +97,13 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
   // away-from-the-money contract under $200 — highest-delta eligible strike at ask
   // <= $2.00, same side and expiry. Its failure never voids the primary entry.
   try {
+    // NOT gated on `eligible`: the quality screens (10% spread cap especially) are
+    // built for the primary leg and structurally reject every sub-$2 contract — a
+    // $0.10 spread on a $0.60 option is 17%. The kicker's screen is a two-sided
+    // market with real volume; the ticket price caps the risk.
     const lottery = (snapshot?.contracts ?? [])
-      .filter(candidate => candidate.eligible && candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
-        && candidate.ticker !== contract.ticker && candidate.ask > 0 && candidate.ask <= 2)
+      .filter(candidate => candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
+        && candidate.ticker !== contract.ticker && candidate.ask > 0 && candidate.ask <= 2 && candidate.bid > 0 && candidate.volume >= 50)
       .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0];
     if (lottery) {
       const lotteryLimit = Math.max(0.01, Number(lottery.midpoint.toFixed(2)));

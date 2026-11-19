@@ -217,7 +217,9 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   // one exists, else from the nearest expiry (both sides) as a standing read.
   const kicker = useMemo(() => {
     const primary = data?.signal?.contract ?? null;
-    const pool = eligible.filter(contract => contract.ask > 0 && contract.ask <= 2 && contract.ticker !== primary?.ticker);
+    // Not from `eligible`: the quality screens structurally reject sub-$2 contracts
+    // (spread-percent math); the kicker needs a two-sided market and volume, no more.
+    const pool = (data?.contracts ?? []).filter(contract => contract.ask > 0 && contract.ask <= 2 && contract.bid > 0 && contract.volume >= 50 && contract.ticker !== primary?.ticker);
     const scoped = primary
       ? pool.filter(contract => contract.side === primary.side && contract.expirationDate === primary.expirationDate)
       : pool.filter(contract => contract.dte === Math.min(...pool.map(candidate => candidate.dte)));
