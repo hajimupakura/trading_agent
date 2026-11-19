@@ -220,11 +220,10 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
     // Not from `eligible`: the quality screens structurally reject sub-$2 contracts
     // (spread-percent math); the kicker needs a two-sided market and volume, no more.
     const pool = (data?.contracts ?? []).filter(contract => contract.ask > 0 && contract.ask <= 2 && contract.bid > 0 && contract.volume >= 50 && contract.ticker !== primary?.ticker);
-    // Side-match only when a real ENTRY signal is live; in stand-aside the primary
-    // is just the delta-nearest monitor pick and its side is noise — show the best
-    // wing on the board from the nearest expiry instead of hiding the box.
-    const live = data?.signal?.action?.startsWith("enter") ?? false;
-    const scoped = live && primary
+    // ALWAYS mirror the primary's side and expiry (the wing quota keeps both sides
+    // stocked): a put primary with a call kicker read as two conflicting opinions
+    // when neither box is directional in stand-aside. One pair, one side, always.
+    const scoped = primary
       ? pool.filter(contract => contract.side === primary.side && contract.expirationDate === primary.expirationDate)
       : pool.length ? pool.filter(contract => contract.dte === Math.min(...pool.map(candidate => candidate.dte))) : [];
     return scoped.sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0] ?? null;
@@ -367,11 +366,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
               )}
               {kicker ? <div className="kicker-pick">
                 <div className="card-heading"><span>CONVEX KICKER</span><span className="price-cap">ASK ≤ $2.00</span></div>
-                <div className="kicker-row">
-                  <strong>{kicker.ticker.replace("O:", "")}</strong>
-                  <span>{kicker.side.toUpperCase()} · {kicker.expirationDate} · {kicker.strike.toLocaleString()} strike</span>
-                  <span>${kicker.bid.toFixed(2)} bid / ${kicker.ask.toFixed(2)} ask · ~${(kicker.ask * 100).toFixed(0)}/contract{kicker.delta != null ? ` · Δ ${Math.abs(kicker.delta) < 0.005 ? "<0.01" : Math.abs(kicker.delta).toFixed(2)}` : ""}</span>
-                </div>
+                <ContractSpotlight contract={kicker} />
               </div> : null}
             </article>
           </section>
