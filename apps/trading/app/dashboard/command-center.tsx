@@ -444,7 +444,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
             </div>
             <div className="dte-tabs" role="tablist" aria-label="Filter contracts by expiration horizon">{horizonTabs.map(tab => { const [lo,hi] = horizonRange(tab); const count = data?.contracts.filter(contract => contract.dte >= lo && contract.dte <= hi).length ?? 0; return <button key={String(tab)} role="tab" aria-selected={selectedHorizon === tab} className={selectedHorizon === tab ? "selected":""} onClick={()=>setSelectedHorizon(tab)}>{horizonLabel(tab)} <span>{count}</span></button>; })}</div>
             <div className="table-wrap"><table>
-              <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "Vol / OI", "Delta", "IV"].map((label) => {
+              <thead><tr>{["Rank", "Contract", "DTE", "Type", "Strike", "Bid / Ask", "Max debit", "Spread", "Volume", "OI", "Vol / OI", "Delta", "IV"].map((label) => {
                 const sortKey = label === "Rank" ? "rank" as const : label === "Volume" ? "volume" as const : null;
                 return <th key={label}
                   className={sortKey ? `sortable ${leaderboardSort === sortKey ? "sorted" : ""}` : undefined}
@@ -453,7 +453,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
                   {label}{sortKey && leaderboardSort === sortKey ? " ▼" : ""}
                 </th>;
               })}</tr></thead>
-              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} onSelect={inspect} />) : <tr><td className="empty-dte" colSpan={12}>No {horizonLabel(selectedHorizon)} contracts {query ? "match the search" : "returned in this scan"}.{!query && typeof selectedHorizon === "number" && selectedHorizon > 0 ? " Numeric tabs are sessions ahead (on Fridays, 1DTE = Monday); this session hasn't been returned by the scan yet." : ""}</td></tr>}</tbody>
+              <tbody>{selectedContracts.length ? selectedContracts.map((contract, index) => <ContractRow key={contract.ticker} contract={contract} rank={index + 1} onSelect={inspect} />) : <tr><td className="empty-dte" colSpan={13}>No {horizonLabel(selectedHorizon)} contracts {query ? "match the search" : "returned in this scan"}.{!query && typeof selectedHorizon === "number" && selectedHorizon > 0 ? " Numeric tabs are sessions ahead (on Fridays, 1DTE = Monday); this session hasn't been returned by the scan yet." : ""}</td></tr>}</tbody>
             </table></div>
           </section>
 
@@ -543,5 +543,5 @@ function PriceChart({ bars, reference }: { bars: Bar[]; reference: number | null
 }
 
 function ContractRow({ contract, rank, onSelect }: { contract: Contract; rank: number; onSelect?: (contract: Contract) => void }) {
-  return <tr className={`${contract.eligible ? "" : "rejected"} clickable`} title={contract.rejectionReasons.length ? contract.rejectionReasons.join(", ") : "Click to inspect and trade"} onClick={() => onSelect?.(contract)}><td><span className="rank">{rank}</span></td><td className="mono contract-ticker">{contract.ticker}</td><td>{contract.dte}</td><td><span className={`side-pill ${contract.side}`}>{contract.side.toUpperCase()}</span></td><td>{money(contract.strike)}</td><td>{money(contract.bid)} / {money(contract.ask)}</td><td className="debit">${money(contract.ask * 100, 0)}</td><td>{money(contract.spreadPct, 1)}%</td><td>{contract.volume.toLocaleString()}</td><td>{money(contract.volumeToOpenInterest)}</td><td>{money(contract.delta)}</td><td>{contract.impliedVolatility == null ? "—" : `${money(contract.impliedVolatility * 100, 1)}%`}</td></tr>;
+  return <tr className={`${contract.eligible ? "" : "rejected"} clickable`} title={contract.rejectionReasons.length ? contract.rejectionReasons.join(", ") : "Click to inspect and trade"} onClick={() => onSelect?.(contract)}><td><span className="rank">{rank}</span></td><td className="mono contract-ticker">{contract.ticker}</td><td>{contract.dte}</td><td><span className={`side-pill ${contract.side}`}>{contract.side.toUpperCase()}</span></td><td>{money(contract.strike)}</td><td>{money(contract.bid)} / {money(contract.ask)}</td><td className="debit">${money(contract.ask * 100, 0)}</td><td>{money(contract.spreadPct, 1)}%</td><td>{contract.volume.toLocaleString()}</td><td>{contract.openInterest.toLocaleString()}</td><td>{money(contract.volumeToOpenInterest)}</td><td>{money(contract.delta)}</td><td>{contract.impliedVolatility == null ? "—" : `${money(contract.impliedVolatility * 100, 1)}%`}</td></tr>;
 }
