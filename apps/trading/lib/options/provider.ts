@@ -42,13 +42,22 @@ interface AlpacaOptionSnapshot {
 }
 async function alpacaChainRows(underlying: Underlying, expiration: string, dte: number): Promise<Parameters<typeof rankContracts>[0]> {
   const headers = alpacaKeys();
+  // The S&P 500 lists under TWO Cboe roots, and Alpaca addresses each as its own
+  // underlying symbol: "SPX" carries only the AM-settled third-Friday monthlies
+  // (which stop trading the evening BEFORE expiry), while "SPXW" carries the
+  // PM-settled daily/weekly book — the live 0DTE market. Querying SPX alone
+  // returned only monthlies, which looked fine while the 11/20 monthly was alive
+  // and blew up on 2026-11-20 itself (a third Friday): the nearest "0DTE" chain
+  // was a dead contract serving Thursday's closing quotes all session, and on any
+  // non-monthly week the short-dated chain would have been empty outright.
+  const roots = underlying === "SPX" ? ["SPX", "SPXW"] : [underlying];
   // Open interest enrichment (trading API). Failure never blocks the chain.
   const openInterestBySymbol = new Map<string, number>();
   try {
     let pageToken: string | undefined; let pages = 0;
     do {
       const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
-      url.searchParams.set("underlying_symbols", underlying); url.searchParams.set("expiration_date", expiration);
+      url.searchParams.set("underlying_symbols", roots.join(",")); url.searchParams.set("expiration_date", expiration);
       url.searchParams.set("limit", "1000");
       if (pageToken) url.searchParams.set("page_token", pageToken);
       const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
@@ -59,47 +68,60 @@ async function alpacaChainRows(underlying: Underlying, expiration: string, dte: 
     } while (pageToken && ++pages < 4);
   } catch { /* enrichment only */ }
   const rows: Parameters<typeof rankContracts>[0] = [];
-  let pageToken: string | undefined; let pages = 0;
-  do {
-    const url = new URL(`${ALPACA_BASE}/v1beta1/options/snapshots/${encodeURIComponent(underlying)}`);
-    // OPRA when the account is entitled (real greeks/IV), else the free indicative
-    // feed (greeks absent -> pseudo-deltas estimated below). Probed once per process.
-    url.searchParams.set("feed", opraAvailable === false ? "indicative" : "opra");
-    url.searchParams.set("limit", "1000");
-    url.searchParams.set("expiration_date", expiration);
-    if (pageToken) url.searchParams.set("page_token", pageToken);
-    let response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
-    if (!response.ok && opraAvailable == null && [400, 401, 403].includes(response.status)) {
-      opraAvailable = false;
-      url.searchParams.set("feed", "indicative");
-      response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
-    } else if (response.ok && opraAvailable == null) opraAvailable = true;
-    if (!response.ok) throw new Error(`Alpaca option chain ${response.status} for ${underlying} ${expiration}`);
-    const payload = await response.json() as { snapshots?: Record<string, AlpacaOptionSnapshot>; next_page_token?: string | null };
-    for (const [occ, snap] of Object.entries(payload.snapshots ?? {})) {
-      const match = OCC_RE.exec(occ);
-      if (!match) continue;
-      const side: Side = match[3] === "C" ? "call" : "put";
-      const strike = Number(match[4]) / 1000;
-      const bid = Number(snap.latestQuote?.bp ?? 0); const ask = Number(snap.latestQuote?.ap ?? 0);
-      const midpoint = bid && ask ? (bid + ask) / 2 : 0;
-      const volume = Number(snap.dailyBar?.v ?? 0);
-      const openInterest = openInterestBySymbol.get(occ) ?? 0;
-      rows.push({ ticker: `O:${occ}`, underlying, expirationDate: expiration, dte, side, strike,
-        exerciseStyle: underlying === "SPX" ? "european" : "american", bid, ask, midpoint,
-        spreadPct: midpoint ? (ask - bid) / midpoint * 100 : 999,
-        quoteUpdatedAt: snap.latestQuote?.t ? Date.parse(snap.latestQuote.t) : null,
-        volume, openInterest, volumeToOpenInterest: openInterest ? volume / openInterest : volume ? 5 : 0,
-        impliedVolatility: snap.impliedVolatility == null ? null : Number(snap.impliedVolatility),
-        delta: snap.greeks?.delta == null ? null : Number(snap.greeks.delta),
-        gamma: snap.greeks?.gamma == null ? null : Number(snap.greeks.gamma),
-        theta: snap.greeks?.theta == null ? null : Number(snap.greeks.theta),
-        // No per-contract underlying price on Alpaca; the SPX sampler derives spot
-        // from ATM put-call parity instead (spx-bars.deriveSpxSpot handles null).
-        underlyingPrice: null });
+  const rootErrors: string[] = [];
+  for (const root of roots) {
+    try {
+      let pageToken: string | undefined; let pages = 0;
+      do {
+        const url = new URL(`${ALPACA_BASE}/v1beta1/options/snapshots/${encodeURIComponent(root)}`);
+        // OPRA when the account is entitled (real greeks/IV), else the free indicative
+        // feed (greeks absent -> pseudo-deltas estimated below). Probed once per process.
+        url.searchParams.set("feed", opraAvailable === false ? "indicative" : "opra");
+        url.searchParams.set("limit", "1000");
+        url.searchParams.set("expiration_date", expiration);
+        if (pageToken) url.searchParams.set("page_token", pageToken);
+        let response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+        if (!response.ok && opraAvailable == null && [400, 401, 403].includes(response.status)) {
+          opraAvailable = false;
+          url.searchParams.set("feed", "indicative");
+          response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+        } else if (response.ok && opraAvailable == null) opraAvailable = true;
+        if (!response.ok) throw new Error(`Alpaca option chain ${response.status} for ${root} ${expiration}`);
+        const payload = await response.json() as { snapshots?: Record<string, AlpacaOptionSnapshot>; next_page_token?: string | null };
+        for (const [occ, snap] of Object.entries(payload.snapshots ?? {})) {
+          const match = OCC_RE.exec(occ);
+          if (!match) continue;
+          const side: Side = match[3] === "C" ? "call" : "put";
+          const strike = Number(match[4]) / 1000;
+          const bid = Number(snap.latestQuote?.bp ?? 0); const ask = Number(snap.latestQuote?.ap ?? 0);
+          const midpoint = bid && ask ? (bid + ask) / 2 : 0;
+          const volume = Number(snap.dailyBar?.v ?? 0);
+          const openInterest = openInterestBySymbol.get(occ) ?? 0;
+          rows.push({ ticker: `O:${occ}`, underlying, expirationDate: expiration, dte, side, strike,
+            exerciseStyle: underlying === "SPX" ? "european" : "american", bid, ask, midpoint,
+            spreadPct: midpoint ? (ask - bid) / midpoint * 100 : 999,
+            quoteUpdatedAt: snap.latestQuote?.t ? Date.parse(snap.latestQuote.t) : null,
+            volume, openInterest, volumeToOpenInterest: openInterest ? volume / openInterest : volume ? 5 : 0,
+            impliedVolatility: snap.impliedVolatility == null ? null : Number(snap.impliedVolatility),
+            delta: snap.greeks?.delta == null ? null : Number(snap.greeks.delta),
+            gamma: snap.greeks?.gamma == null ? null : Number(snap.greeks.gamma),
+            theta: snap.greeks?.theta == null ? null : Number(snap.greeks.theta),
+            // No per-contract underlying price on Alpaca; the SPX sampler derives spot
+            // from ATM put-call parity instead (spx-bars.deriveSpxSpot handles null).
+            underlyingPrice: null });
+        }
+        pageToken = payload.next_page_token ?? undefined;
+      } while (pageToken && ++pages < 4);
+    } catch (error) {
+      rootErrors.push(String(error));
     }
-    pageToken = payload.next_page_token ?? undefined;
-  } while (pageToken && ++pages < 4);
+  }
+  // All roots down = a real provider failure. One root down while the other answered
+  // is degraded — log it loudly rather than discarding the good root, but never
+  // swallow it silently: losing SPXW quietly would recreate the monthlies-only
+  // blindness this dual-root fetch exists to fix.
+  if (rootErrors.length && !rows.length) throw new Error(rootErrors.join(" · "));
+  for (const message of rootErrors) console.error("Option chain root fetch failed (continuing on remaining roots)", underlying, expiration, message);
   if (rows.length && rows.every(row => row.delta == null)) estimateDeltas(rows);
   return rows;
 }
@@ -333,7 +355,9 @@ export async function getHorizonChains(underlying: Underlying, horizons: Array<"
     const floor = targetDays === 0 ? today : addDays(today, Math.max(0, targetDays - Math.min(21, Math.round(targetDays / 3))));
     // Nearest listed expiry on/after the floor, via the trading API's contract listing.
     const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
-    url.searchParams.set("underlying_symbols", underlying); url.searchParams.set("expiration_date_gte", floor);
+    // SPX again spans both roots: without SPXW, the NEAR tenor can only resolve to a
+    // third-Friday monthly (see the root note on alpacaChainRows).
+    url.searchParams.set("underlying_symbols", underlying === "SPX" ? "SPX,SPXW" : underlying); url.searchParams.set("expiration_date_gte", floor);
     url.searchParams.set("limit", "200");
     const payload = await fetch(url, { headers: alpacaKeys(), cache: "no-store", signal: AbortSignal.timeout(12_000) })
       .then(response => response.ok ? response.json() as Promise<{ option_contracts?: Array<{ expiration_date?: string }> }> : null)

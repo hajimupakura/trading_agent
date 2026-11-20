@@ -2,8 +2,8 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Bar, Contract } from "./types";
 
-// SPX index bars self-assembled from the option chain the every-minute cron already fetches.
-// Used when the Massive entitlement lacks live index aggregates. Spot preference:
+// SPX index bars self-assembled from the option chain the every-minute cron already fetches
+// (no native SPX index feed on Alpaca). Spot preference:
 // snapshot underlying price, else ATM put-call parity (SPX ~= strike + call mid - put mid,
 // accurate for a cash-settled European index near expiry).
 
@@ -15,11 +15,18 @@ const etDate = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Ame
 const median = (values: number[]) => { const sorted = values.slice().sort((a, b) => a - b); return sorted[Math.floor(sorted.length / 2)]!; };
 
 export function deriveSpxSpot(contracts: Contract[]): { price: number; source: "underlying_asset" | "put_call_parity" } | null {
-  const direct = contracts.map(contract => contract.underlyingPrice).filter((price): price is number => price != null && Number.isFinite(price) && price > 0);
+  // FRESH QUOTES ONLY (2026-11-20): an expired-but-still-listed series keeps serving
+  // its final quotes — the AM-settled SPX monthly stopped trading Thursday evening,
+  // and parity over its frozen book produced the identical 7175.22 every minute of
+  // Friday: a flat bar series that looked healthy on every panel. No sample at all
+  // (the staleness alarm fires) beats a fabricated one.
+  const live = contracts.filter(contract => contract.quoteUpdatedAt != null && Date.now() - contract.quoteUpdatedAt < 10 * 60_000);
+  if (!live.length) return null;
+  const direct = live.map(contract => contract.underlyingPrice).filter((price): price is number => price != null && Number.isFinite(price) && price > 0);
   if (direct.length) return { price: median(direct), source: "underlying_asset" };
-  const nearest = Math.min(...contracts.map(contract => contract.dte));
+  const nearest = Math.min(...live.map(contract => contract.dte));
   const byStrike = new Map<number, { call?: number; put?: number }>();
-  for (const contract of contracts) {
+  for (const contract of live) {
     if (contract.dte !== nearest || contract.bid <= 0 || contract.ask <= 0) continue;
     const entry = byStrike.get(contract.strike) ?? {};
     entry[contract.side] = (contract.bid + contract.ask) / 2;

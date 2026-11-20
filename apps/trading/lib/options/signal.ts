@@ -126,7 +126,15 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   // (first-3-min extreme, VWAP side, volume). Single names need a real gap (>=1%);
   // earnings days stay excluded by the earnings guard. Window to 10:14, handing off to
   // the armed trend path.
-  if (!action.startsWith("enter") && market.bars.length >= 1 && market.bars.length <= 44 && market.priorDay) {
+  // bars.length <= 44 used to stand in for "9:31-10:14", which breaks whenever the bar
+  // series starts mid-day — e.g. 2026-11-20, when SPX bars resumed at ~12:40 after the
+  // frozen-chain outage and bar #1 would have re-armed the drive at lunch. Anchor the
+  // window to the bars' own clock (replay-safe — no wall time): the series must begin
+  // at the open and the current bar must still sit inside the drive window.
+  const etMinutesOf = (timestamp: number) => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(timestamp)); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); };
+  const seriesStartsAtOpen = market.bars.length >= 1 && etMinutesOf(market.bars[0]!.timestamp) <= 575; // first bar by 9:35
+  const insideDriveWindow = market.bars.length >= 1 && etMinutesOf(market.bars.at(-1)!.timestamp) <= 614; // through 10:14
+  if (!action.startsWith("enter") && seriesStartsAtOpen && insideDriveWindow && market.bars.length <= 44 && market.priorDay) {
     const dayOpen = market.bars[0]!.open;
     const current = market.bars.at(-1)!;
     const prior = market.priorDay!;

@@ -59,6 +59,16 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
       // single root cause they usually are instead of per-symbol mystery symptoms.
       const providerErrors = (snap.payload?.errors ?? []).filter(message => /403|401|unauthorized|forbidden|entitlement/i.test(String(message)));
       if (providerErrors.length) problems.push(`data provider is rejecting our access (${String(providerErrors[0]).slice(0, 80)}) — check the Alpaca market-data keys`);
+      // SPX has no native index feed — chart, indicators, and signal engine are all
+      // assembled from chain quotes, so a near-dated chain whose quotes have ALL
+      // stopped updating blinds everything at once while every panel still renders
+      // (2026-11-20: the third-Friday monthly expired overnight, the "0DTE" chain
+      // served Thursday's closing quotes all session, and the SPX read flatlined).
+      if (snap.underlying === "SPX") {
+        const near = (snap.payload?.contracts ?? []).filter(contract => contract.dte <= 2);
+        const freshestQuote = Math.max(0, ...near.map(contract => contract.quoteUpdatedAt ?? 0));
+        if (near.length >= 10 && Date.now() - freshestQuote > 15 * 60_000) problems.push("near-expiry SPX quotes are ALL stale — the chain is frozen (is the live SPXW book missing?) and the index read and signal engine are blind");
+      }
       // Snapshot staleness beyond the rotation cadence means the refresh loop is sick.
       if (Date.now() - snap.updatedAt > 15 * 60_000) problems.push("snapshot is " + Math.round((Date.now() - snap.updatedAt) / 60_000) + " minutes stale");
       for (const problem of problems) {
