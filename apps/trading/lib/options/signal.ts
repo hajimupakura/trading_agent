@@ -88,7 +88,13 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
     const current = market.bars.at(-1)!;
     const momentumOk = technicals.macd != null && technicals.macdSignal != null && technicals.vwapSlope != null && participationConfirmed;
     const persistentAbove = last30.every(bar => bar.close > market.openingRangeHigh) && current.close > market.referencePrice;
-    const persistentBelow = last30.every(bar => bar.close < market.openingRangeLow) && current.close < market.referencePrice;
+    // SPX put persistence tolerance (2026-11-20 replay over all 26 sampled days):
+    // all-30-below meant one bounce bar anywhere in a 30-minute hold reset the whole
+    // path. Allowing up to 2 closes back at/above the range low added one winner
+    // (+12.5 pts 08-20) and one small loser (-4.7 pts 08-18) for +81.5 vs +73.7 total.
+    // SPX puts only — calls and equities keep the strict all-30 rule.
+    const bounceBars = last30.filter(bar => bar.close >= market.openingRangeLow).length;
+    const persistentBelow = bounceBars <= (spxScale ? 2 : 0) && current.close < market.referencePrice;
     // SPX put RSI floor 20 -> 15: a real trend day parks RSI near the extreme for
     // hours — on 11/19's -110pt waterfall RSI sat in the mid-20s, and a 20 floor
     // treats the strongest trends as "exhausted". Calls keep the validated 50-80.

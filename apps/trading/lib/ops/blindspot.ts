@@ -91,7 +91,11 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
     const { data: todaysEntries } = await admin.from("paper_trade_orders").select("underlying").eq("action", "buy_to_open").gte("created_at", `${today}T00:00:00-04:00`);
     const { data: rhEntries } = await admin.from("rh_entry_orders").select("underlying").gte("created_at", `${today}T00:00:00-04:00`).neq("status", "rejected");
     const traded = new Set([...(todaysEntries ?? []).map(row => String(row.underlying)), ...(rhEntries ?? []).map(row => String(row.underlying))]);
-    for (const symbol of WATCH_UNDERLYINGS) {
+    // The traded indexes MUST be audited too: on 2026-11-20 SPX fell 3.9% with zero
+    // entries (the chain was frozen all morning) and this audit flagged all 13 equities
+    // while staying silent on the only two symbols the system actually trades, because
+    // the loop read the equity watch list. The human noticed; the auditor didn't.
+    for (const symbol of [...WATCH_UNDERLYINGS, "SPX", "SPY"]) {
       if (traded.has(symbol)) continue;
       const snap = snapshots.find(candidate => candidate.underlying === symbol);
       const market = snap?.payload?.market;
