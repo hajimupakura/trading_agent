@@ -20,7 +20,7 @@ import {
   Check,
   AlertTriangle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { Bar, CommandCenter, Contract, Underlying } from "@/lib/options/types";
 import { TRADE_UNDERLYINGS, WATCH_UNDERLYINGS } from "@/lib/options/types";
@@ -115,13 +115,33 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
     const payload=await response.json(); if(!response.ok){setOrderMessage({tone:"error",text:payload.error??"Control update failed"});return;} setManager(payload);
   },[]);
 
+  // Transient-failure shield (display only): the API answers 200 with contracts:[] when the
+  // upstream chain fetch hiccups (intermittent Alpaca 403s), which used to blank the whole
+  // screen for a poll cycle. Hold the last good snapshot for up to 2 minutes instead — the
+  // DATA NOTICE banner still names the upstream error, and a real outage outlives the hold
+  // and then shows its honest empty state. Server-side trading logic never sees this.
+  const lastGood = useRef<{ underlying: Underlying; data: CommandCenter } | null>(null);
+  const staleHoldStart = useRef<number | null>(null);
   const refresh = useCallback(async () => {
     setLoading(true);
     setRequestError(null);
     try {
       const response = await fetch(`/api/command-center?underlying=${underlying}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`Market scan failed (${response.status})`);
-      setData(await response.json());
+      const fresh: CommandCenter = await response.json();
+      if (fresh.contracts?.length) {
+        staleHoldStart.current = null;
+        lastGood.current = { underlying, data: fresh };
+        setData(fresh);
+        return;
+      }
+      const previous = lastGood.current?.underlying === underlying ? lastGood.current.data : null;
+      staleHoldStart.current ??= Date.now();
+      if (previous?.contracts.length && Date.now() - staleHoldStart.current < 120_000) {
+        setData({ ...fresh, contracts: previous.contracts, market: fresh.market ?? previous.market, spotPrice: fresh.spotPrice ?? previous.spotPrice, signal: fresh.signal ?? previous.signal });
+      } else {
+        setData(fresh);
+      }
     } catch (error) {
       setRequestError(error instanceof Error ? error.message : "Market scan failed");
     } finally {
@@ -130,6 +150,7 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
   }, [underlying]);
 
   useEffect(() => {
+    staleHoldStart.current = null; // a symbol switch starts its own hold window
     void refresh();
     const timer = window.setInterval(refresh, 15_000);
     return () => window.clearInterval(timer);
