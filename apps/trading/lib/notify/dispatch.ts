@@ -1,6 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { insightsChannelConfigured, sendTelegram, telegramConfigured } from "./telegram";
+import { TelegramSendError, insightsChannelConfigured, sendTelegram, telegramConfigured } from "./telegram";
 
 // Telegram dispatcher, run by the every-minute cron. Reads pending alerts from the
 // alerts table (single source of truth — catches worker-written alerts too, which
@@ -55,13 +55,20 @@ export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPen
   const { count: digestPending } = await admin.from("alerts")
     .select("id", { count: "exact", head: true }).is("notified_at", null);
 
+  // DUPLICATE-SEND FIX (2026-11-20, user report: same Telegram message many times).
+  // The old mark-after-send loop resent any row whose send "failed" — but Telegram
+  // usually DELIVERS on a timeout or slow response, so the Morning Card went out up
+  // to ~15 times. Now each row is CLAIMED first (conditional update doubles as a
+  // lock against overlapping cron ticks), and after a claim it is resent only when
+  // Telegram positively said "not delivered" (429). Ambiguous failures (timeout,
+  // network, 5xx) stay marked — the console.error is the alarm, duplicates are not.
   let sent = 0;
   const now = Date.now();
   for (const row of pending ?? []) {
-    if (now - new Date(String(row.created_at)).getTime() > STALE_MS) {
-      await admin.from("alerts").update({ notified_at: new Date().toISOString() }).eq("id", row.id);
-      continue;
-    }
+    const { data: claimed, error: claimError } = await admin.from("alerts")
+      .update({ notified_at: new Date().toISOString() }).eq("id", row.id).is("notified_at", null).select("id");
+    if (claimError || !claimed?.length) continue; // another invocation owns this row
+    if (now - new Date(String(row.created_at)).getTime() > STALE_MS) continue; // stale: marked without sending
     try {
       const message = `${ICON[String(row.severity)] ?? "ℹ️"} ${row.title}\n\n${row.body}`;
       await sendTelegram(message);
@@ -70,11 +77,22 @@ export async function dispatchInstantAlerts(): Promise<{ sent: number; digestPen
       if (insightsChannelConfigured() && isInsightAlert(String(row.event_key))) {
         await sendTelegram(message, process.env.TELEGRAM_INSIGHTS_CHAT_ID).catch(err => console.error("Insights channel send failed", row.event_key, err));
       }
-      await admin.from("alerts").update({ notified_at: new Date().toISOString() }).eq("id", row.id);
       sent += 1;
     } catch (err) {
-      console.error("Instant alert send failed (will retry)", row.event_key, err);
+      if (err instanceof TelegramSendError && err.status === 429) {
+        // Rate-limited: definitely not delivered. Un-claim for the next tick and stop
+        // hammering the API with the rest of the batch.
+        await admin.from("alerts").update({ notified_at: null }).eq("id", row.id);
+        console.error("Telegram rate limit — alert unclaimed for retry, batch stopped", row.event_key);
+        break;
+      }
+      // Other 4xx (undeliverable message) or ambiguous timeout/5xx (usually delivered
+      // anyway): keep the row marked so it can never spam duplicates; log loudly.
+      console.error("Instant alert send failed — kept marked to avoid duplicate sends", row.event_key, err);
     }
+    // Telegram throttles ~20 messages/min per chat; pace the burst instead of
+    // tripping the limit and converting it into retries.
+    await new Promise(resolve => setTimeout(resolve, 350));
   }
   return { sent, digestPending: Math.max((digestPending ?? 0) - (pending?.length ?? 0), 0) };
 }

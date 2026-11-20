@@ -17,6 +17,14 @@ export function insightsChannelConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_INSIGHTS_CHAT_ID);
 }
 
+// Thrown when Telegram ANSWERED with a non-OK status — the status tells the
+// dispatcher whether the message was definitely not delivered (429 rate limit)
+// or is undeliverable (other 4xx). Timeouts/network errors throw plain errors:
+// those are ambiguous, and Telegram has usually delivered despite them.
+export class TelegramSendError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
 export async function sendTelegram(text: string, overrideChatId?: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = overrideChatId ?? process.env.TELEGRAM_CHAT_ID;
@@ -29,5 +37,5 @@ export async function sendTelegram(text: string, overrideChatId?: string): Promi
     body: JSON.stringify({ chat_id: chatId, text: body, disable_web_page_preview: true }),
     signal: AbortSignal.timeout(8_000),
   });
-  if (!response.ok) throw new Error(`Telegram sendMessage failed: ${response.status}`);
+  if (!response.ok) throw new TelegramSendError(response.status, `Telegram sendMessage failed: ${response.status}`);
 }

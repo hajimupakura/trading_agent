@@ -27,6 +27,12 @@ async function ownerId(): Promise<string | null> {
 
 export async function scanUnusualFlow(underlying: Underlying, contracts: Contract[]): Promise<void> {
   if (!contracts.length) return;
+  // RTH only (2026-11-20): overnight the chains still carry YESTERDAY'S volume while
+  // the event-key date rolls at midnight, so every still-elevated contract re-alerted
+  // as a fresh "unusual flow" at ~12:03 AM. Flow outside market hours is an echo.
+  const clock = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map(part => [part.type, part.value]));
+  const minutes = Number(clock.hour) * 60 + Number(clock.minute);
+  if (["Sat", "Sun"].includes(String(clock.weekday)) || minutes < 570 || minutes > 975) return;
   const userId = await ownerId();
   if (!userId) return;
   const today = etDate();
