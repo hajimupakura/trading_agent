@@ -58,7 +58,7 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
       // Provider auth failures sit in payload.errors as text; surface them as the
       // single root cause they usually are instead of per-symbol mystery symptoms.
       const providerErrors = (snap.payload?.errors ?? []).filter(message => /403|401|unauthorized|forbidden|entitlement/i.test(String(message)));
-      if (providerErrors.length) problems.push(`data provider is rejecting our access (${String(providerErrors[0]).slice(0, 80)}) — check the Massive subscription/key`);
+      if (providerErrors.length) problems.push(`data provider is rejecting our access (${String(providerErrors[0]).slice(0, 80)}) — check the Alpaca market-data keys`);
       // Snapshot staleness beyond the rotation cadence means the refresh loop is sick.
       if (Date.now() - snap.updatedAt > 15 * 60_000) problems.push("snapshot is " + Math.round((Date.now() - snap.updatedAt) / 60_000) + " minutes stale");
       for (const problem of problems) {

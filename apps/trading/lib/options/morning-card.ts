@@ -12,9 +12,11 @@ import type { CommandCenter } from "./types";
 // flat-open days produced all the chop losses) and the drive exit grid (protect
 // by 10:15, invalidate below the day's open). The card feeds the user's hand —
 // it trades nothing.
-// SPX cash doesn't print pre-market and SPX chains ride the Massive feed, so the
-// gap read uses SPY's pre-market tape (the standard proxy); SPX levels appear
-// when the provider is healthy and the card says so plainly when it is not.
+// SPX cash doesn't print pre-market, so the gap read uses SPY's pre-market tape
+// (the standard proxy). SPX prior-day levels come from the live snapshot when it
+// has them, else are rebuilt from our own chain-sampled index bars
+// (index_bar_samples) — the index read is assembled during RTH only, so at 9:25
+// the snapshot usually has no market state yet; that is normal, not an outage.
 
 const ET = "America/New_York";
 const etNow = () => {
@@ -69,15 +71,30 @@ export async function runSpxMorningCard(): Promise<{ sent: boolean }> {
   const gapPct = spy.premarketLast != null ? ((spy.premarketLast - spy.priorClose) / spy.priorClose) * 100 : null;
   const fromYearHigh = spy.premarketLast != null ? ((spy.premarketLast - spy.yearHigh) / spy.yearHigh) * 100 : null;
 
-  // SPX levels straight from its snapshot when the provider is healthy.
+  // SPX levels: snapshot first, else rebuilt from yesterday's chain-sampled index bars.
   const { data: spxRow } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying", "SPX").maybeSingle();
   const spxPayload = spxRow?.payload as CommandCenter | null;
-  const spxPrior = spxPayload?.market?.priorDay ?? null;
-  const spxDark = !spxPrior || (spxPayload?.contracts ?? []).length === 0;
+  let spxPrior: { high: number; low: number; close: number } | null = spxPayload?.market?.priorDay ?? null;
+  let spxFromSamples = false;
+  if (!spxPrior) {
+    const { data: sampleBars } = await admin.from("index_bar_samples").select("bar_time,price")
+      .eq("symbol", "SPX").gte("bar_time", new Date(Date.now() - 7 * 86_400_000).toISOString())
+      .order("bar_time", { ascending: true }).limit(3000);
+    const etDateOf = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: ET }).format(new Date(iso));
+    const priorDates = [...new Set((sampleBars ?? []).map(bar => etDateOf(bar.bar_time)))].filter(date => date < today).sort();
+    const lastDate = priorDates[priorDates.length - 1];
+    const dayBars = (sampleBars ?? []).filter(bar => etDateOf(bar.bar_time) === lastDate).map(bar => Number(bar.price));
+    if (dayBars.length >= 30) {
+      spxPrior = { high: Math.max(...dayBars), low: Math.min(...dayBars), close: dayBars[dayBars.length - 1] };
+      spxFromSamples = true;
+    }
+  }
+  const spxDark = !spxPrior;
 
   const econ = todaysEconomicEvent();
   const lines: string[] = [];
-  if (spxDark) lines.push("⚠️ SPX feed is DARK (data provider) — card running on the SPY proxy. Fix the Massive subscription to light it up.");
+  if (spxDark) lines.push("⚠️ No SPX index read available — neither the snapshot nor yesterday's sampled bars have SPX levels. Card running on the SPY proxy alone; check the chain-sampling cron.");
+  else if (spxFromSamples) lines.push("SPX levels from yesterday's chain-sampled bars (index read starts at the open — normal at 9:25).");
   if (gapPct != null) {
     lines.push(`Overnight gap read (SPY pre-market): ${gapPct >= 0 ? "+" : ""}${gapPct.toFixed(2)}% vs yesterday's close $${spy.priorClose.toFixed(2)}.`);
   } else {
@@ -95,7 +112,7 @@ export async function runSpxMorningCard(): Promise<{ sent: boolean }> {
     userId: String(owner.id), eventKey, severity: qualifies ? "warning" : "info",
     title: `SPX Morning Card — ${qualifies ? "today QUALIFIES" : "stand down"}`,
     body: lines.join("\n"),
-    metadata: { kind: "spx_morning_card", gapPct, qualifies, spxDark },
+    metadata: { kind: "spx_morning_card", gapPct, qualifies, spxDark, spxFromSamples },
   }).catch(() => undefined);
   return { sent: true };
 }
