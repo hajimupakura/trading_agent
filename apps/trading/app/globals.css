@@ -132,6 +132,9 @@ button { cursor: pointer; }
 .signal-feed-row .feed-status { font-size:11px; color:#aeb9c8; }
 .signal-feed-row .feed-status.traded { color:#9de7d2; font-weight:700; }
 .signal-feed-row .feed-status.skipped i { font-style:normal; font-weight:700; color:#e8c86b; margin-left:6px; }
+/* Fire less than ~3 minutes old: still actionable, visibly apart from history. */
+.signal-feed-row b.feed-live { color:#0d1118; background:#e8c86b; animation:feed-live-pulse 1.2s ease-in-out infinite; }
+@keyframes feed-live-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
 /* No live fire: the spotlight is an instrument pick, not an opinion — dim it and say so. */
 .contract-card.instrument-only .contract-spotlight, .contract-card.instrument-only .kicker-pick { opacity:.55; }
 .instrument-note { margin:10px 0 4px; padding:8px 10px; border:1px solid #3a3420; border-radius:8px; background:#1a1710; font:500 11px "JetBrains Mono",monospace; line-height:1.5; letter-spacing:.02em; color:#d8bf7a; }

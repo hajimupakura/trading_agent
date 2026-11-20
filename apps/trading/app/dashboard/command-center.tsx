@@ -318,12 +318,14 @@ export function CommandCenterView({ userEmail }: { userEmail:string | null }) {
         </section> : null}
 
         {signalFeed.length ? <section className="signal-feed">
-          <header><strong>SIGNAL FEED</strong><span>today&apos;s engine fires — traded and skipped</span></header>
+          <header><strong>SIGNAL FEED</strong><span>history of today&apos;s fires — a live entry shows on the Trade Decision card (and pings Telegram)</span></header>
           <div className="signal-feed-rows">
             {signalFeed.map(item=>{
               const pct=(value:number|null|undefined)=>item.kind==="skipped"&&value!=null&&item.price>0?`${value>=item.price?"+":"−"}${Math.abs((value/item.price-1)*100).toFixed(0)}%`:null;
+              const live=Date.now()-new Date(item.at).getTime()<3*60_000; // feed re-polls every 10s, so the badge ages off on its own
               return <div key={`${item.kind}-${item.at}-${item.ticker}`} className={`signal-feed-row ${item.kind}`}>
                 <em>{new Date(item.at).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</em>
+                {live?<b className="feed-live">LIVE</b>:null}
                 <b className={item.action==="enter_put"?"put":"call"}>{item.action==="enter_put"?"PUT":"CALL"}</b>
                 <span className="feed-setup">{item.setup.replaceAll("_"," ")}</span>
                 <span className="feed-contract">{shortOcc(item.ticker)} @ ${item.price.toFixed(2)}</span>
