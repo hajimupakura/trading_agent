@@ -129,6 +129,33 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
     }
   }
 
+  // ---- 1d. Worker-silence tripwire (in-session): the Railway worker refreshes the
+  // Robinhood portfolio snapshot every few seconds, so a snapshot >5 minutes old
+  // while positions are open means the ONLY process that can fire stops/trails is
+  // dead — and until 2026-11-22 nothing paged (the worker could die at 10 AM and
+  // the first sign was a P&L that stopped moving). 5 min clears Railway redeploys.
+  if (clock.minutes >= 600 && clock.minutes <= 930) {
+    const [{ data: openPositions }, { data: portfolioRow }] = await Promise.all([
+      admin.from("rh_position_monitors").select("occ_ticker,status").in("status", ["monitoring", "closing", "manual_hold", "error"]).limit(10),
+      admin.from("broker_portfolio_snapshots").select("updated_at").eq("broker", "robinhood").maybeSingle(),
+    ]);
+    const snapshotAgeMs = portfolioRow?.updated_at ? Date.now() - Date.parse(String(portfolioRow.updated_at)) : Number.POSITIVE_INFINITY;
+    if ((openPositions ?? []).length && snapshotAgeMs > 5 * 60_000) {
+      const guarded = (openPositions ?? []).filter(row => row.status !== "manual_hold").length;
+      const eventKey = `blindspot-worker-silent-${today}`;
+      const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
+      if (!seen) {
+        await createAlert({
+          userId, eventKey, severity: "critical",
+          title: "BLIND-SPOT ALARM: the exit worker has gone SILENT with positions open",
+          body: `The Railway worker hasn't refreshed the Robinhood snapshot in ${Math.round(snapshotAgeMs / 60_000)} minutes and ${(openPositions ?? []).length} position(s) are open${guarded ? ` — ${guarded} of them depend on the worker for stops/trails and are UNGUARDED right now` : " (all manual-exit, but quotes and P&L are frozen)"}. Check Railway. Telegram sells still work (the bot prices from the live scan when worker quotes are stale); if you need out, /positions.`,
+          metadata: { kind: "blindspot_worker_silent", snapshotAgeMinutes: Math.round(snapshotAgeMs / 60_000), openCount: (openPositions ?? []).length },
+        }).catch(() => undefined);
+        out.invariantViolations.push(`worker silent ${Math.round(snapshotAgeMs / 60_000)}m with ${(openPositions ?? []).length} open position(s)`);
+      }
+    }
+  }
+
   // ---- 2. Post-close unexplained-miss audit (16:05-16:25, once per symbol/day).
   if (clock.minutes >= 965 && clock.minutes <= 985) {
     const { data: todaysEntries } = await admin.from("paper_trade_orders").select("underlying").eq("action", "buy_to_open").gte("created_at", `${today}T00:00:00-04:00`);

@@ -134,8 +134,20 @@ export async function executeSell(occTicker: string, quantityWanted: number | "a
   };
   const userId = await rhUserId();
   if (!userId) return finish("failed", { reason: "rh disconnected" }, "🛑 Robinhood is not connected.");
-  const bid = Number(monitor.latest_bid ?? 0);
-  if (!(bid > 0)) return finish("failed", { reason: "no bid" }, `No live bid on ${occTicker.replace("O:", "")} — the worker hasn't quoted it recently. Try again in a minute.`);
+  // Price freshness ladder: the worker's bid only while its row is a live pulse
+  // (<3 min); when the worker is silent, fall back to the scan's own quote. A sell
+  // priced off a frozen bid can sit unfilled above a falling market while the user
+  // believes they're out — never price a close blind.
+  const workerAgeMs = Date.now() - Date.parse(String(monitor.updated_at));
+  let bid = workerAgeMs < 3 * 60_000 ? Number(monitor.latest_bid ?? 0) : 0;
+  let priceSource = "worker";
+  if (!(bid > 0)) {
+    const chain = String(monitor.chain_symbol);
+    const snapUnderlying = ["SPXW", "SPX"].includes(chain) ? "SPX" : chain;
+    const live = await freshContract(snapUnderlying, occTicker);
+    if (live && live.bid > 0) { bid = live.bid; priceSource = "scan"; }
+  }
+  if (!(bid > 0)) return finish("failed", { reason: "no fresh quote" }, `🛑 No fresh quote on ${occTicker.replace("O:", "")} — worker quotes are ${Math.round(workerAgeMs / 60_000)} min old and the scan has nothing live. Refusing to price a sell blind; if the worker is down, check Railway, or sell directly in Robinhood.`);
   // Hand the position to the manual lane BEFORE selling so the worker never races
   // this close with its own stop/trail order on the same contract.
   if (monitor.status === "monitoring") {
@@ -155,8 +167,8 @@ export async function executeSell(occTicker: string, quantityWanted: number | "a
       metadata: { kind: "tg_sell", refId, occTicker, quantity, limitPrice: bid, order },
     }).catch(() => undefined);
     const remainder = held - quantity;
-    await finish("executed", { refId, quantity, limitPrice: bid }, "");
-    return `✅ SELL submitted: ${quantity}× ${occTicker.replace("O:", "")} @ $${bid.toFixed(2)} limit.${remainder > 0 ? ` ${remainder} remaining — position is now on manual hold (the worker watches but won't exit); tap "Hand back" in /positions to re-arm its stops.` : ""}`;
+    await finish("executed", { refId, quantity, limitPrice: bid, priceSource }, "");
+    return `✅ SELL submitted: ${quantity}× ${occTicker.replace("O:", "")} @ $${bid.toFixed(2)} limit${priceSource === "scan" ? " (priced from the live scan — worker quotes were stale)" : ""}.${remainder > 0 ? ` ${remainder} remaining — position is now on manual hold (the worker watches but won't exit); tap "Hand back" in /positions to re-arm its stops.` : ""}`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return finish("failed", { reason: message }, `🛑 Robinhood rejected the sell: ${message.slice(0, 250)}. Position is on manual hold — /positions to retry or hand back.`);
