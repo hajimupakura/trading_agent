@@ -106,6 +106,29 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
     }
   }
 
+  // ---- 1c. Manual-exit expiry warning (14:30-15:30): Telegram buys carry NO worker
+  // exits by the user's explicit call ("I want to fully determine when to come out
+  // myself") — so a manual_hold position still open at 14:30 on its own expiry day
+  // gets one loud page. Fully manual must never silently become expired worthless
+  // (cash-settled SPX) or auto-exercised into stock (equity contracts).
+  if (clock.minutes >= 870 && clock.minutes <= 930) {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    const { data: expiring } = await admin.from("rh_position_monitors").select("occ_ticker,quantity,latest_bid,entry_price")
+      .eq("status", "manual_hold").eq("expiration_date", today);
+    for (const row of expiring ?? []) {
+      const eventKey = `blindspot-manual-expiry-${String(row.occ_ticker)}-${today}`;
+      const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
+      if (seen) continue;
+      await createAlert({
+        userId, eventKey, severity: "critical",
+        title: `MANUAL-EXIT position expires TODAY: ${String(row.occ_ticker).replace("O:", "")}`,
+        body: `You hold ${Math.floor(Number(row.quantity))}× ${String(row.occ_ticker).replace("O:", "")} on manual exit (no stops, no auto-flat) and it expires at today's close. Bid $${Number(row.latest_bid ?? 0).toFixed(2)} vs entry $${Number(row.entry_price).toFixed(2)}. Sell via /positions or it settles/exercises on its own at 4:00.`,
+        metadata: { kind: "blindspot_manual_expiry", occTicker: row.occ_ticker },
+      }).catch(() => undefined);
+      out.invariantViolations.push(`${String(row.occ_ticker)} manual-exit expiring today`);
+    }
+  }
+
   // ---- 2. Post-close unexplained-miss audit (16:05-16:25, once per symbol/day).
   if (clock.minutes >= 965 && clock.minutes <= 985) {
     const { data: todaysEntries } = await admin.from("paper_trade_orders").select("underlying").eq("action", "buy_to_open").gte("created_at", `${today}T00:00:00-04:00`);

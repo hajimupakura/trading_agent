@@ -81,7 +81,7 @@ export async function proposeTelegramTrade(signal: Signal, snapshot: CommandCent
   const text = `🔔 ${underlying} ${signal.setup.replaceAll("_", " ")} — ${sideWord} (confidence ${signal.confidence})\n`
     + `${signal.reasons[0] ?? ""}\n`
     + `Engine pick: ${contract.ticker.replace("O:", "")} asking $${contract.ask.toFixed(2)}${contract.ask * 100 > cap ? ` — above the $${cap} RH cap, the over-cap button is your explicit override` : ""}.\n`
-    + `Tap to buy on Robinhood (worker guards the exit after the fill), or reply e.g. "buy 2 ${underlying === "SPX" ? "6900" : Math.round(contract.strike)}${contract.side === "put" ? "p" : "c"}" to pick your own strike/size.`;
+    + `Tap to buy on Robinhood (MANUAL EXIT — no stops/trails, you sell it via /positions), or reply e.g. "buy 2 ${underlying === "SPX" ? "6900" : Math.round(contract.strike)}${contract.side === "put" ? "p" : "c"}" to pick your own strike/size/expiry.`;
   const messageId = await sendWithButtons(text, buttons).catch(error => { console.error("tg proposal send failed", error); return null; });
   if (messageId) await admin.from("tg_tickets").update({ tg_message_id: messageId }).in("id", inserted.map(entry => entry.id));
 }

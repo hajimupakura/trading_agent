@@ -18,7 +18,7 @@ const SELL_RE = /^\/?sell\s+(all|half|\d{1,3})(?:\s+(?:([a-z]{1,5})\s+)?(\d{2,5}
 
 export const HELP_TEXT = [
   "Velocity bot commands:",
-  "• buy [qty] [symbol] [strike][c/p] [@limit] [override] — e.g. \"buy 2 6900p\", \"buy 1 nvda 135p override\". Symbol defaults to SPX, qty to 1, expiry to the nearest. \"override\" authorizes going past the Robinhood debit cap.",
+  "• buy [qty] [symbol] [strike][c/p] [@limit] [Ndte] [override] — e.g. \"buy 2 6900p\", \"buy 1 spy 700p 2dte\", \"buy 1 nvda 135p override\". Symbol defaults to SPX, qty to 1, expiry to the nearest (add \"1dte\"/\"5dte\" to pick). \"override\" authorizes going past the Robinhood debit cap.",
   "• sell all | sell half | sell 2 [strike][c/p] — sells from your open Robinhood positions.",
   "• positions — every open position with live P&L and sell/hold buttons.",
   "Every buy/sell shows a confirm card first; nothing executes without your tap.",
@@ -29,21 +29,26 @@ export async function handleCommand(text: string): Promise<void> {
   if (/^\/?(positions|pos)$/i.test(trimmed)) return listPositions();
   if (/^\/?(help|start)$/i.test(trimmed)) return sendText(HELP_TEXT);
   const buy = BUY_RE.exec(trimmed);
-  if (buy) return proposeCommandBuy({ quantity: Number(buy[1] ?? 1), symbol: (buy[2] ?? "SPX").toUpperCase(), strike: Number(buy[3]), side: /^c/i.test(buy[4]) ? "call" : "put", limit: buy[5] ? Number(buy[5]) : null, override: /\boverride\b/i.test(buy[6] ?? "") });
+  if (buy) return proposeCommandBuy({ quantity: Number(buy[1] ?? 1), symbol: (buy[2] ?? "SPX").toUpperCase(), strike: Number(buy[3]), side: /^c/i.test(buy[4]) ? "call" : "put", limit: buy[5] ? Number(buy[5]) : null, override: /\boverride\b/i.test(buy[6] ?? ""), dte: /(\d{1,2})\s*dte\b/i.exec(buy[6] ?? "") ? Number(/(\d{1,2})\s*dte\b/i.exec(buy[6] ?? "")![1]) : null });
   const sell = SELL_RE.exec(trimmed);
   if (sell) return proposeCommandSell({ amount: /^(all|half)$/i.test(sell[1]) ? sell[1].toLowerCase() as "all" | "half" : Number(sell[1]), strike: sell[3] ? Number(sell[3]) : null, side: sell[4] ? (/^c/i.test(sell[4]) ? "call" : "put") : null });
   return sendText(`Didn't understand that. ${HELP_TEXT}`);
 }
 
-async function proposeCommandBuy(input: { quantity: number; symbol: string; strike: number; side: "call" | "put"; limit: number | null; override: boolean }): Promise<void> {
+async function proposeCommandBuy(input: { quantity: number; symbol: string; strike: number; side: "call" | "put"; limit: number | null; override: boolean; dte: number | null }): Promise<void> {
   const admin = createAdminClient();
   const { data: snap } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying", input.symbol).maybeSingle();
   const contracts = ((snap?.payload as CommandCenter | null)?.contracts ?? [])
     .filter(contract => contract.side === input.side && Math.abs(contract.strike - input.strike) < 2.5
       && contract.ask > 0 && contract.quoteUpdatedAt != null && Date.now() - contract.quoteUpdatedAt < 10 * 60_000)
-    .sort((a, b) => a.dte - b.dte || Math.abs(a.strike - input.strike) - Math.abs(b.strike - input.strike));
+    // No dte asked → nearest expiry (0DTE first). "Ndte" asked → the closest listed
+    // expiry to it (chains don't list every dte, so 5dte may resolve to 4 or 6 —
+    // the confirm card names the real one before anything executes).
+    .sort((a, b) => (input.dte == null ? a.dte - b.dte : Math.abs(a.dte - input.dte) - Math.abs(b.dte - input.dte))
+      || Math.abs(a.strike - input.strike) - Math.abs(b.strike - input.strike));
   const pick = contracts[0];
-  if (!pick) return sendText(`No live ${input.symbol} ${input.strike}${input.side === "call" ? "C" : "P"} in the current scan — check the strike, or the chain may be stale right now.`);
+  if (!pick) return sendText(`No live ${input.symbol} ${input.strike}${input.side === "call" ? "C" : "P"}${input.dte != null ? ` near ${input.dte}dte` : ""} in the current scan — check the strike, or the chain may be stale right now.`);
+  if (input.dte != null && Math.abs(pick.dte - input.dte) > 3) return sendText(`Closest listed expiry to ${input.dte}dte at that strike is ${pick.dte}dte (${pick.expirationDate}) — re-send as "buy ${input.quantity} ${input.symbol === "SPX" ? "" : input.symbol.toLowerCase() + " "}${input.strike}${input.side === "call" ? "c" : "p"} ${pick.dte}dte" if that works for you.`);
   const userId = await rhUserId() ?? (await admin.from("profiles").select("id").limit(1).maybeSingle()).data?.id;
   if (!userId) return sendText("No account on file.");
   const settings = await loadRiskSettings(String(userId));
@@ -62,7 +67,7 @@ async function proposeCommandBuy(input: { quantity: number; symbol: string; stri
   await sendWithButtons(
     `Order check — BUY ${input.quantity}× ${pick.ticker.replace("O:", "")} (dte ${pick.dte})\n`
     + `Ask $${pick.ask.toFixed(2)} · spread ${pick.spreadPct.toFixed(1)}% · ~$${estDebit.toFixed(0)} total${estDebit > cap ? ` — OVER the $${cap} cap (your override)` : ""}.\n`
-    + `Worker guards the exit after the fill. Confirm?`, buttons);
+    + `MANUAL EXIT: no stop, no trail, no auto-flat — you sell it (expires ${pick.expirationDate}). Confirm?`, buttons);
 }
 
 async function proposeCommandSell(input: { amount: number | "all" | "half"; strike: number | null; side: "call" | "put" | null }): Promise<void> {
