@@ -29,7 +29,14 @@ export async function handleCommand(text: string): Promise<void> {
   if (/^\/?(positions|pos)$/i.test(trimmed)) return listPositions();
   if (/^\/?(help|start)$/i.test(trimmed)) return sendText(HELP_TEXT);
   const buy = BUY_RE.exec(trimmed);
-  if (buy) return proposeCommandBuy({ quantity: Number(buy[1] ?? 1), symbol: (buy[2] ?? "SPX").toUpperCase(), strike: Number(buy[3]), side: /^c/i.test(buy[4]) ? "call" : "put", limit: buy[5] ? Number(buy[5]) : null, override: /\boverride\b/i.test(buy[6] ?? ""), dte: /(\d{1,2})\s*dte\b/i.exec(buy[6] ?? "") ? Number(/(\d{1,2})\s*dte\b/i.exec(buy[6] ?? "")![1]) : null });
+  if (buy) {
+    // STRICT TAIL: after strike/side, only "override" and "Ndte" may follow. A money
+    // parser must never silently drop a word — "buy 1 6900p spy" once parsed as an
+    // SPX order with "spy" ignored, which is a confirm card for the wrong underlying.
+    const tail = (buy[6] ?? "").replace(/\boverride\b/i, "").replace(/\b\d{1,2}\s*dte\b/i, "").trim();
+    if (tail) return sendText(`I read that as ${(buy[2] ?? "SPX").toUpperCase()} ${buy[3]}${buy[4].toUpperCase()} but didn't understand "${tail}". Word order is: buy [qty] [symbol] [strike][c/p] [@limit] [Ndte] [override] — the symbol comes BEFORE the strike, e.g. "buy 1 nvda 169p".`);
+    return proposeCommandBuy({ quantity: Number(buy[1] ?? 1), symbol: (buy[2] ?? "SPX").toUpperCase(), strike: Number(buy[3]), side: /^c/i.test(buy[4]) ? "call" : "put", limit: buy[5] ? Number(buy[5]) : null, override: /\boverride\b/i.test(buy[6] ?? ""), dte: /(\d{1,2})\s*dte\b/i.exec(buy[6] ?? "") ? Number(/(\d{1,2})\s*dte\b/i.exec(buy[6] ?? "")![1]) : null });
+  }
   const sell = SELL_RE.exec(trimmed);
   if (sell) return proposeCommandSell({ amount: /^(all|half)$/i.test(sell[1]) ? sell[1].toLowerCase() as "all" | "half" : Number(sell[1]), strike: sell[3] ? Number(sell[3]) : null, side: sell[4] ? (/^c/i.test(sell[4]) ? "call" : "put") : null });
   return sendText(`Didn't understand that. ${HELP_TEXT}`);
