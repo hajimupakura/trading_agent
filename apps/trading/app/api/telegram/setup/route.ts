@@ -13,6 +13,13 @@ export async function GET(request: Request) {
   const domain = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
   if (!token || !secret || !domain) return Response.json({ error: `missing env: ${[!token && "TELEGRAM_BOT_TOKEN", !secret && "TELEGRAM_WEBHOOK_SECRET", !domain && "VERCEL_URL"].filter(Boolean).join(", ")}` }, { status: 400 });
   const url = `https://${domain}/api/telegram/webhook`;
+  // ?info=1 — read-only diagnostic: returns getWebhookInfo (pending updates,
+  // last_error_message/date) WITHOUT re-registering, which would drop pending
+  // updates and destroy exactly the evidence a delivery problem leaves behind.
+  if (new URL(request.url).searchParams.get("info")) {
+    const infoOnly = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`).then(response => response.json()).catch(() => null);
+    return Response.json({ webhookUrl: url, info: infoOnly?.result ?? null });
+  }
   const set = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message", "callback_query"], drop_pending_updates: true }),
