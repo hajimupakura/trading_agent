@@ -18,7 +18,10 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const authenticated = Boolean(data?.claims?.sub);
   const path = request.nextUrl.pathname;
-  const isPublic = path === "/login" || path.startsWith("/api/cron/") || path === "/api/brokers/robinhood/callback";
+  // /api/telegram/* carries its own auth (webhook: Telegram secret-token header,
+  // fail-closed; setup: CRON_SECRET bearer) — the session redirect would bounce
+  // Telegram's server calls to /login and the bot would never hear a tap.
+  const isPublic = path === "/login" || path.startsWith("/api/cron/") || path.startsWith("/api/telegram/") || path === "/api/brokers/robinhood/callback";
   if (!authenticated && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
