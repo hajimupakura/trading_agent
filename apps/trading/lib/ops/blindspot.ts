@@ -86,6 +86,26 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
     }
   }
 
+  // ---- 1b. Telegram ticket invariant (same window): a buy/sell the user CONFIRMED
+  // that is still 'executing' minutes later means the webhook died mid-trade — the
+  // user believes they own (or sold) something they may not. Page critical.
+  if (clock.minutes >= 600 && clock.minutes <= 930) {
+    const { data: stuck } = await admin.from("tg_tickets").select("id,kind,payload")
+      .eq("status", "executing").lt("decided_at", new Date(Date.now() - 5 * 60_000).toISOString()).limit(3);
+    for (const row of stuck ?? []) {
+      const eventKey = `blindspot-tg-stuck-${row.id}`;
+      const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
+      if (seen) continue;
+      await createAlert({
+        userId, eventKey, severity: "critical",
+        title: "BLIND-SPOT ALARM: a confirmed Telegram trade never finished",
+        body: `Telegram ${String(row.kind)} ticket ${String(row.id).slice(0, 8)} was confirmed over 5 minutes ago and is still 'executing' — the webhook likely died mid-trade. CHECK ROBINHOOD DIRECTLY: the order may or may not exist. Payload: ${JSON.stringify(row.payload).slice(0, 180)}`,
+        metadata: { kind: "blindspot_tg_stuck", ticketId: row.id },
+      }).catch(() => undefined);
+      out.invariantViolations.push(`tg ticket ${String(row.id).slice(0, 8)} stuck executing`);
+    }
+  }
+
   // ---- 2. Post-close unexplained-miss audit (16:05-16:25, once per symbol/day).
   if (clock.minutes >= 965 && clock.minutes <= 985) {
     const { data: todaysEntries } = await admin.from("paper_trade_orders").select("underlying").eq("action", "buy_to_open").gte("created_at", `${today}T00:00:00-04:00`);

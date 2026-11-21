@@ -77,6 +77,13 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {
     const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString() });
     if (signalError) errors.push(`Signal persistence: ${signalError.message}`);
+    // Telegram bot (2026-11-21, user call): EVERY feed fire — all watch names, not
+    // just SPX — becomes a one-tap Robinhood buy card. The module dedupes per
+    // setup/side and no-ops until the bot env is configured.
+    {
+      const { proposeTelegramTrade } = await import("@/lib/telegram-bot/propose");
+      await proposeTelegramTrade(signal, snapshot).catch(error => console.error("tg proposal failed", error instanceof Error ? error.message : error));
+    }
     // SPX scalps ping Telegram instantly — they are manual Robinhood plays unless the
     // real-money autonomy toggle is on. One alert per side per hour keeps chop quiet.
     if (underlying === "SPX" && signal.setup === "scalp_reclaim" && signal.contract) {
