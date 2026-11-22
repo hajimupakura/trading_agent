@@ -242,25 +242,16 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
   return { symbol, chartSymbol:symbol, asOf:current.timestamp, price:current.close, displayPrice:current.close, referencePrice, referenceLabel:"VWAP", openingRangeHigh, openingRangeLow, regime, technicals, bars:bars.slice(-120), priorDay };
 }
 
-// Prior-day levels for SPX via Massive daily aggs, cached per session date. Without
-// this, SPX market state carried priorDay:null forever — which silently disabled the
-// opening-drive path (it needs yesterday's close/high) and starved the daily-context
-// confluence lines. Found 2026-08-13 replaying the SPX gap morning.
+// Prior-day levels for SPX, cached per session date, rebuilt from our own
+// chain-sampled minute prices (Massive retired 2026-11, Alpaca has no native index
+// feed — the sampled series IS the source, not a fallback). High/low are the sampled
+// extremes (slightly inside the true wicks), close is the last sample — accurate
+// enough for gap math, which is all priorDay feeds. Without priorDay, the opening
+// drive silently dies (needs yesterday's close/high) — found 2026-08-13.
 let spxPriorDayCache:{date:string;value:MarketState["priorDay"]}|null=null;
 async function getSpxPriorDay(today:string):Promise<MarketState["priorDay"]> {
   if(spxPriorDayCache?.date===today&&spxPriorDayCache.value)return spxPriorDayCache.value;
   try{
-    const payload:{results?:Array<{t:number;h:number;l:number;c:number}>}=await massive(`/v2/aggs/ticker/I:SPX/range/1/day/${addDays(today,-7)}/${today}?adjusted=true&sort=desc&limit=10`);
-    const prior=(payload.results??[]).find(bar=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date(bar.t))<today);
-    const value=prior?{high:prior.h,low:prior.l,close:prior.c}:null;
-    spxPriorDayCache={date:today,value};
-    return value;
-  }catch{
-    // No Massive (2026-11-19: subscription dropped, not coming back): rebuild the
-    // prior session from our own chain-sampled minute prices. High/low are the
-    // sampled extremes (slightly inside the true wicks), close is the last sample
-    // — accurate enough for gap math, which is all priorDay feeds.
-    try{
       const etOf=(iso:string)=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date(iso));
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const { data } = await createAdminClient().from("index_bar_samples")
@@ -274,27 +265,19 @@ async function getSpxPriorDay(today:string):Promise<MarketState["priorDay"]> {
       const value={high:Math.max(...session.map(row=>row.price)),low:Math.min(...session.map(row=>row.price)),close:session[0].price};
       spxPriorDayCache={date:today,value};
       return value;
-    }catch{return null;}
-  }
+  }catch{return null;}
 }
 
 async function getSpxMarketState():Promise<MarketState> {
+  // SPX bars self-assemble from the option chain the every-minute cron samples
+  // (lib/options/spx-bars.ts). This is the PRIMARY source, not a fallback: Massive
+  // is retired (2026-11, not renewed) and Alpaca carries no native index feed. The
+  // old code still fired a doomed Massive HTTP call on every scan and, when samples
+  // were empty (weekends/pre-open), surfaced a scary "Massive entitlement" banner
+  // for what is simply "no session bars yet".
   const date=dateEt();
-  let bars:Bar[];
-  try{
-    const payload:{results?:Array<{t:number;o:number;h:number;l:number;c:number}>}=await massive(`/v2/aggs/ticker/I:SPX/range/1/minute/${date}/${date}?adjusted=true&sort=asc&limit=50000`);
-    const inRegularSession=(timestamp:number)=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(timestamp));const minutes=Number(parts.find(part=>part.type==="hour")?.value)*60+Number(parts.find(part=>part.type==="minute")?.value);return minutes>=570&&minutes<960;};
-    bars=(payload.results??[]).filter(item=>inRegularSession(item.t)).map(item=>({timestamp:item.t,open:item.o,high:item.h,low:item.l,close:item.c,volume:0,vwap:null}));
-    if(!bars.length)throw new Error("No Massive I:SPX one-minute bars returned; verify live index-data access");
-  }catch(massiveError){
-    // Entitlement (or any index-data) failure: fall back to bars self-sampled every minute
-    // from the SPX option chain by the cron (lib/options/spx-bars.ts).
-    bars=await getSampledSpxBars();
-    if(!bars.length){
-      if(massiveError instanceof Error&&massiveError.message.includes("403"))throw new Error("Live SPX index bars are not included in the current Massive entitlement; chain-sampled SPX bars will accumulate while the market is open");
-      throw massiveError;
-    }
-  }
+  const bars:Bar[]=await getSampledSpxBars();
+  if(!bars.length)throw new Error("SPX bars for today's session have not accumulated yet — they self-assemble from live chain quotes each minute during regular hours (first bars by ~9:31 ET)");
   const current=bars.at(-1)!;const opening=bars.slice(0,15);
   const openingRangeHigh=Math.max(...opening.map(bar=>bar.high));const openingRangeLow=Math.min(...opening.map(bar=>bar.low));
   const referencePrice=bars.reduce((sum,bar)=>sum+bar.close,0)/bars.length;
