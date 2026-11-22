@@ -33,7 +33,7 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const etNow=(()=>{const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",weekday:"short",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date());const get=(type:string)=>parts.find(part=>part.type===type)?.value;return {weekday:String(get("weekday")),minutes:Number(get("hour"))*60+Number(get("minute"))};})();
   const inSession=!["Sat","Sun"].includes(etNow.weekday)&&etNow.minutes>=575&&etNow.minutes<960;
   const errors = [marketResult, chainResult].flatMap(result => result.status === "rejected" ? [String(result.reason)] : [])
-    .filter(message => inSession || !message.includes("have not accumulated yet"));
+    .filter(message => inSession || !(message.includes("have not accumulated yet") || message.includes("Market is closed")));
   // Inside the late-day swing window, only 1-2 DTE contracts are candidates (0DTE dies at the close).
   const etParts = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date());
   const etMinutes = Number(etParts.find(part=>part.type==="hour")?.value)*60 + Number(etParts.find(part=>part.type==="minute")?.value);
