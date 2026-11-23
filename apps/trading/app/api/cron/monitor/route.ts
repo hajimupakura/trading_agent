@@ -136,6 +136,10 @@ export async function GET(request: Request) {
   // (gap thresholds, ignition, open/early reads). Watch-only — overnight execution
   // is the user's hand on Robinhood; Alpaca can't trade index options off-hours.
   const overnight = await runOvernightWatch().catch(error => { console.error("overnight watch failed", error); return { active:false, fired:[] as string[] }; });
+  // Overnight news sentry: the watch's EAR — macro-shock headlines triaged by LLM
+  // during GTH hours, paging (max 3/night) with the live ES read attached.
+  const { runOvernightNewsSentry } = await import("@/lib/news/overnight-sentry");
+  await runOvernightNewsSentry().catch(error => console.error("overnight news sentry failed", error));
   void overnight;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
