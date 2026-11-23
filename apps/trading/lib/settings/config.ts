@@ -1,8 +1,16 @@
 import {z} from "zod";
+import {WATCH_UNDERLYINGS} from "@/lib/options/types";
+
+// allowedUnderlyings derives from the live watchlist + the indexes (2026-11-23: the
+// hardcoded SPY|SPX enum rejected the full-watchlist spec the moment it reached the
+// DB — every settings load threw, which the fail-loud lanes surfaced within minutes.
+// Deriving from WATCH_UNDERLYINGS means growing the watchlist can never break this
+// schema again).
+const ALLOWED_UNDERLYINGS=["SPY","SPX",...WATCH_UNDERLYINGS] as [string,...string[]];
 
 export const riskSettingsSchema=z.object({
   maxOptionAsk:z.number().min(.1).max(20),maxTradeDebit:z.number().min(10).max(10000),maxDailyLoss:z.number().min(10).max(25000),
-  maxTradesPerDay:z.number().int().min(1).max(20),allowedUnderlyings:z.array(z.enum(["SPY","SPX"])).min(1),allowedDte:z.array(z.union([z.literal(0),z.literal(1),z.literal(2)])).min(1),
+  maxTradesPerDay:z.number().int().min(1).max(20),allowedUnderlyings:z.array(z.enum(ALLOWED_UNDERLYINGS)).min(1),allowedDte:z.array(z.union([z.literal(0),z.literal(1),z.literal(2)])).min(1),
   minContractVolume:z.number().int().min(0).max(10_000_000),maxSpreadPct:z.number().min(.1).max(50),maxOpenPositions:z.number().int().min(0).max(5),
   entryStartMinutes:z.number().int().min(570).max(930),entryEndMinutes:z.number().int().min(585).max(945),paperTradingEnabled:z.boolean(),aiReviewEnabled:z.boolean(),autoEntriesEnabled:z.boolean(),
   riskPerTradePct:z.number().min(.001).max(.05),maxContractsPerTrade:z.number().int().min(1).max(10),deltaTarget:z.number().min(.25).max(.7),
