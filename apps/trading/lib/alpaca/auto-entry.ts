@@ -37,7 +37,21 @@ async function entriesToday(userId: string) {
 const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off"];
 
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
-  const result = await evaluateAutoEntry(snapshot, underlying);
+  // FAIL LOUD (2026-11-23): a throw inside the gate chain used to escape to the cron
+  // route's catch — PAST shadow recording — so the 13:24 SPX 7270C fire vanished with
+  // no order, no shadow row, no reason. An exception in the entry path is an incident
+  // (the rh lane has paged on this since 8/11); now it records like any skip AND pages.
+  const result = await evaluateAutoEntry(snapshot, underlying).catch(async (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const { data: owner } = await createAdminClient().from("profiles").select("id").limit(1).maybeSingle();
+    if (owner && snapshot?.signal && ["enter_call", "enter_put"].includes(snapshot.signal.action)) await createAlert({
+      userId: owner.id, eventKey: `paper-entry-error-${snapshot.signal.id}`, severity: "critical",
+      title: `Paper entry lane hit an unexpected error on a live ${underlying} signal`,
+      body: `A qualified ${underlying} fire could not be processed: ${message.slice(0, 250)}. No order was placed; the miss is shadow-tracked. If this repeats, the paper lane needs attention.`,
+      metadata: { kind: "paper_entry_error", underlying, signalId: snapshot.signal.id, error: message },
+    }).catch(() => undefined);
+    return { entered: null, skipped: `error: ${message.slice(0, 160)}` };
+  });
   const signal = snapshot?.signal;
   if (result.skipped && signal?.contract && ["enter_call", "enter_put"].includes(signal.action)
     && Date.now() - signal.generatedAt <= 120_000) {
