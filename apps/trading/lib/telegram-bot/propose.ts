@@ -78,8 +78,11 @@ export async function proposeTelegramTrade(signal: Signal, snapshot: CommandCent
     [{ text: "✖ Skip", callback_data: `cx:${inserted[0].id}` }],
   ];
   const sideWord = contract.side === "put" ? "PUT" : "CALL";
+  // News is context, never a gate: a failed lookup must not delay or kill the card.
+  const news = await import("@/lib/news/market-news").then(module => module.latestNewsFor(underlying)).catch(() => null);
   const text = `🔔 ${underlying} ${signal.setup.replaceAll("_", " ")} — ${sideWord} (confidence ${signal.confidence})\n`
     + `${signal.reasons[0] ?? ""}\n`
+    + (news ? `📰 ${news.headline.slice(0, 140)} (${(await import("@/lib/news/market-news")).newsAge(news.publishedAt)})\n` : "")
     + `Engine pick: ${contract.ticker.replace("O:", "")} asking $${contract.ask.toFixed(2)}${contract.ask * 100 > cap ? ` — above the $${cap} RH cap, the over-cap button is your explicit override` : ""}.\n`
     + `Tap to buy on Robinhood (worker guards the exit after the fill), or reply e.g. "buy 2 ${underlying === "SPX" ? "6900" : Math.round(contract.strike)}${contract.side === "put" ? "p" : "c"}" to pick your own strike/size/expiry.`;
   const messageId = await sendWithButtons(text, buttons).catch(error => { console.error("tg proposal send failed", error); return null; });

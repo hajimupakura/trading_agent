@@ -71,6 +71,9 @@ export async function GET(request: Request) {
   // Dip companion for manual-exit positions: shouts at 25%/50% off session peak, never sells.
   const { notifyManualHoldDips } = await import("@/lib/telegram-bot/dips");
   await notifyManualHoldDips().catch(error => console.error("tg dip notify failed", error));
+  // Benzinga headline ingest (context, never signal): one unfiltered pull per tick.
+  const { ingestMarketNews } = await import("@/lib/news/market-news");
+  await ingestMarketNews().catch(error => console.error("news ingest failed", error));
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPX first (user preference, 2026-08-13 —
   // 60/40 tax treatment); when no SPX contract fits the per-trade cap the lane skips and

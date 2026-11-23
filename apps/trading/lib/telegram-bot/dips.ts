@@ -61,10 +61,17 @@ export async function notifyManualHoldDips(): Promise<{ alerted: number }> {
     if (seen) continue;
     const entry = Number(hold.entry_price);
     const vsEntryPct = entry > 0 ? (bid / entry - 1) * 100 : null;
+    // A dip WITH a fresh headline is information; a dip WITHOUT one is flow — naming
+    // which one this is changes how it should feel. Lookup is best-effort.
+    const chainSymbol = String(hold.chain_symbol);
+    const newsSymbol = ["SPXW", "SPX"].includes(chainSymbol) ? "SPX" : chainSymbol;
+    const { latestNewsFor, newsAge } = await import("@/lib/news/market-news");
+    const news = await latestNewsFor(newsSymbol).catch(() => null);
+    const newsLine = news ? ` Fresh news: "${news.headline.slice(0, 120)}" (${newsAge(news.publishedAt)}).` : ` No ${newsSymbol} headline in 3h — this dip is flow, not information.`;
     await createAlert({
       userId: String(hold.user_id), eventKey, severity: "warning",
       title: `Dip check: ${occ.replace("O:", "")} is ${Math.round(drawdown * 100)}% off its peak`,
-      body: `${Math.floor(Number(hold.quantity))}× ${occ.replace("O:", "")} — bid $${bid.toFixed(2)}, session peak $${peak.toFixed(2)} (${tier.label}). Versus YOUR ENTRY ($${entry.toFixed(2)}) it is ${vsEntryPct == null ? "?" : `${vsEntryPct >= 0 ? "+" : ""}${vsEntryPct.toFixed(0)}%`}. The peak number is fear's metric; the entry number is your plan's. This position is manual-exit — nothing sells unless you do. If you'd rather the trail decide, "Hand back" in /positions re-arms it. (On 11/23 a panic sell at 25%-off-peak cost the rebound; the replayed trail made +26%/trade by giving dips 20% of room.)`,
+      body: `${Math.floor(Number(hold.quantity))}× ${occ.replace("O:", "")} — bid $${bid.toFixed(2)}, session peak $${peak.toFixed(2)} (${tier.label}). Versus YOUR ENTRY ($${entry.toFixed(2)}) it is ${vsEntryPct == null ? "?" : `${vsEntryPct >= 0 ? "+" : ""}${vsEntryPct.toFixed(0)}%`}.${newsLine} The peak number is fear's metric; the entry number is your plan's. This position is manual-exit — nothing sells unless you do. If you'd rather the trail decide, "Hand back" in /positions re-arms it.`,
       metadata: { kind: "tg_dip_alert", occTicker: occ, bid, peak, drawdownPct: Math.round(drawdown * 100), vsEntryPct },
     }).catch(() => undefined);
     alerted++;

@@ -21,6 +21,7 @@ export const HELP_TEXT = [
   "• buy [qty] [symbol] [strike][c/p] [@limit] [Ndte] [override] — e.g. \"buy 2 6900p\", \"buy 1 spy 700p 2dte\", \"buy 1 nvda 135p override\". Symbol defaults to SPX, qty to 1, expiry to the nearest (add \"1dte\"/\"5dte\" to pick). \"override\" authorizes going past the Robinhood debit cap.",
   "• sell all | sell half | sell 2 [strike][c/p] — sells from your open Robinhood positions.",
   "• positions — every open position with live P&L and sell/hold buttons.",
+  "• news [symbol] — latest market headlines, e.g. \"news\" or \"news nvda\".",
   "Every buy/sell shows a confirm card first; nothing executes without your tap.",
 ].join("\n");
 
@@ -28,6 +29,14 @@ export async function handleCommand(text: string): Promise<void> {
   const trimmed = text.trim();
   if (/^\/?(positions|pos)$/i.test(trimmed)) return listPositions();
   if (/^\/?(help|start)$/i.test(trimmed)) return sendText(HELP_TEXT);
+  const newsCmd = /^\/?news(?:\s+([a-z]{1,5}))?$/i.exec(trimmed);
+  if (newsCmd) {
+    const { recentNews, newsAge } = await import("@/lib/news/market-news");
+    const symbol = newsCmd[1]?.toUpperCase() ?? null;
+    const items = await recentNews(symbol, 5).catch(() => []);
+    if (!items.length) return sendText(`No ${symbol ?? "market"} headlines in the last 24h (feed may still be warming up).`);
+    return sendText(`📰 ${symbol ?? "Market"} — last ${items.length} headlines:\n` + items.map(item => `• ${item.headline.slice(0, 150)} (${newsAge(item.publishedAt)})`).join("\n"));
+  }
   const buy = BUY_RE.exec(trimmed);
   if (buy) {
     // STRICT TAIL: after strike/side, only "override" and "Ndte" may follow. A money

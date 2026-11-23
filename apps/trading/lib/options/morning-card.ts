@@ -103,6 +103,14 @@ export async function runSpxMorningCard(): Promise<{ sent: boolean }> {
   lines.push(`Yesterday (SPY): high $${spy.priorHigh.toFixed(2)} · low $${spy.priorLow.toFixed(2)}${spxPrior ? ` | SPX: high ${Number(spxPrior.high).toFixed(0)} · low ${Number(spxPrior.low).toFixed(0)} · close ${Number(spxPrior.close).toFixed(0)}` : ""}.`);
   if (fromYearHigh != null) lines.push(`Distance from 52-week high: ${fromYearHigh.toFixed(1)}%${fromYearHigh > -0.5 ? " — ATH territory (ATH-cross days ran 8-for-13 in the study)" : ""}.`);
   if (econ) lines.push(`⚠️ ${econ.name} today (${econ.releaseLabel}) — event rules apply, expect violence around the print.`);
+  // Overnight headlines (context, never signal): the top market-tagged stories since
+  // yesterday's close, so a gap always arrives with its story attached. Best-effort —
+  // a news-feed hiccup must never delay the 9:25 card.
+  try {
+    const { recentNews, newsAge } = await import("@/lib/news/market-news");
+    const overnight = (await recentNews(null, 12)).filter(item => Date.now() - item.publishedAt < 17.5 * 3_600_000).slice(0, 4);
+    if (overnight.length) lines.push(`📰 Overnight: ${overnight.map(item => `${item.headline.slice(0, 110)} (${newsAge(item.publishedAt)})`).join(" · ")}`);
+  } catch { /* news feed down — card runs without it */ }
   const qualifies = gapPct != null && Math.abs(gapPct) >= 0.2;
   lines.push(qualifies
     ? `VERDICT: QUALIFIES — ${gapPct! > 0 ? "gap-UP drive candidate (calls)" : "gap-DOWN drive candidate (puts)"}. Trigger: first bars (9:31-9:34) holding ${gapPct! > 0 ? `above yesterday's high AND today's open` : `below yesterday's low AND today's open`}. Protect by 10:15; out instantly if price crosses back through the day's open.`
