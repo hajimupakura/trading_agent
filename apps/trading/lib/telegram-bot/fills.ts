@@ -29,7 +29,8 @@ export async function notifyTelegramFills(): Promise<{ notified: number }> {
       await admin.from("tg_tickets").update({ result: { ...result, fillNotified: true } }).eq("id", row.id);
       notified++;
     } else if (!result.noFillNotified && ageMs > 10 * 60_000) {
-      await sendText(`⏳ No fill yet on ${occ.replace("O:", "")} (submitted ${Math.round(ageMs / 60_000)} min ago) — the limit is resting below the market. It cancels on its own at day's end if it never fills; I'll say 🎯 the moment it does.`).catch(() => undefined);
+      const { sendWithButtons } = await import("./api");
+      await sendWithButtons(`⏳ No fill yet on ${occ.replace("O:", "")} (submitted ${Math.round(ageMs / 60_000)} min ago) — the limit is resting below the market. It cancels on its own at day's end if it never fills; I'll say 🎯 the moment it does.`, [[{ text: "❌ Cancel the order", callback_data: `co:${row.id}` }]]).catch(() => undefined);
       await admin.from("tg_tickets").update({ result: { ...result, noFillNotified: true } }).eq("id", row.id);
       notified++;
     }

@@ -106,6 +106,38 @@ export async function executeBuyTicket(ticketId: string): Promise<string> {
   }
 }
 
+// Cancel a resting entry order from the ⏳ no-fill message. Honest about the race:
+// if the order filled between the message and the tap, nothing is cancelled and the
+// reply points at the position instead.
+export async function cancelRestingBuy(ticketId: string): Promise<string> {
+  const db = admin();
+  const { data: ticket } = await db.from("tg_tickets").select("payload,result").eq("id", ticketId).eq("kind", "buy").maybeSingle();
+  if (!ticket) return "Ticket not found.";
+  const occ = String((ticket.payload as { ticker?: string }).ticker ?? "");
+  const refId = String((ticket.result as { refId?: string } | null)?.refId ?? "");
+  if (!refId) return "No broker order on file for that ticket.";
+  // Filled already? The monitor knows within seconds of a fill.
+  const { data: monitor } = await db.from("rh_position_monitors").select("quantity,status").eq("occ_ticker", occ).maybeSingle();
+  if (monitor && Number(monitor.quantity) > 0 && ["monitoring", "manual_hold"].includes(String(monitor.status))) return `Too late in the right way — it FILLED. ${occ.replace("O:", "")} is open; /positions to manage it.`;
+  const { data: entry } = await db.from("rh_entry_orders").select("broker_response,status").eq("ref_id", refId).maybeSingle();
+  const brokerOrder = entry?.broker_response as { id?: string; order?: { id?: string } } | null;
+  const orderId = String(brokerOrder?.id ?? brokerOrder?.order?.id ?? "");
+  if (!orderId) return "No broker order id on file — the order may not have reached Robinhood; check /positions or the app.";
+  const userId = await rhUserId();
+  if (!userId) return "🛑 Robinhood is not connected.";
+  const accountNumber = await agenticAccountNumber(userId);
+  if (!accountNumber) return "🛑 No agentic account found.";
+  try {
+    const { callRobinhoodTool } = await import("@/lib/brokers/robinhood");
+    await callRobinhoodTool(userId, "cancel_option_order", { account_number: accountNumber, order_id: orderId });
+    await db.from("rh_entry_orders").update({ status: "cancelled" }).eq("ref_id", refId);
+    await db.from("tg_tickets").update({ result: { ...(ticket.result as object ?? {}), cancelled: true } }).eq("id", ticketId);
+    return `🚫 Cancel sent for the resting ${occ.replace("O:", "")} order. If it filled in the race, the 🎯 message and /positions will say so within a minute.`;
+  } catch (error) {
+    return `🛑 Robinhood rejected the cancel: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}. It may have just filled — check /positions.`;
+  }
+}
+
 export async function skipTickets(id: string): Promise<string> {
   const db = admin();
   // A card can carry sibling tickets (capped + over-cap buy); skipping skips them all.

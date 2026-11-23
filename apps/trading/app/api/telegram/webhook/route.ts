@@ -35,6 +35,7 @@ export async function POST(request: Request) {
       else if (verb === "sa") outcome = await executeSell(rest, "all");
       else if (verb === "sh") outcome = await executeSell(rest, "half");
       else if (verb.startsWith("sn")) outcome = await executeSell(rest, Math.max(1, Number(verb.slice(2)) || 1));
+      else if (verb === "co") { const { cancelRestingBuy } = await import("@/lib/telegram-bot/execute"); outcome = await cancelRestingBuy(rest); }
       else if (verb === "hd") outcome = await setHold(rest, true);
       else if (verb === "hb") outcome = await setHold(rest, false);
       if (outcome != null) {
