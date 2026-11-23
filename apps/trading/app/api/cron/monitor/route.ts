@@ -65,6 +65,9 @@ export async function GET(request: Request) {
   // Shadow ledger live-mark: open skipped-signal rows pick up fresh quotes (last
   // bid, peak bid) so the dashboard's Signal Feed shows what each veto cost.
   await markShadowLedger(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("shadow ledger mark failed", error));
+  // Telegram fill feedback: 🎯 when a bot buy's position appears, ⏳ after 10 unfilled minutes.
+  const { notifyTelegramFills } = await import("@/lib/telegram-bot/fills");
+  await notifyTelegramFills().catch(error => console.error("tg fill notify failed", error));
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPX first (user preference, 2026-08-13 —
   // 60/40 tax treatment); when no SPX contract fits the per-trade cap the lane skips and
