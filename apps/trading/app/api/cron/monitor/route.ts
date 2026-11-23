@@ -65,6 +65,9 @@ export async function GET(request: Request) {
   // Shadow ledger live-mark: open skipped-signal rows pick up fresh quotes (last
   // bid, peak bid) so the dashboard's Signal Feed shows what each veto cost.
   await markShadowLedger(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("shadow ledger mark failed", error));
+  // Violent-day shadow trackers (gap_fade + cascade): audition on SPX, never trade.
+  const { runViolentDayShadow } = await import("@/lib/options/violent-shadow");
+  await runViolentDayShadow(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("violent shadow failed", error));
   // Telegram fill feedback: 🎯 when a bot buy's position appears, ⏳ after 10 unfilled minutes.
   const { notifyTelegramFills } = await import("@/lib/telegram-bot/fills");
   await notifyTelegramFills().catch(error => console.error("tg fill notify failed", error));
