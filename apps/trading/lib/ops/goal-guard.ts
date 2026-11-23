@@ -21,14 +21,14 @@ const etDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_Y
 
 export type GoalStatus = {
   baseline: number | null; equity: number | null; pnl: number | null; pct: number | null;
-  hit: boolean; override: boolean; notified: boolean;
+  hit: boolean; override: boolean; notified: boolean; protect: boolean;
 };
 
 export async function goalStatus(): Promise<GoalStatus> {
   const admin = createAdminClient();
   const today = etDate();
   const [{ data: baselineRow }, { data: portfolioRow }] = await Promise.all([
-    admin.from("rh_daily_baseline").select("equity,goal_notified,goal_override").eq("trade_date", today).maybeSingle(),
+    admin.from("rh_daily_baseline").select("equity,goal_notified,goal_override,goal_protect").eq("trade_date", today).maybeSingle(),
     admin.from("broker_portfolio_snapshots").select("payload,updated_at").eq("broker", "robinhood").maybeSingle(),
   ]);
   const baseline = baselineRow ? Number(baselineRow.equity) : null;
@@ -41,6 +41,7 @@ export async function goalStatus(): Promise<GoalStatus> {
     hit: pct != null && pct >= GOAL_PCT,
     override: Boolean(baselineRow?.goal_override),
     notified: Boolean(baselineRow?.goal_notified),
+    protect: Boolean(baselineRow?.goal_protect),
   };
 }
 
@@ -71,7 +72,7 @@ export async function checkGoalGuard(): Promise<{ hit: boolean }> {
   if (owner) await createAlert({
     userId: String(owner.id), eventKey: `goal-day-${today}`, severity: "success",
     title: `🏁 GOAL DAY: +$${status.pnl.toFixed(0)} (${((status.pct ?? 0) * 100).toFixed(0)}%)`,
-    body: `Day P&L is +$${status.pnl.toFixed(0)} on a $${status.baseline.toFixed(0)} morning baseline — the 20% goal is hit. Protecting it: new real-money entries are paused for today. Exceptions: a genuinely moving tape (SPX ±1.5% or the name ±2%) passes automatically, and "goal override" in the bot unlocks the day. Giving back a goal day chasing seconds is the round-trip problem at portfolio scale — the guard exists so keeping it is the default.`,
+    body: `Day P&L is +$${status.pnl.toFixed(0)} on a $${status.baseline.toFixed(0)} morning baseline — the 20% goal is hit. Entries stay OPEN (your call, 2026-11-23); every further trade today will carry a goal-day note so you trade the banked profit with open eyes. Want the lock? Reply "goal protect" and ordinary new entries pause for the rest of the day (an extraordinary tape — SPX ±1.5%, name ±2% — still passes; "goal override" unlocks again).`,
     metadata: { kind: "goal_day", pnl: status.pnl, pct: status.pct, baseline: status.baseline },
   }).catch(() => undefined);
   return { hit: true };
@@ -80,9 +81,17 @@ export async function checkGoalGuard(): Promise<{ hit: boolean }> {
 export async function setGoalOverride(): Promise<string> {
   const admin = createAdminClient();
   const today = etDate();
-  const { data } = await admin.from("rh_daily_baseline").update({ goal_override: true }).eq("trade_date", today).select("trade_date");
+  const { data } = await admin.from("rh_daily_baseline").update({ goal_override: true, goal_protect: false }).eq("trade_date", today).select("trade_date");
   if (!data?.length) return "No baseline row for today yet (the worker writes it at the first morning equity read) — nothing to override.";
-  return "🔓 Goal guard overridden for the rest of today — new entries allowed. The 20% banked is now back at the table; trade like you mean it.";
+  return "🔓 Goal guard unlocked for the rest of today — entries open, no goal blocking. The banked profit is back at the table; trade like you mean it.";
+}
+
+export async function setGoalProtect(): Promise<string> {
+  const admin = createAdminClient();
+  const today = etDate();
+  const { data } = await admin.from("rh_daily_baseline").update({ goal_protect: true, goal_override: false }).eq("trade_date", today).select("trade_date");
+  if (!data?.length) return "No baseline row for today yet (the worker writes it at the first morning equity read) — nothing to protect.";
+  return "🔒 Goal protection ARMED for the rest of today: ordinary new entries pause once the +20% goal is banked. An extraordinary tape (SPX ±1.5%, name ±2%) still passes automatically; \"goal override\" unlocks anytime.";
 }
 
 // Entry gate: returns a refusal string when the guard blocks, null when clear.
@@ -90,7 +99,9 @@ export async function setGoalOverride(): Promise<string> {
 // the underlying string.
 export async function goalGuardBlocks(input: { underlying: string; explicitOverride?: boolean }): Promise<string | null> {
   const status = await goalStatus();
-  if (!status.hit || status.override || input.explicitOverride) return null;
+  // ADVISORY BY DEFAULT (user call, 2026-11-23: "the restriction should be optional"):
+  // blocking only happens after the user arms it with "goal protect" for the day.
+  if (!status.hit || !status.protect || status.override || input.explicitOverride) return null;
   const admin = createAdminClient();
   const load = async (symbol: string) => (await admin.from("options_monitor_snapshots").select("payload").eq("underlying", symbol).maybeSingle()).data?.payload as CommandCenter | null;
   const own = await load(input.underlying).catch(() => null);

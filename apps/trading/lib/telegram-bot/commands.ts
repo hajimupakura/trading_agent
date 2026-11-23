@@ -22,7 +22,7 @@ export const HELP_TEXT = [
   "• sell all | sell half | sell 2 [strike][c/p] — sells from your open Robinhood positions.",
   "• positions — every open position with live P&L and sell/hold buttons.",
   "• news [symbol] — latest market headlines, e.g. \"news\" or \"news nvda\".",
-  "• goal — today's P&L vs the +20% goal; \"goal override\" re-opens entries on a goal day.",
+  "• goal — today's P&L vs the +20% goal. Advisory by default: \"goal protect\" pauses entries after the goal banks; \"goal override\" unlocks.",
   "Every buy/sell shows a confirm card first; nothing executes without your tap.",
 ].join("\n");
 
@@ -34,12 +34,19 @@ export async function handleCommand(text: string): Promise<void> {
     const { setGoalOverride } = await import("@/lib/ops/goal-guard");
     return sendText(await setGoalOverride());
   }
+  if (/^\/?(goal\s+protect|protect\s+goal)$/i.test(trimmed)) {
+    const { setGoalProtect } = await import("@/lib/ops/goal-guard");
+    return sendText(await setGoalProtect());
+  }
   if (/^\/?goal$/i.test(trimmed)) {
     const { goalStatus } = await import("@/lib/ops/goal-guard");
     const status = await goalStatus();
     if (status.baseline == null) return sendText("No morning baseline yet today — the worker records it at the first equity read after the open.");
     const pnlLine = status.pnl != null ? `${status.pnl >= 0 ? "+" : ""}$${status.pnl.toFixed(0)} (${((status.pct ?? 0) * 100).toFixed(0)}%)` : "equity read stale — check back in a minute";
-    return sendText(`🎯 Daily goal: +20% of $${status.baseline.toFixed(0)} = $${(status.baseline * 0.2).toFixed(0)}\nDay P&L: ${pnlLine}\n${status.hit ? (status.override ? "Goal HIT — guard overridden, entries open." : "Goal HIT — guard active, ordinary entries paused (extraordinary tape passes; 'goal override' unlocks).") : "Guard: not triggered — entries open."}`);
+    return sendText(`🎯 Daily goal: +20% of $${status.baseline.toFixed(0)} = $${(status.baseline * 0.2).toFixed(0)}\nDay P&L: ${pnlLine}\n${status.hit
+      ? status.protect && !status.override ? "Goal HIT — protection ARMED: ordinary entries paused (extraordinary tape passes; 'goal override' unlocks)."
+        : "Goal HIT — entries OPEN (advisory mode); further trades carry a goal-day note. 'goal protect' locks the day."
+      : `Guard: not triggered — entries open${status.protect ? " (protection pre-armed for when it hits)" : ""}.`}`);
   }
   const newsCmd = /^\/?news(?:\s+([a-z]{1,5}))?$/i.exec(trimmed);
   if (newsCmd) {
