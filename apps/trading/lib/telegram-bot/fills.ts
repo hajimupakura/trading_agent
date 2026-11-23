@@ -25,7 +25,7 @@ export async function notifyTelegramFills(): Promise<{ notified: number }> {
     const { data: monitor } = await admin.from("rh_position_monitors").select("quantity,entry_price,status").eq("occ_ticker", occ).maybeSingle();
     const ageMs = Date.now() - Date.parse(String(row.decided_at));
     if (monitor && ["monitoring", "manual_hold", "closing"].includes(String(monitor.status)) && Number(monitor.quantity) > 0) {
-      await sendText(`🎯 FILLED: ${Math.floor(Number(monitor.quantity))}× ${occ.replace("O:", "")} at $${Number(monitor.entry_price).toFixed(2)} average. Manual exit — /positions to manage it.`).catch(() => undefined);
+      await sendText(`🎯 FILLED: ${Math.floor(Number(monitor.quantity))}× ${occ.replace("O:", "")} at $${Number(monitor.entry_price).toFixed(2)} average. ${monitor.status === "manual_hold" ? "Manual exit — /positions to manage it." : "Worker guards the exit from here; /positions to watch or take over."}`).catch(() => undefined);
       await admin.from("tg_tickets").update({ result: { ...result, fillNotified: true } }).eq("id", row.id);
       notified++;
     } else if (!result.noFillNotified && ageMs > 10 * 60_000) {

@@ -74,7 +74,7 @@ async function proposeCommandBuy(input: { quantity: number; symbol: string; stri
   await sendWithButtons(
     `Order check — BUY ${input.quantity}× ${pick.ticker.replace("O:", "")} (dte ${pick.dte})\n`
     + `Ask $${pick.ask.toFixed(2)} · spread ${pick.spreadPct.toFixed(1)}% · ~$${estDebit.toFixed(0)} total${estDebit > cap ? ` — OVER the $${cap} cap (your override)` : ""}.\n`
-    + `MANUAL EXIT: no stop, no trail, no auto-flat — you sell it (expires ${pick.expirationDate}). Confirm?`, buttons);
+    + `Worker-guarded exit (30% stop, trail, 3:10 flat); expires ${pick.expirationDate}. "Take over" in /positions anytime for manual control. Confirm?`, buttons);
 }
 
 async function proposeCommandSell(input: { amount: number | "all" | "half"; strike: number | null; side: "call" | "put" | null }): Promise<void> {

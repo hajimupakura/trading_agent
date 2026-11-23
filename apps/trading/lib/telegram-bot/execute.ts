@@ -87,11 +87,11 @@ export async function executeBuyTicket(ticketId: string): Promise<string> {
     await createAlert({
       userId, eventKey: `tg-buy-${refId}`, severity: "info",
       title: `Telegram buy: ${payload.quantity}× ${payload.ticker.replace("O:", "")}`,
-      body: `You approved ${payload.quantity}× ${payload.ticker.replace("O:", "")} at a $${limitPrice.toFixed(2)} limit (~$${debit.toFixed(0)}${payload.override ? ", over-cap override" : ""}) from the Telegram bot. MANUAL EXIT: the position starts in manual_hold — the worker watches it but never exits; selling is the human's call.`,
+      body: `You approved ${payload.quantity}× ${payload.ticker.replace("O:", "")} at a $${limitPrice.toFixed(2)} limit (~$${debit.toFixed(0)}${payload.override ? ", over-cap override" : ""}) from the Telegram bot. The worker guards the exit (stop/trail/time rules); 'Take over' in /positions flips it to manual.`,
       metadata: { kind: "tg_buy", refId, ticketId, contractTicker: payload.ticker, limitPrice, quantity: payload.quantity, override: payload.override },
     }).catch(() => undefined);
     await finish("executed", { refId, limitPrice, debit }, "");
-    return `✅ BUY submitted: ${payload.quantity}× ${payload.ticker.replace("O:", "")} @ $${limitPrice.toFixed(2)} limit (~$${debit.toFixed(0)}${payload.override ? " — over-cap, your call" : ""}). MANUAL EXIT mode: no stops or trails will fire — the exit is yours (expires ${payload.expirationDate}; I'll page you at 2:30 PM on expiry day if it's still open). /positions to manage it.`;
+    return `✅ BUY submitted: ${payload.quantity}× ${payload.ticker.replace("O:", "")} @ $${limitPrice.toFixed(2)} limit (~$${debit.toFixed(0)}${payload.override ? " — over-cap, your call" : ""}). The worker guards the exit (30% stop, profit trail, 3:10 PM flat). Want to manage it yourself? "Take over" in /positions — the dip companion will keep you company.`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await db.from("rh_entry_orders").update({ status: "rejected", broker_response: { error: message } }).eq("ref_id", refId);

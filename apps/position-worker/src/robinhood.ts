@@ -102,16 +102,7 @@ export class RobinhoodExitManager {
           const monitor = await loadMonitor(position.occTicker);
           const orderOpenedAt = openedAtFromOrders(position, orders);
           const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? Date.now();
-          // First sighting off-session: a Telegram-bot entry still starts manual_hold
-          // (same rule as in-session) so it can't flip to worker exits at the next open.
-          let offSessionStatus: "manual_hold" | "monitoring" = monitor?.status === "manual_hold" ? "manual_hold" : "monitoring";
-          if (!monitor) {
-            const { data: tgEntry } = await db.from("rh_entry_orders").select("strategy").eq("contract_ticker", position.occTicker)
-              .neq("status", "rejected").gte("created_at", new Date(Date.now() - 48 * 3_600_000).toISOString())
-              .order("created_at", { ascending: false }).limit(1).maybeSingle();
-            if (tgEntry?.strategy === "telegram") offSessionStatus = "manual_hold";
-          }
-          await saveMonitor(position, { status: offSessionStatus, last_error: null, opened_at: new Date(openedAt).toISOString(), opened_at_exact: monitor?.opened_at_exact ?? orderOpenedAt != null });
+          await saveMonitor(position, { status: monitor?.status === "manual_hold" ? "manual_hold" : "monitoring", last_error: null, opened_at: new Date(openedAt).toISOString(), opened_at_exact: monitor?.opened_at_exact ?? orderOpenedAt != null });
         }
         this.managedCount++;
       } catch (error) {
@@ -140,17 +131,11 @@ export class RobinhoodExitManager {
       .eq("contract_ticker", position.occTicker).neq("status", "rejected")
       .gte("created_at", new Date(now - 48 * 3_600_000).toISOString())
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    // TELEGRAM BUYS ARE MANUAL-EXIT (user call, 2026-11-21: "remove all stop trails —
-    // I want to fully determine when to come out myself"): a position whose entry came
-    // from the bot is born into manual_hold. The worker registers and quotes it but
-    // never exits — no stop, no trail, NO 15:10 flat. The human sells via the bot or
-    // hands it back; blindspot pages at 14:30 on any manual-exit position expiring
-    // today so "fully manual" can't silently become "expired worthless".
-    if (!monitor && entryOrder?.strategy === "telegram") {
-      const tgOpenedAt = openedAtFromOrders(position, orders);
-      await saveMonitor(position, { status: "manual_hold", last_error: null, opened_at: new Date(tgOpenedAt ?? now).toISOString(), opened_at_exact: tgOpenedAt != null });
-      return;
-    }
+    // TELEGRAM BUYS: worker-guarded by default (user call, 2026-11-23, reversing the
+    // 11-21 manual-exit default after a panic-sold dip proved the human exit engine's
+    // failure mode) — bot entries take the standard burst rules (stop/trail/flat).
+    // "Take over" in /positions flips any position to manual_hold for the deliberate
+    // conviction ticket; the dip companion and 14:30 expiry page cover that lane.
     const exitMode = entryOrder?.strategy === "scalp" ? "scalp" as const : entryOrder?.strategy === "drive" ? "drive" as const : "burst" as const;
     const orderOpenedAt = openedAtFromOrders(position, orders);
     const openedAt = monitor?.opened_at ? Date.parse(monitor.opened_at) : orderOpenedAt ?? now;
