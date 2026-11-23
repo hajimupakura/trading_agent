@@ -143,6 +143,11 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const { count: todayCount, error: countError } = await admin.from("rh_entry_orders").select("id", { count: "exact", head: true }).gte("created_at", etDayStartIso()).neq("status", "rejected");
   if (countError) return { entered: null, skipped: `gate data unavailable (trade count): ${countError.message}` };
   if ((todayCount ?? 0) >= settings.rhMaxTradesPerDay) return { entered: null, skipped: "daily trade cap" };
+  // GOAL GUARD (2026-11-23): a banked +20% day pauses ordinary autonomous entries;
+  // an extraordinary tape (SPX ±1.5% / name ±2%) or the user's "goal override" passes.
+  const { goalGuardBlocks } = await import("@/lib/ops/goal-guard");
+  const goalBlock = await goalGuardBlocks({ underlying: contract.underlying }).catch(() => null);
+  if (goalBlock) return { entered: null, skipped: "goal guard: +20% day banked, ordinary tape — protecting it" };
   // STOP-OUT CIRCUIT (2026-08-18): three stop-outs in one day = the tape is hostile to
   // the setups (see-saw days flip every 20 minutes) — entries close for the day well
   // before the dollar breaker lets 2-3 more bites land. Exits keep running.

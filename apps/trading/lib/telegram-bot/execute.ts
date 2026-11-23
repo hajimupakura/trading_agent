@@ -57,6 +57,10 @@ export async function executeBuyTicket(ticketId: string): Promise<string> {
   const ageMs = Date.now() - Date.parse(String(claimed.created_at));
   if (claimed.source === "engine" && ageMs > 15 * 60_000) return finish("expired", { reason: "stale" }, `⌛ That ${payload.underlying} card is ${Math.round(ageMs / 60_000)} min old — the quote has moved on. Reply "buy ${payload.quantity} ${Math.round(payload.strike)}${payload.side === "put" ? "p" : "c"}" for a fresh ticket.`);
   if (await killSwitchOn()) return finish("failed", { reason: "kill switch" }, "🛑 Kill switch is ON — no buys until it is cleared in the dashboard.");
+  // Goal guard: a banked +20% day pauses ordinary new entries; extraordinary tape or
+  // an explicit override passes (the typed "override" keyword counts as explicit).
+  const goalBlock = await import("@/lib/ops/goal-guard").then(module => module.goalGuardBlocks({ underlying: payload.underlying, explicitOverride: payload.override })).catch(() => null);
+  if (goalBlock) return finish("skipped", { reason: "goal guard" }, goalBlock);
   const userId = await rhUserId();
   if (!userId) return finish("failed", { reason: "rh disconnected" }, "🛑 Robinhood is not connected — reconnect in the dashboard first.");
   const live = await freshContract(payload.underlying, payload.ticker);

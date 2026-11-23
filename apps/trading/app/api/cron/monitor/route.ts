@@ -68,6 +68,9 @@ export async function GET(request: Request) {
   // Violent-day shadow trackers (gap_fade + cascade): audition on SPX, never trade.
   const { runViolentDayShadow } = await import("@/lib/options/violent-shadow");
   await runViolentDayShadow(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("violent shadow failed", error));
+  // Goal guard: page once when the day's real P&L banks +20% of the morning baseline.
+  const { checkGoalGuard } = await import("@/lib/ops/goal-guard");
+  await checkGoalGuard().catch(error => console.error("goal guard failed", error));
   // Telegram fill feedback: 🎯 when a bot buy's position appears, ⏳ after 10 unfilled minutes.
   const { notifyTelegramFills } = await import("@/lib/telegram-bot/fills");
   await notifyTelegramFills().catch(error => console.error("tg fill notify failed", error));
