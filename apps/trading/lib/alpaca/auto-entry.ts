@@ -77,12 +77,14 @@ export async function runAutoEntry(snapshot: CommandCenter | null, underlying: s
 }
 
 async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
-  // SPX-ONLY (user call, 2026-11-19): the desk trades one index now. Alpaca added
-  // index options this year, so the old "SPX excluded — no index options at Alpaca"
-  // rule inverted: SPX is the ONLY underlying the paper lane enters. Each qualifying
-  // signal takes a PAIR: the near-the-money quality pick (risk-sized) plus one cheap
-  // away-from-the-money contract under $200 — the convex kicker (DKNG lesson).
-  if (underlying !== "SPX") return { entered: null, skipped: "paper lane is SPX-only" };
+  // FULL-WATCHLIST SPEC (user call, 2026-11-23, reversing the 11-19 SPX-only rule for
+  // PAPER only): "trade all the stocks in my watchlist — $500 max per ticker, 5
+  // tickers a day." Which names may trade is config now (settings.allowedUnderlyings
+  // via validatePaperEntry), the $500/ticker rides maxTradeDebit, 5/day rides
+  // maxTradesPerDay, 5 concurrent rides maxOpenPositions. The ledger answers "would
+  // this make money" with a measured record before any real dollar follows — two hot
+  // days (one of them a crash tape) are not evidence, the next month is.
+  // SPX keeps its PAIR structure (quality + convex kicker) below.
   const signal = snapshot?.signal;
   const contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
@@ -144,7 +146,9 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // CONVEX KICKER (user call, 2026-11-19): alongside the quality contract, one cheap
   // away-from-the-money contract under $200 — highest-delta eligible strike at ask
   // <= $2.00, same side and expiry. Its failure never voids the primary entry.
-  try {
+  // SPX-only (2026-11-23): on watch names the kicker would stack past the user's
+  // $500-per-ticker spec; the index PAIR keeps its original design.
+  if (underlying === "SPX") try {
     // NOT gated on `eligible`: the quality screens (10% spread cap especially) are
     // built for the primary leg and structurally reject every sub-$2 contract — a
     // $0.10 spread on a $0.60 option is 17%. The kicker's screen is a two-sided
