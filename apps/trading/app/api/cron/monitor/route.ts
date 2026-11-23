@@ -68,6 +68,9 @@ export async function GET(request: Request) {
   // Telegram fill feedback: 🎯 when a bot buy's position appears, ⏳ after 10 unfilled minutes.
   const { notifyTelegramFills } = await import("@/lib/telegram-bot/fills");
   await notifyTelegramFills().catch(error => console.error("tg fill notify failed", error));
+  // Dip companion for manual-exit positions: shouts at 25%/50% off session peak, never sells.
+  const { notifyManualHoldDips } = await import("@/lib/telegram-bot/dips");
+  await notifyManualHoldDips().catch(error => console.error("tg dip notify failed", error));
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPX first (user preference, 2026-08-13 —
   // 60/40 tax treatment); when no SPX contract fits the per-trade cap the lane skips and

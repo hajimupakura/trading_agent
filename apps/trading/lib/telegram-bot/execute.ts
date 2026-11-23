@@ -31,7 +31,7 @@ async function killSwitchOn(): Promise<boolean> {
   return Boolean(data?.kill_switch);
 }
 
-async function freshContract(underlying: string, ticker: string): Promise<Contract | null> {
+export async function freshContract(underlying: string, ticker: string): Promise<Contract | null> {
   const { data } = await admin().from("options_monitor_snapshots").select("payload").eq("underlying", underlying).maybeSingle();
   const contract = ((data?.payload as CommandCenter | null)?.contracts ?? []).find(candidate => candidate.ticker === ticker) ?? null;
   if (!contract) return null;
