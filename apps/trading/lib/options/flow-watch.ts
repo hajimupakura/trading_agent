@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { queueFlowFollowPair } from "@/lib/alpaca/ticket-queue";
@@ -41,7 +42,7 @@ async function dailyCloses(symbol: string, fromDate: string): Promise<Array<{ da
   if (!key || !secret) return [];
   const proxy = symbol === "SPX" ? "SPY" : symbol; // no index daily feed — SPY tracks SPX direction 1:1
   const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(proxy)}/bars`);
-  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("start", fromDate); url.searchParams.set("feed", "iex");
+  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("start", fromDate); url.searchParams.set("feed", STOCK_FEED);
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "10");
   const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(8000) });
   if (!response.ok) return [];

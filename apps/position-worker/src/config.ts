@@ -6,11 +6,16 @@ const schema = z.object({
   PAPER_AUTO_EXITS_ENABLED:z.enum(["true","false"]).default("true"), POSITION_POLL_INTERVAL_MS:z.coerce.number().int().min(2000).max(30000).default(5000),
   PORT:z.coerce.number().int().positive().default(3001), MANAGER_INSTANCE_ID:z.string().default("railway-primary"),
   APP_URL:z.string().url().optional(), CRON_SECRET:z.string().min(16).optional(),
+  // "paid" = Algo Trader Plus subscription: SIP stock tape + real OPRA option quotes.
+  // Env-driven, not auto-probed — if set to paid without the subscription, Alpaca 403s
+  // fail loud through the existing error paths instead of silently degrading.
+  ALPACA_DATA_PLAN:z.enum(["basic","paid"]).default("basic"),
 });
 
 const parsed = schema.parse(process.env);
 const supabaseUrl = parsed.SUPABASE_URL ?? parsed.NEXT_PUBLIC_SUPABASE_URL;
 if (!supabaseUrl) throw new Error("SUPABASE_URL is required");
-export const config = { ...parsed, supabaseUrl, exitsEnabled:parsed.PAPER_AUTO_EXITS_ENABLED === "true" };
+export const config = { ...parsed, supabaseUrl, exitsEnabled:parsed.PAPER_AUTO_EXITS_ENABLED === "true",
+  stockFeed:parsed.ALPACA_DATA_PLAN === "paid" ? "sip" : "iex", optionFeed:parsed.ALPACA_DATA_PLAN === "paid" ? "opra" : "indicative" };
 
 // Deploys: GitHub-connected — pushes to main matching apps/position-worker/** auto-deploy this service.

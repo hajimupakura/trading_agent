@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { getOptionChain } from "./provider";
@@ -69,7 +70,7 @@ function priorClose(snap: Snapshot | undefined, today: string): number | null {
 }
 async function getSnapshots(symbols: string[]): Promise<Record<string, Snapshot>> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/snapshots");
-  url.searchParams.set("symbols", symbols.join(",")); url.searchParams.set("feed", "iex");
+  url.searchParams.set("symbols", symbols.join(",")); url.searchParams.set("feed", STOCK_FEED);
   const response = await fetch(url, { headers: headers(), cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca snapshots ${response.status}`);
   return await response.json() as Record<string, Snapshot>;
@@ -78,7 +79,7 @@ async function getSnapshots(symbols: string[]): Promise<Record<string, Snapshot>
 async function getAvgVolumes(symbols: string[]): Promise<Record<string, number>> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/bars");
   url.searchParams.set("symbols", symbols.join(",")); url.searchParams.set("timeframe", "1Day");
-  url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "1000");
+  url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "1000");
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
   const start = new Date(Date.now() - 45 * 86_400_000).toISOString().slice(0, 10);
   url.searchParams.set("start", start);

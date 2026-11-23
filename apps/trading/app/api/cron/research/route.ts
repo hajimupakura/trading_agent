@@ -1,6 +1,7 @@
 // CRON_SECRET-guarded read-only proxy for historical research queries.
 // Exists because market-data keys are sensitive-locked on Vercel and cannot be
 // used from a local machine. Strictly whitelisted query kinds; no mutations.
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
     if (kind === "stock_bars") {
       const timeframe = params.get("timeframe") === "1Day" ? "1Day" : "1Min";
       if (!TICKER.test(ticker) || !DATE.test(start) || !DATE.test(end)) return Response.json({ error:"bad params" }, { status:400 });
-      return alpaca(`/v2/stocks/${ticker}/bars?timeframe=${timeframe}&start=${start}&end=${end}&feed=iex&adjustment=all&sort=asc&limit=10000`);
+      return alpaca(`/v2/stocks/${ticker}/bars?timeframe=${timeframe}&start=${start}&end=${end}&feed=${STOCK_FEED}&adjustment=all&sort=asc&limit=10000`);
     }
     if (kind === "option_aggs") {
       const resolution = params.get("resolution") === "day" ? "day" : "minute";

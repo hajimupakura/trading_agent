@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 
@@ -20,7 +21,7 @@ async function dailyCloses(symbol: string, days: number): Promise<Array<{ date: 
   if (!key || !secret) throw new Error("Alpaca keys are not configured");
   const start = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
   const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
-  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("start", start); url.searchParams.set("feed", "iex");
+  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("start", start); url.searchParams.set("feed", STOCK_FEED);
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "500");
   const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca ${symbol} daily ${response.status}`);

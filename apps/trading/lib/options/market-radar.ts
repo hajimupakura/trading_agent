@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { todaysEconomicEvent } from "./economic-calendar";
@@ -29,7 +30,7 @@ function headers() {
 
 async function getDailyBars(): Promise<DailyBar[]> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "25");
+  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "25");
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
   const response = await fetch(url, { headers: headers(), cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca daily bars ${response.status}`);
@@ -39,7 +40,7 @@ async function getDailyBars(): Promise<DailyBar[]> {
 
 async function getMinuteBars(includePremarket: boolean): Promise<Array<{ minutes: number; open: number; high: number; low: number; close: number }>> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "1000");
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "1000");
   url.searchParams.set("start", etDate()); url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
   const response = await fetch(url, { headers: headers(), cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca minute bars ${response.status}`);

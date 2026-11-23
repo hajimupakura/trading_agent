@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { todaysEconomicEvent } from "./economic-calendar";
@@ -45,7 +46,7 @@ async function getSpySessionBars(): Promise<MinuteBar[]> {
   const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
   if (!key || !secret) throw new Error("Alpaca keys are not configured");
   const url = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "1000");
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "1000");
   url.searchParams.set("start", etParts().date); url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
   const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca minute bars ${response.status}`);
@@ -59,7 +60,7 @@ async function getPriorDayLevels(): Promise<{ high: number; low: number; close: 
   const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
   if (!key || !secret) return null;
   const url = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "10");
+  url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "10");
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
   const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) return null;

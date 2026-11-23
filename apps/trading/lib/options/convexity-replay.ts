@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assessQualification, computeHarvest, type MinuteBar, type HarvestMetrics } from "./convexity";
 
@@ -63,7 +64,7 @@ async function spyBarsFor(date: string): Promise<{ session: MinuteBar[]; prior: 
   if (!key || !secret) throw new Error("Alpaca keys are not configured");
   const fetchBars = async (params: Record<string, string>) => {
     const url = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-    for (const [name, value] of Object.entries({ feed: "iex", adjustment: "all", sort: "asc", limit: "1000", ...params })) url.searchParams.set(name, value);
+    for (const [name, value] of Object.entries({ feed: STOCK_FEED, adjustment: "all", sort: "asc", limit: "1000", ...params })) url.searchParams.set(name, value);
     const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`Alpaca bars ${response.status}`);
     return (await response.json()) as { bars?: Array<{ t: string; o: number; h: number; l: number; c: number; v: number; vw?: number }> };

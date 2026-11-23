@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 
@@ -27,7 +28,7 @@ async function alpacaBars(ticker: string, from: string, to: string, timeframe: s
   let pageToken: string | undefined;
   do {
     const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(ticker)}/bars`);
-    url.searchParams.set("timeframe", timeframe); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "10000");
+    url.searchParams.set("timeframe", timeframe); url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "10000");
     url.searchParams.set("start", from); url.searchParams.set("end", `${to}T23:59:59-04:00`);
     url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
     if (pageToken) url.searchParams.set("page_token", pageToken);

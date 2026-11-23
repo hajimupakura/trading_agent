@@ -12,7 +12,7 @@ async function request<T>(base:string,path:string,init:RequestInit = {}):Promise
 export async function getPositions() { return request<AlpacaPosition[]>(PAPER,"/v2/positions"); }
 export async function getTodayOrders() { return request<AlpacaOrder[]>(PAPER,"/v2/orders?status=all&limit=500&direction=desc&nested=false"); }
 export async function getSpyPrice() {
-  const payload = await request<{trade?:{p?:number}}>(DATA,"/v2/stocks/SPY/trades/latest?feed=iex");
+  const payload = await request<{trade?:{p?:number}}>(DATA,`/v2/stocks/SPY/trades/latest?feed=${config.stockFeed}`);
   const price = Number(payload.trade?.p); return Number.isFinite(price) && price > 0 ? price : null;
 }
 // Live option quote via Alpaca (equity options only — no index/SPXW coverage). Used
@@ -23,7 +23,7 @@ export async function getSpyPrice() {
 export async function getLatestOptionQuote(occTicker:string):Promise<{symbol:string;bid:number;ask:number;timestamp:number}|null> {
   const symbol = occTicker.replace(/^O:/,"");
   try {
-    const payload = await request<{quotes?:Record<string,{bp?:number;ap?:number;t?:string}>}>(DATA,`/v1beta1/options/quotes/latest?symbols=${encodeURIComponent(symbol)}&feed=indicative`);
+    const payload = await request<{quotes?:Record<string,{bp?:number;ap?:number;t?:string}>}>(DATA,`/v1beta1/options/quotes/latest?symbols=${encodeURIComponent(symbol)}&feed=${config.optionFeed}`);
     const quote = payload.quotes?.[symbol];
     const bid = Number(quote?.bp); const ask = Number(quote?.ap); const timestamp = quote?.t ? Date.parse(quote.t) : NaN;
     return bid > 0 && ask >= bid && Number.isFinite(timestamp) ? { symbol: occTicker, bid, ask, timestamp } : null;

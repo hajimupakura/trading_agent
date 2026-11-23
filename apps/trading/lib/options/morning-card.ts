@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { todaysEconomicEvent } from "./economic-calendar";
@@ -39,7 +40,7 @@ async function alpacaJson<T>(url: URL): Promise<T> {
 // SPY daily bars for prior close + 52-week high; pre-market minute tape for the gap read.
 async function spyRead() {
   const daily = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-  daily.searchParams.set("timeframe", "1Day"); daily.searchParams.set("feed", "iex");
+  daily.searchParams.set("timeframe", "1Day"); daily.searchParams.set("feed", STOCK_FEED);
   daily.searchParams.set("start", new Date(Date.now() - 370 * 86_400_000).toISOString().slice(0, 10));
   daily.searchParams.set("limit", "400"); daily.searchParams.set("adjustment", "all");
   const dailyBars = (await alpacaJson<{ bars?: Array<{ t: string; h: number; l: number; c: number }> }>(daily)).bars ?? [];
@@ -49,7 +50,7 @@ async function spyRead() {
   const priorDay = prior[prior.length - 1];
   const yearHigh = Math.max(...prior.slice(-252).map(bar => bar.h));
   const minute = new URL("https://data.alpaca.markets/v2/stocks/SPY/bars");
-  minute.searchParams.set("timeframe", "1Min"); minute.searchParams.set("feed", "iex");
+  minute.searchParams.set("timeframe", "1Min"); minute.searchParams.set("feed", STOCK_FEED);
   minute.searchParams.set("start", `${today}T04:00:00-05:00`); minute.searchParams.set("limit", "10000");
   const minuteBars = (await alpacaJson<{ bars?: Array<{ t: string; c: number }> }>(minute)).bars ?? [];
   const last = minuteBars.length ? minuteBars[minuteBars.length - 1].c : null;

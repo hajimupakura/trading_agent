@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { WATCH_UNDERLYINGS } from "./types";
@@ -31,7 +32,7 @@ interface DayBar { date: string; o: number; h: number; l: number; c: number }
 async function dailyBars(): Promise<Record<string, DayBar[]>> {
   const url = new URL("https://data.alpaca.markets/v2/stocks/bars");
   url.searchParams.set("symbols", SYMBOLS.join(",")); url.searchParams.set("timeframe", "1Day");
-  url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "1000");
+  url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "1000");
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc");
   url.searchParams.set("start", new Date(Date.now() - 12 * 86_400_000).toISOString().slice(0, 10));
   const response = await fetch(url, { headers: headers(), cache: "no-store", signal: AbortSignal.timeout(10_000) });

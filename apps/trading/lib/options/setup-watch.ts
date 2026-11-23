@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { WATCH_UNDERLYINGS } from "./types";
@@ -40,7 +41,7 @@ function alpacaHeaders() {
 // reaches into prior sessions (weekends included — callers split by date).
 async function sessionMinuteBars(symbol: string, daysBack = 0): Promise<MinuteBar[]> {
   const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
-  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", "iex");
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", STOCK_FEED);
   url.searchParams.set("start", `${etToday(daysBack)}T09:30:00-04:00`); url.searchParams.set("limit", "10000");
   const response = await fetch(url, { headers: alpacaHeaders(), cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Alpaca bars ${response.status} for ${symbol}`);

@@ -1,4 +1,5 @@
 import "server-only";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { calculateTechnicals } from "./indicators";
 import { rankContracts } from "./ranker";
 import { getSampledSpxBars } from "./spx-bars";
@@ -185,7 +186,7 @@ export async function getMarketState(underlying: Underlying): Promise<MarketStat
 async function getPriorDayLevels(symbol: string, headers: Record<string,string>): Promise<MarketState["priorDay"]> {
   try {
     const url = new URL(`${ALPACA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
-    url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", "iex"); url.searchParams.set("limit", "5");
+    url.searchParams.set("timeframe", "1Day"); url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("limit", "5");
     url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "desc");
     // WITHOUT start, Alpaca returns only TODAY's bars — so "find a bar dated before
     // today" found nothing and priorDay was silently null for EVERY equity since this
@@ -206,7 +207,7 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
   if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
   const date = dateEt();
   const url = new URL(`${ALPACA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
-  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", date); url.searchParams.set("feed", "iex");
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", date); url.searchParams.set("feed", STOCK_FEED);
   url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
   const headers = { "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret };
   const [response, priorDay] = await Promise.all([
@@ -308,7 +309,7 @@ export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
   const start = date; const end = addDays(date, 1);
   const url = new URL(`${ALPACA_BASE}/v2/stocks/SPY/bars`);
   url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", start); url.searchParams.set("end", end);
-  url.searchParams.set("feed", "iex"); url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
+  url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
   const response = await fetch(url, { headers:{ "APCA-API-KEY-ID":key, "APCA-API-SECRET-KEY":secret }, cache:"no-store", signal:AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`Alpaca historical SPY bars ${response.status}`);
   const payload = await response.json() as { bars?: Array<{ t:string;o:number;h:number;l:number;c:number;v?:number;vw?:number }> };

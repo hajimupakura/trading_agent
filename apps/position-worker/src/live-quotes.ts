@@ -31,7 +31,7 @@ export class LiveQuoteRelay {
 
   private connect() {
     if (this.stopped) return;
-    this.socket = new WebSocket("wss://stream.data.alpaca.markets/v2/iex");
+    this.socket = new WebSocket(`wss://stream.data.alpaca.markets/v2/${config.stockFeed}`);
     this.socket.on("open", () => {
       this.socket?.send(JSON.stringify({ action: "auth", key: config.ALPACA_API_KEY_ID, secret: config.ALPACA_API_SECRET_KEY }));
     });
