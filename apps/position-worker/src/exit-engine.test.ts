@@ -20,6 +20,10 @@ describe("automatic paper exit engine", () => {
   it("holds an overnight position through the 9:30-9:44 grace window", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:new Date("2026-08-07T13:30:00Z") })).toBe(null));
   it("flats an overnight loser at 9:45", () => expect(evaluateExit({ position:base, bid:3.9, underlyingPrice:771, now:new Date("2026-08-07T13:45:00Z") })).toBe("mandatory_time_exit"));
   it("lets an overnight winner keep riding at 9:45", () => expect(evaluateExit({ position:{...base,peakBid:4.4}, bid:4.4, underlyingPrice:771, now:new Date("2026-08-07T13:45:00Z") })).toBe(null));
+  // Dollar lock stays awake during overnight grace: a big-dollar winner fading in the
+  // 9:30-9:44 window locks in 60% of the peak gain instead of round-tripping asleep.
+  it("locks a big overnight winner during the morning grace window", () => expect(evaluateExit({ position:{...base,peakBid:12}, bid:8, underlyingPrice:771, now:new Date("2026-08-07T13:35:00Z") })).toBe("trailing_stop"));
+  it("still holds a modest overnight winner through the grace window", () => expect(evaluateExit({ position:{...base,peakBid:5}, bid:4.5, underlyingPrice:771, now:new Date("2026-08-07T13:35:00Z") })).toBe(null));
 });
 
 const swing:ManagedPosition = { ...base, openedAt:Date.parse("2026-08-06T19:46:00Z") }; // 15:46 ET

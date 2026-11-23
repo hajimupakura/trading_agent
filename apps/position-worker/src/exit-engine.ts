@@ -34,11 +34,18 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // positions, so this speaks dollars: once a position's PEAK unrealized gain reaches
   // $300, never surrender more than 40% of it — sell if the bid retreats to entry +
   // 60% of the peak gain. Overlays every managed mode; respects drive's pre-10:15
-  // sleep and the overnight morning grace (peaks reset each session); RIDE (manual)
-  // stays exempt by design. On cheap multi-lot 0DTEs the % trails usually act first —
-  // this lock is the big-premium safety net the % rules structurally can't be.
+  // sleep; RIDE (manual) stays exempt by design. On cheap multi-lot 0DTEs the %
+  // trails usually act first — this lock is the big-premium safety net the % rules
+  // structurally can't be.
+  // The lock STAYS AWAKE during the overnight morning grace (2026-11-23): grace
+  // exists so overnight LOSERS aren't dumped at the bell, but a user GTH 7425C that
+  // opened 18x ($0.40 -> ~$7.50) rode down to $2.32 with every guard asleep —
+  // the lock's own charter ("even a $300 increase I will take", 2026-08-19) says a
+  // big-dollar winner gets protected the moment it exists. Peaks reset at each
+  // session's first sighting, so the lock measures the NEW day's peak, never
+  // yesterday's.
   const peakDollarGain = (position.peakBid - position.entryPrice) * position.quantity * 100;
-  const lockSuspended = (position.exitMode === "drive" && clock.minutes < 615) || (heldOvernight && clock.minutes < 585);
+  const lockSuspended = position.exitMode === "drive" && clock.minutes < 615;
   if (position.exitMode !== "trend" && !lockSuspended && peakDollarGain >= 300) {
     const lockPrice = position.entryPrice + (position.peakBid - position.entryPrice) * 0.6;
     if (bid <= lockPrice) return "trailing_stop";
