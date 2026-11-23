@@ -69,8 +69,11 @@ export async function markShadowLedger(snapshot: CommandCenter | null): Promise<
     const quote = byTicker.get(String(row.contract_ticker));
     if (!quote || !(quote.bid > 0)) continue;
     const peak = Math.max(Number(row.peak_bid ?? 0), quote.bid);
+    // last_marked_at makes staleness observable: when a "now" number looks wrong
+    // (2026-11-23 SPCX ITM put bidding under intrinsic), the mark's age settles
+    // whether it's a stale quote or an honest illiquid bid.
     const { error: markError } = await admin.from("signal_shadow_ledger")
-      .update({ last_bid: quote.bid, peak_bid: peak }).eq("id", row.id);
+      .update({ last_bid: quote.bid, peak_bid: peak, last_marked_at: new Date().toISOString() }).eq("id", row.id);
     if (markError) console.error("shadow ledger mark failed", row.id, markError.message);
     else marked += 1;
   }
