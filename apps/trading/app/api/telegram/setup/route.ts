@@ -20,6 +20,16 @@ export async function GET(request: Request) {
     const infoOnly = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`).then(response => response.json()).catch(() => null);
     return Response.json({ webhookUrl: url, info: infoOnly?.result ?? null });
   }
+  // Native "/" command menu: typing a slash in the chat shows these with descriptions.
+  await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ commands: [
+      { command: "positions", description: "Open positions, live P&L, sell/hold buttons" },
+      { command: "goal", description: "Day P&L vs the +20% goal; protect/override" },
+      { command: "news", description: "Latest market headlines (news nvda for a symbol)" },
+      { command: "help", description: "All commands and buy/sell syntax" },
+    ] }),
+  }).catch(() => undefined);
   const set = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message", "callback_query"], drop_pending_updates: true }),

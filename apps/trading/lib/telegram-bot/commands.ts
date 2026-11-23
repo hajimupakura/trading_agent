@@ -27,9 +27,11 @@ export const HELP_TEXT = [
 ].join("\n");
 
 export async function handleCommand(text: string): Promise<void> {
-  const trimmed = text.trim();
+  // Menu-button labels arrive as their visible text — strip the emoji so a tap on
+  // "📊 Positions" parses as "positions".
+  const trimmed = text.trim().replace(/^[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]\s*/u, "").trim();
   if (/^\/?(positions|pos)$/i.test(trimmed)) return listPositions();
-  if (/^\/?(help|start)$/i.test(trimmed)) return sendText(HELP_TEXT);
+  if (/^\/?(help|start)$/i.test(trimmed)) { const { sendTextWithMenu } = await import("./api"); return sendTextWithMenu(HELP_TEXT); }
   if (/^\/?(goal\s+override|override\s+goal)$/i.test(trimmed)) {
     const { setGoalOverride } = await import("@/lib/ops/goal-guard");
     return sendText(await setGoalOverride());

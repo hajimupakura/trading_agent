@@ -31,6 +31,17 @@ export async function sendText(text: string): Promise<void> {
   await api("sendMessage", { chat_id: chat, text: text.slice(0, 4000), disable_web_page_preview: true });
 }
 
+// Persistent reply keyboard: the four everyday actions always visible above the
+// user's keyboard — nobody should have to memorize bot commands. Attached to the
+// help reply once; Telegram keeps it in the chat from then on.
+export async function sendTextWithMenu(text: string): Promise<void> {
+  const chat = botChatId(); if (!chat) return;
+  await api("sendMessage", {
+    chat_id: chat, text: text.slice(0, 4000), disable_web_page_preview: true,
+    reply_markup: { keyboard: [[{ text: "📊 Positions" }, { text: "🎯 Goal" }], [{ text: "📰 News" }, { text: "❓ Help" }]], resize_keyboard: true, is_persistent: true },
+  });
+}
+
 // Edits are best-effort: a failed edit must never fail the trade it reports on.
 export async function editMessage(messageId: number, text: string, buttons?: InlineButton[][]): Promise<void> {
   const chat = botChatId(); if (!chat || !messageId) return;
