@@ -13,7 +13,10 @@ import type { CommandCenter, WatchUnderlying } from "./types";
 // freshness, delta band) — the relaxed monitorOnly screening remains display-only and
 // can never pick a tradeable contract. Refreshed by the cron on a rotating schedule.
 export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<CommandCenter> {
-  if (!process.env.MASSIVE_API_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["MASSIVE_API_KEY is not configured"] };
+  // Chains ride Alpaca (2026-11-19). This used to gate on MASSIVE_API_KEY, which only
+  // kept working because the retired key still sits in Vercel env — deleting that
+  // env var would have silently killed every watch-name scan.
+  if (!process.env.ALPACA_API_KEY_ID || !process.env.ALPACA_API_SECRET_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["Alpaca market-data keys are not configured"] };
   // Same layout as SPY/SPX: a 0-2 DTE chain plus the 1M/3M/6M/9M/1Y horizons.
   const [marketResult, shortResult, longResult] = await Promise.allSettled([
     getMarketState(symbol),
@@ -40,6 +43,15 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<Com
   if (signal && ["enter_call","enter_put"].includes(signal.action)) {
     const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying:symbol, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString() });
     if (signalError) errors.push(`Signal persistence: ${signalError.message}`);
+    // Telegram buy cards (2026-11-23): watch names route through THIS function, not
+    // refreshCommandCenter, so the proposal hook must live here too — without it only
+    // SPY/SPX fires carded and every equity fire (the feed's 21-for-21 day on 11/20)
+    // reached Telegram as text with no buttons. The module dedupes and no-ops when
+    // the bot env is absent.
+    {
+      const { proposeTelegramTrade } = await import("@/lib/telegram-bot/propose");
+      await proposeTelegramTrade(signal, snapshot).catch(error => console.error("tg proposal failed", error instanceof Error ? error.message : error));
+    }
   }
   return snapshot;
 }
