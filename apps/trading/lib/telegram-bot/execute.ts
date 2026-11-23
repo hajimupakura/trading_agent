@@ -49,7 +49,7 @@ export async function executeBuyTicket(ticketId: string): Promise<string> {
     .update({ status: "executing", decided_at: new Date().toISOString() })
     .eq("id", ticketId).eq("status", "proposed").select("id,payload,source,created_at,tg_message_id").maybeSingle();
   if (!claimed) return "Ticket already handled (or expired).";
-  const finish = async (status: "executed" | "failed" | "expired", result: Record<string, unknown>, reply: string) => {
+  const finish = async (status: "executed" | "failed" | "expired" | "skipped", result: Record<string, unknown>, reply: string) => {
     await db.from("tg_tickets").update({ status, result }).eq("id", ticketId);
     return reply;
   };
