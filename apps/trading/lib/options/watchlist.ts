@@ -42,7 +42,10 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<Com
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
   if (signal && ["enter_call","enter_put"].includes(signal.action)) {
     const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying:symbol, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString() });
-    if (signalError) errors.push(`Signal persistence: ${signalError.message}`);
+    // console.error, not errors.push: the snapshot already persisted above, so a push
+    // here reaches nobody — which is exactly how the SPY/SPX-only CHECK constraint
+    // rejected every equity signal for three months without a trace (found 2026-11-23).
+    if (signalError) console.error("Signal persistence failed", symbol, signalError.message);
     // Telegram buy cards (2026-11-23): watch names route through THIS function, not
     // refreshCommandCenter, so the proposal hook must live here too — without it only
     // SPY/SPX fires carded and every equity fire (the feed's 21-for-21 day on 11/20)
