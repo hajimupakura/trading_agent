@@ -65,6 +65,25 @@ export async function recentNews(symbol: string | null, limit = 5): Promise<News
   return (data ?? []).map(row => ({ headline: String(row.headline), source: row.source ? String(row.source) : null, url: row.url ? String(row.url) : null, publishedAt: Date.parse(String(row.published_at)) }));
 }
 
+// PHASE 3 STAMP: the news state known at fire time, written onto option_signals and
+// shadow-ledger rows so "do fires with news behave differently" is answered from
+// stamped records, not retro-joins against a purging firehose. Best-effort by
+// contract — a news hiccup must never block a signal write (callers catch to null).
+export async function newsContextFor(symbol: string): Promise<{ h1: number; h3: number; freshestMins: number | null; headline: string | null }> {
+  const { data } = await createAdminClient().from("market_news").select("headline,published_at")
+    .overlaps("symbols", symbolFilter(symbol))
+    .gte("published_at", new Date(Date.now() - 3 * 3_600_000).toISOString())
+    .order("published_at", { ascending: false }).limit(50);
+  const rows = data ?? [];
+  const hourAgo = Date.now() - 3_600_000;
+  return {
+    h1: rows.filter(row => Date.parse(String(row.published_at)) >= hourAgo).length,
+    h3: rows.length,
+    freshestMins: rows.length ? Math.round((Date.now() - Date.parse(String(rows[0].published_at))) / 60_000) : null,
+    headline: rows.length ? String(rows[0].headline).slice(0, 160) : null,
+  };
+}
+
 export const newsAge = (publishedAt: number): string => {
   const minutes = Math.max(0, Math.round((Date.now() - publishedAt) / 60_000));
   return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;

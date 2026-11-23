@@ -82,7 +82,9 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {
-    const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString() });
+    // Phase 3 stamp: the news state known at fire time rides the signal record.
+    const newsContext = await import("@/lib/news/market-news").then(module => module.newsContextFor(underlying)).catch(() => null);
+    const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString(), news_context:newsContext });
     if (signalError) errors.push(`Signal persistence: ${signalError.message}`);
     // Telegram bot (2026-11-21, user call): EVERY feed fire — all watch names, not
     // just SPX — becomes a one-tap Robinhood buy card. The module dedupes per

@@ -24,11 +24,13 @@ export async function recordShadowSkip(input: { signal: Signal; underlying: stri
     .gte("created_at", new Date(Date.now() - DEDUPE_MS).toISOString()).limit(1).maybeSingle();
   if (recentError) throw new Error(`Shadow ledger dedupe check failed: ${recentError.message}`);
   if (recent) return { recorded: false };
+  // Phase 3 stamp: the news state known at fire time rides the shadow record.
+  const newsContext = await import("@/lib/news/market-news").then(module => module.newsContextFor(underlying)).catch(() => null);
   const { error } = await admin.from("signal_shadow_ledger").insert({
     signal_id: signal.id, underlying, action: signal.action, setup: signal.setup,
     contract_ticker: contract.ticker, expiration_date: contract.expirationDate ?? null,
     entry_ask: contract.ask, entry_bid: contract.bid, underlying_price: signal.market.price,
-    skip_reason: skipReason, last_bid: contract.bid, peak_bid: contract.bid,
+    skip_reason: skipReason, last_bid: contract.bid, peak_bid: contract.bid, news_context: newsContext,
   });
   if (error) throw new Error(`Shadow ledger insert failed: ${error.message}`);
   return { recorded: true };

@@ -50,7 +50,9 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying, options?: { 
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying:symbol, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
   if (signal && ["enter_call","enter_put"].includes(signal.action)) {
-    const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying:symbol, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString() });
+    // Phase 3 stamp: the news state known at fire time rides the signal record.
+    const newsContext = await import("@/lib/news/market-news").then(module => module.newsContextFor(symbol)).catch(() => null);
+    const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying:symbol, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString(), news_context:newsContext });
     // console.error, not errors.push: the snapshot already persisted above, so a push
     // here reaches nobody — which is exactly how the SPY/SPX-only CHECK constraint
     // rejected every equity signal for three months without a trace (found 2026-11-23).

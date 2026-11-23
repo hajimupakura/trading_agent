@@ -39,13 +39,16 @@ async function record(input: { underlying: string; setup: "gap_fade" | "cascade"
   if (dedupeError || recent) return false; // fail closed on dedupe uncertainty — never spam rows
   const contract = pickContract(input.snapshot, input.side);
   if (!contract) return false;
+  // Phase 3 stamp: violent-day auditions carry their news state too — these are the
+  // fires where "was there a story" matters most.
+  const newsContext = await import("@/lib/news/market-news").then(module => module.newsContextFor(input.underlying)).catch(() => null);
   const { error } = await admin.from("signal_shadow_ledger").insert({
     signal_id: `shadow-${input.setup}-${action}-${etDate()}-${Date.now() % 100000}`,
     underlying: input.underlying, action, setup: input.setup,
     contract_ticker: contract.ticker, expiration_date: contract.expirationDate ?? null,
     entry_ask: contract.ask, entry_bid: contract.bid, underlying_price: input.snapshot.market?.price ?? null,
     skip_reason: `violent-day shadow (NOT armed — auditioning): ${input.note}`,
-    last_bid: contract.bid, peak_bid: contract.bid,
+    last_bid: contract.bid, peak_bid: contract.bid, news_context: newsContext,
   });
   if (error) { console.error("violent shadow insert failed", error.message); return false; }
   const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();
