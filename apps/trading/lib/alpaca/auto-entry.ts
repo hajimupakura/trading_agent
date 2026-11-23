@@ -24,9 +24,11 @@ async function entriesToday(userId: string) {
   const localAtGuess = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(midnightGuess)).map(part => [part.type, part.value]));
   const representedAsUtc = Date.UTC(Number(localAtGuess.year), Number(localAtGuess.month) - 1, Number(localAtGuess.day), Number(localAtGuess.hour), Number(localAtGuess.minute), Number(localAtGuess.second));
   const since = new Date(midnightGuess - (representedAsUtc - midnightGuess)).toISOString();
-  const { count, error } = await createAdminClient().from("paper_trade_orders").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
+  // Sleeve-aware (2026-11-23): index (SPX/SPY) and equity entries count separately.
+  const { data, error } = await createAdminClient().from("paper_trade_orders").select("underlying").eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
   if (error) throw new Error(`Trade journal unavailable: ${error.message}`);
-  return count ?? 0;
+  const index = (data ?? []).filter(row => ["SPX", "SPY"].includes(String(row.underlying))).length;
+  return { index, equity: (data ?? []).length - index };
 }
 
 // Housekeeping skips — the setup is already expressed (holding / duplicate id) or
@@ -124,8 +126,20 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   if (trading.positions.some(position => `O:${position.symbol}` === contract.ticker)) return { entered: null, skipped: "already holding this contract" };
   // NOTE: event-day caution applies to the REAL-MONEY lane only — paper deliberately
   // trades unfiltered (its record measures the raw strategy, event days included).
-  const quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings });
-  const risk = validatePaperEntry({ signal, contract, ...trading, tradesToday, settings, quantity });
+  // TWO SLEEVES (user call, 2026-11-23: "give SPX and SPY their own budget of 2000 —
+  // their own lane, and the rest their own"): the index sleeve runs $1,800 quality +
+  // $200 SPX kicker (= the $2,000 budget), ONE position at a time (SPX and SPY are
+  // the same market), 3 entries/day. The equity sleeve keeps the watchlist spec:
+  // $500/ticker, 5/day, 5 concurrent (= the $2,500 budget). Positions and daily
+  // counts are classified by OCC root so the sleeves can never consume each other's
+  // slots: five equity entries leave the SPX lane fully armed, and vice versa.
+  const isIndex = ["SPX", "SPY"].includes(underlying);
+  const sleeveSettings = isIndex ? { ...settings, maxTradeDebit: 1800, maxOpenPositions: 1, maxTradesPerDay: 3 } : settings;
+  const isIndexOcc = (symbol: string) => /^(SPXW|SPX|SPY)\d/.test(symbol.replace(/^O:/, ""));
+  const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex);
+  const sleeveTradesToday = isIndex ? tradesToday.index : tradesToday.equity;
+  const quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings: sleeveSettings });
+  const risk = validatePaperEntry({ signal, contract, ...trading, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
   const clientOrderId = `velocity-auto-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
   const entryLimit = Math.max(0.01, Number(contract.midpoint.toFixed(2)));
