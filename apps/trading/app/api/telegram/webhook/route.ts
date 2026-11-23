@@ -40,7 +40,13 @@ export async function POST(request: Request) {
       if (outcome != null) {
         // Replace the card's buttons with the outcome so a handled card can't be re-tapped.
         await editMessage(messageId, `${originalText}\n\n${outcome || "Done."}`);
-        if (outcome && (verb === "sa" || verb === "sh" || verb.startsWith("sn") || verb === "hd" || verb === "hb")) await sendText(outcome).catch(() => undefined);
+        // ALWAYS also answer as a NEW message (silent only for skips): an edit doesn't
+        // notify and lands wherever the card sits in scroll history — on 2026-11-23
+        // the user tapped a 17-min-old TSLA card, the stale refusal was appended to
+        // the card far above the fold, and all they saw was the vanishing "Working…"
+        // toast. Every executing tap must end in an explicit ✅/🛑/⌛ + reason at the
+        // bottom of the chat.
+        if (outcome && verb !== "cx") await sendText(outcome).catch(() => undefined);
       }
       return Response.json({ ok: true });
     }
