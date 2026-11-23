@@ -39,21 +39,32 @@ export async function recordShadowSkip(input: { signal: Signal; underlying: stri
 // Live-marking: each tick, open rows get their contract's current bid from the fresh
 // SPX snapshot or (any other underlying, and SPX tickers that left the snapshot) a
 // direct Alpaca quote; peak_bid ratchets up. Rows whose expiry has passed in ET close.
-export async function markShadowLedger(snapshot: CommandCenter | null): Promise<{ marked: number; closed: number }> {
+export async function markShadowLedger(snapshot: CommandCenter | null): Promise<{ marked: number; closed: number; quoteError?: string }> {
   const admin = createAdminClient();
   const { data: open, error } = await admin.from("signal_shadow_ledger")
-    .select("id, contract_ticker, expiration_date, peak_bid")
+    .select("id, underlying, contract_ticker, expiration_date, peak_bid")
     .eq("status", "open").limit(200);
   if (error) throw new Error(`Shadow ledger read failed: ${error.message}`);
   if (!open?.length) return { marked: 0, closed: 0 };
   const etToday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const byTicker = new Map((snapshot?.contracts ?? []).map(contract => [contract.ticker, { bid: contract.bid }]));
-  // A skipped contract that runs deep ITM (the big counterfactual winners) falls out
-  // of the snapshot's ranked cut — quote those directly or the ledger under-reports
-  // exactly the misses it exists to measure.
+  // EQUITY ROWS MARK FROM THEIR OWN SNAPSHOTS FIRST (2026-11-23: the direct-quote
+  // call failed silently through a throttled afternoon and froze every equity row —
+  // an SPCX put displayed -14% while trading +115%). The watch scans already hold
+  // fresh quotes for these chains; use them, and only direct-quote what remains
+  // (deep-ITM runners that left the ranked cut, the exact rows the ledger exists for).
+  const needByUnderlying = new Set(open.filter(row => (row.expiration_date == null || String(row.expiration_date) >= etToday) && !byTicker.has(String(row.contract_ticker))).map(row => String(row.underlying)));
+  needByUnderlying.delete("SPX");
+  for (const underlying of needByUnderlying) {
+    const { data: snapRow } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying", underlying).maybeSingle();
+    for (const contract of ((snapRow?.payload as CommandCenter | null)?.contracts ?? [])) {
+      if (contract.quoteUpdatedAt != null && Date.now() - contract.quoteUpdatedAt < 10 * 60_000 && !byTicker.has(contract.ticker)) byTicker.set(contract.ticker, { bid: contract.bid });
+    }
+  }
+  let quoteError: string | undefined;
   const missing = open.filter(row => (row.expiration_date == null || String(row.expiration_date) >= etToday) && !byTicker.has(String(row.contract_ticker)));
   if (missing.length) {
-    const direct = await alpacaLatestOptionQuotes(missing.map(row => String(row.contract_ticker))).catch(error => { console.error("shadow ledger direct quotes failed", error instanceof Error ? error.message : error); return new Map<string, { bid: number; ask: number }>(); });
+    const direct = await alpacaLatestOptionQuotes(missing.map(row => String(row.contract_ticker))).catch(error => { quoteError = error instanceof Error ? error.message : String(error); console.error("shadow ledger direct quotes failed", quoteError); return new Map<string, { bid: number; ask: number }>(); });
     for (const [ticker, quote] of direct) byTicker.set(ticker, { bid: quote.bid });
   }
   let marked = 0, closed = 0;
@@ -77,5 +88,5 @@ export async function markShadowLedger(snapshot: CommandCenter | null): Promise<
     if (markError) console.error("shadow ledger mark failed", row.id, markError.message);
     else marked += 1;
   }
-  return { marked, closed };
+  return { marked, closed, quoteError };
 }

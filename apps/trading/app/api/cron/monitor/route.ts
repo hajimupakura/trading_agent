@@ -64,7 +64,7 @@ export async function GET(request: Request) {
   }
   // Shadow ledger live-mark: open skipped-signal rows pick up fresh quotes (last
   // bid, peak bid) so the dashboard's Signal Feed shows what each veto cost.
-  await markShadowLedger(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("shadow ledger mark failed", error));
+  const shadowMark = await markShadowLedger(autoCandidates[0]?.snapshot ?? null).catch(error => { console.error("shadow ledger mark failed", error); return { marked: 0, closed: 0, quoteError: error instanceof Error ? error.message : String(error) }; });
   // Violent-day shadow trackers (gap_fade + cascade): audition on SPX, never trade.
   const { runViolentDayShadow } = await import("@/lib/options/violent-shadow");
   await runViolentDayShadow(autoCandidates[0]?.snapshot ?? null).catch(error => console.error("violent shadow failed", error));
@@ -161,6 +161,7 @@ export async function GET(request: Request) {
     replay: replay === null ? null : (replay.error ? [replay.error] : []),
     research: research === null ? null : (research.error ? [research.error] : []),
     news: newsErrors,
+    "shadow-mark": shadowMark.quoteError ? [shadowMark.quoteError] : [],
   }).catch(error => console.error("heartbeat failed", error));
   return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, metals, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
