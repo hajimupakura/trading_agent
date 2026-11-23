@@ -45,7 +45,9 @@ export async function runFastTriggers(alreadyRefreshed: string[]): Promise<Array
   for (const check of checks) {
     if (check.status !== "fulfilled" || !check.value.triggered) continue;
     try {
-      const snapshot = await refreshWatchSnapshot(check.value.symbol);
+      // A fast-trigger refresh exists to evaluate the SHORT chain right now — long
+      // horizons reuse the last rotation's (and save five chain fetches per hit).
+      const snapshot = await refreshWatchSnapshot(check.value.symbol, { includeLongHorizons: false });
       fired.push({ underlying: check.value.symbol, snapshot });
     } catch (error) {
       console.error("fast trigger refresh failed", check.value.symbol, error);

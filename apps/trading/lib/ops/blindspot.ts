@@ -58,7 +58,10 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
       // Provider auth failures sit in payload.errors as text; surface them as the
       // single root cause they usually are instead of per-symbol mystery symptoms.
       const providerErrors = (snap.payload?.errors ?? []).filter(message => /403|401|unauthorized|forbidden|entitlement/i.test(String(message)));
-      if (providerErrors.length) problems.push(`data provider is rejecting our access (${String(providerErrors[0]).slice(0, 80)}) — check the Alpaca market-data keys`);
+      // One 403 on one expiry while sibling calls succeed = request throttling under
+      // burst load (2026-11-23), not dead keys — only an ALL-errors snapshot reads as
+      // an access problem worth paging over.
+      if (providerErrors.length && (snap.payload?.contracts ?? []).length === 0) problems.push(`data provider is rejecting our access (${String(providerErrors[0]).slice(0, 80)}) — check the Alpaca market-data keys/subscription`);
       // SPX has no native index feed — chart, indicators, and signal engine are all
       // assembled from chain quotes, so a near-dated chain whose quotes have ALL
       // stopped updating blinds everything at once while every panel still renders

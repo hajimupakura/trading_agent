@@ -40,7 +40,7 @@ export async function GET(request: Request) {
   const results = await Promise.allSettled([
     refreshCommandCenter("SPY", undefined, { includeLongHorizons }),
     refreshCommandCenter("SPX", undefined, { includeLongHorizons }),
-    ...watchGroup.map(symbol => refreshWatchSnapshot(symbol)),
+    ...watchGroup.map(symbol => refreshWatchSnapshot(symbol, { includeLongHorizons })),
   ]);
   // Autonomous paper entries — SPY plus this tick's refreshed watch tickers. Global
   // gates (one position, trades/day, daily loss, cooldown, kill switch) bound the

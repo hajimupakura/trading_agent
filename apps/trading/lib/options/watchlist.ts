@@ -12,20 +12,29 @@ import type { CommandCenter, WatchUnderlying } from "./types";
 // The signal path re-screens contracts with the STRICT trading filters (volume, spread,
 // freshness, delta band) — the relaxed monitorOnly screening remains display-only and
 // can never pick a tradeable contract. Refreshed by the cron on a rotating schedule.
-export async function refreshWatchSnapshot(symbol: WatchUnderlying): Promise<CommandCenter> {
+export async function refreshWatchSnapshot(symbol: WatchUnderlying, options?: { includeLongHorizons?: boolean }): Promise<CommandCenter> {
   // Chains ride Alpaca (2026-11-19). This used to gate on MASSIVE_API_KEY, which only
   // kept working because the retired key still sits in Vercel env — deleting that
   // env var would have silently killed every watch-name scan.
   if (!process.env.ALPACA_API_KEY_ID || !process.env.ALPACA_API_SECRET_KEY) return { configured:false, asOf:Date.now(), market:null, spotPrice:null, contracts:[], signal:null, errors:["Alpaca market-data keys are not configured"] };
-  // Same layout as SPY/SPX: a 0-2 DTE chain plus the 1M/3M/6M/9M/1Y horizons.
+  // Same layout as SPY/SPX: a 0-2 DTE chain plus the 1M/3M/6M/9M/1Y horizons — but
+  // horizons only on the quarter-hour (2026-11-23): refetching five long chains per
+  // name per 5-minute rotation was ~80% of the Alpaca call volume for data that
+  // barely moves, and on the Huang-reinstatement morning it throttled us into
+  // scattered single-expiry 403s. Off the quarter-hour, longs reuse the previous
+  // snapshot (the command-center pattern).
   const [marketResult, shortResult, longResult] = await Promise.allSettled([
     getMarketState(symbol),
     getOptionChain(symbol, undefined, { monitorOnly:true }),
-    getHorizonChains(symbol, ["1M", "3M", "6M", "9M", "1Y"]),
+    options?.includeLongHorizons !== false ? getHorizonChains(symbol, ["1M", "3M", "6M", "9M", "1Y"]) : Promise.resolve(null),
   ]);
   const market = marketResult.status === "fulfilled" ? marketResult.value : null;
   const shortContracts = shortResult.status === "fulfilled" ? shortResult.value : [];
-  const longContracts = longResult.status === "fulfilled" ? longResult.value : [];
+  let longContracts = longResult.status === "fulfilled" && longResult.value != null ? longResult.value : [];
+  if (!longContracts.length) {
+    const { data: previous } = await createAdminClient().from("options_monitor_snapshots").select("payload").eq("underlying", symbol).maybeSingle();
+    longContracts = ((previous?.payload as CommandCenter | undefined)?.contracts ?? []).filter(contract => contract.dte > 7);
+  }
   // Cap per expiration session actually present (Fridays fetch Fri/Mon/Tue, dte 0/3/4).
   const shortDtes = [...new Set(shortContracts.map(contract => contract.dte))].sort((a, b) => a - b).slice(0, 3);
   const contractsByDte = shortDtes.flatMap(dte => shortContracts.filter(contract => contract.dte === dte).slice(0,40));

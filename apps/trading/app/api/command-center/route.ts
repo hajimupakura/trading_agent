@@ -15,7 +15,9 @@ export async function GET(request: Request) {
   if ((WATCH_UNDERLYINGS as readonly string[]).includes(symbol)) {
     const snapshot = await readWatchSnapshot(symbol as WatchUnderlying);
     if (snapshot.configured && Date.now() - snapshot.asOf > 45_000) {
-      const fresh = await refreshWatchSnapshot(symbol as WatchUnderlying).catch(() => null);
+      // Dashboard-tab refreshes (every 45s while a tab is open) reuse the rotation's
+      // long horizons — a watched ticker must not multiply the Alpaca call volume.
+      const fresh = await refreshWatchSnapshot(symbol as WatchUnderlying, { includeLongHorizons: false }).catch(() => null);
       if (fresh) return Response.json(fresh, { headers:{ "Cache-Control":"no-store" } });
     }
     return Response.json(snapshot, { headers:{ "Cache-Control":"no-store" } });
