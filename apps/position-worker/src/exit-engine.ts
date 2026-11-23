@@ -20,7 +20,7 @@ export const EXIT_RULES = { stopLossPct:.30, trailActivationPct:.33, trailPct:.2
 // stop/trail rules apply, minus the 10-minute follow-through test and underlying
 // invalidation (a reclaim entry's thesis needs an hour, not ten minutes).
 
-export type ExitReason = "mandatory_time_exit"|"premium_stop"|"underlying_invalidation"|"trailing_stop"|"no_follow_through"|"scalp_target"|"scalp_time_box";
+export type ExitReason = "mandatory_time_exit"|"premium_stop"|"underlying_invalidation"|"trailing_stop"|"no_follow_through"|"scalp_target"|"scalp_time_box"|"breakeven_ratchet";
 export function easternClock(now:Date) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", weekday:"short", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(now).map(part => [part.type, part.value]));
   return { weekday:parts.weekday, dateKey:`${parts.year}-${parts.month}-${parts.day}`, minutes:Number(parts.hour) * 60 + Number(parts.minute) };
@@ -132,6 +132,14 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
       ? (gain >= 0.20 ? 0.15 : null)
       : gain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : gain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
   if (trail != null && !(heldOvernight && clock.minutes < 585) && bid <= position.peakBid * (1 - trail)) return "trailing_stop";
+  // BREAKEVEN RATCHET (2026-11-23, BS-sim over the 26 sampled SPX days: current rules
+  // -38% total vs -10% with the ratchet, no winner clipped): once the peak has reached
+  // +25%, the position may never round-trip into a loss — bid back at entry exits flat.
+  // This is a FLOOR behind the trail, not a tighter arm (the Aug grid proved early
+  // TRAILS halve the edge): a genuine round-trip to entry is a real reversal, not
+  // spread noise, which is what makes it robust where tight arms are not. Big-premium
+  // positions keep their own calibrated envelope; morning grace still applies.
+  if (!bigPremium && gain >= 0.25 && bid <= position.entryPrice && !(heldOvernight && clock.minutes < 585)) return "breakeven_ratchet";
   // No-follow-through is an intraday scalp rule; swing, long-dated, and overnight
   // positions are governed by the stop and trails instead.
   if (!isSwing && !longDated && !heldOvernight && now.getTime() - position.openedAt >= EXIT_RULES.noFollowThroughMs && position.peakBid < position.entryPrice * (1 + EXIT_RULES.followThroughPct)) return "no_follow_through";

@@ -10,6 +10,10 @@ describe("automatic paper exit engine", () => {
   it("protects a winner with the 20% trail", () => expect(evaluateExit({ position:{...base,peakBid:6}, bid:4.8, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
   it("tightens the trail after a 100% gain", () => expect(evaluateExit({ position:{...base,peakBid:8}, bid:6.79, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
   it("exits after ten minutes without 10% follow-through", () => expect(evaluateExit({ position:{...base,peakBid:4.2}, bid:3.9, underlyingPrice:771, now:at("14:11") })).toBe("no_follow_through"));
+  // Breakeven ratchet: a +25%-peaked winner never round-trips into a loss…
+  it("ratchets a +25% peak to breakeven when bid returns to entry", () => expect(evaluateExit({ position:{...base,peakBid:5.1}, bid:4, underlyingPrice:771, now:at("14:05") })).toBe("breakeven_ratchet"));
+  // …but holds while the bid stays above entry (trail at 33/20 not yet armed at +27%).
+  it("does not ratchet while the bid holds above entry", () => expect(evaluateExit({ position:{...base,peakBid:5.1}, bid:4.2, underlyingPrice:771, now:at("14:05") })).toBe(null));
   it("forces the time exit at 3:10 p.m. ET", () => expect(evaluateExit({ position:base, bid:4, underlyingPrice:771, now:at("19:10") })).toBe("mandatory_time_exit"));
   // Morning grace (2026-08-14): overnight positions are NOT dumped at the bell — the
   // open gets until 9:45 to show its hand. Losers flat at 9:45; winners keep riding.
