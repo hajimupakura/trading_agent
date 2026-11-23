@@ -72,8 +72,11 @@ export async function GET(request: Request) {
   const { notifyManualHoldDips } = await import("@/lib/telegram-bot/dips");
   await notifyManualHoldDips().catch(error => console.error("tg dip notify failed", error));
   // Benzinga headline ingest (context, never signal): one unfiltered pull per tick.
+  // Failures go to the heartbeat (not just console) — a silently dead news feed would
+  // otherwise just look like a quiet news day, the classic blind gap.
   const { ingestMarketNews } = await import("@/lib/news/market-news");
-  await ingestMarketNews().catch(error => console.error("news ingest failed", error));
+  const newsErrors: string[] = [];
+  await ingestMarketNews().catch(error => { newsErrors.push(error instanceof Error ? error.message : String(error)); console.error("news ingest failed", error); });
   // Real-money entries on the Robinhood agentic account (separate venue, its own caps,
   // OFF unless settings.rhAutoEntriesEnabled). SPX first (user preference, 2026-08-13 —
   // 60/40 tax treatment); when no SPX contract fits the per-trade cap the lane skips and
@@ -147,6 +150,7 @@ export async function GET(request: Request) {
     sectors: sectors === null ? null : (sectors.errors ?? []),
     replay: replay === null ? null : (replay.error ? [replay.error] : []),
     research: research === null ? null : (research.error ? [research.error] : []),
+    news: newsErrors,
   }).catch(error => console.error("heartbeat failed", error));
   return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, metals, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
