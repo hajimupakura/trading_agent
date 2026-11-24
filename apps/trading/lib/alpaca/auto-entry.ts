@@ -153,6 +153,19 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // tracked, so the ledger keeps scoring whatever this reserve costs or saves.
   const afternoonReserve = 2;
   if (!isIndex && etMin < 750 && tradesToday.equityMorning >= Math.max(1, sleeveSettings.maxTradesPerDay - afternoonReserve)) return { entered: null, skipped: `morning budget: ${sleeveSettings.maxTradesPerDay - afternoonReserve} equity entries already taken before 12:30 ET — ${afternoonReserve} slots held for afternoon setups` };
+  // LAST-SLOTS HEALTH GATE (user call 2026-11-23: "can things like vwap be used to
+  // choose"): when the equity sleeve is down to its final 2 daily entries, a fire may
+  // spend one only if the name's dip today HELD session VWAP (health >= 1) — the
+  // 1-year scan's accumulation tell (held: 85.6% second-leg vs 57-65% broken; 97%
+  // when morning+held). Early slots trade as normal: fresh surges often have no
+  // pullback yet (health 0) and the year says they are the best cohort — only the
+  // LAST bullets demand proof. Best-effort (a bars hiccup scores 0, which only
+  // matters in the last-2 regime); every veto is shadow-tracked like all skips.
+  if (!isIndex && sleeveSettings.maxTradesPerDay - sleeveTradesToday <= 2) {
+    const { pullbackHealthNow } = await import("@/lib/options/pullback-grade");
+    const health = await pullbackHealthNow(underlying, signal.action === "enter_call" ? 1 : -1).catch(() => 0);
+    if (health < 1) return { entered: null, skipped: `last ${sleeveSettings.maxTradesPerDay - sleeveTradesToday} slots are reserved for proven setups — ${underlying}'s dip has not held VWAP today (health ${health})` };
+  }
   // CHEAPER-STRIKE FALLBACK (user call 2026-11-23: MU fired 11 times, every pick
   // $1,000+, all skipped on the $500 cap): when the signal's quality pick busts the
   // sleeve's per-trade cap, buy the highest-delta ELIGIBLE strike that fits instead —

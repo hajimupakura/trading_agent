@@ -81,6 +81,29 @@ export function gradePullback(bars: MinuteBar[], fireMin: number, dir: 1 | -1): 
   };
 }
 
+// LIVE health check (user call 2026-11-23: "spend the last slots using VWAP"): at
+// fire time, find today's strongest 30-min leg so far in the thesis direction (the
+// year-scan's event definition) and grade its pullback. Score: 2 = dip held VWAP on
+// fading volume (85.6% second-leg rate over 1yr; 97% pre-11am), 1 = held VWAP,
+// 0 = no meaningful leg/pullback yet (fresh surge — unproven, not penalized),
+// -1 = dip broke VWAP (the weak cohort). Best-effort: callers treat errors as 0.
+export async function pullbackHealthNow(symbol: string, dir: 1 | -1): Promise<number> {
+  const proxy = ["SPX", "SPXW"].includes(symbol.toUpperCase()) ? "SPY" : symbol.toUpperCase();
+  const bars = await dayBars(proxy);
+  if (bars.length < 45) return 0;
+  let best = { move: 0, index: 0 };
+  for (let i = 0; i + 30 < bars.length; i++) {
+    const move = dir * (bars[i + 30].c - bars[i].c) / bars[i].c;
+    if (move > best.move) best = { move, index: i };
+  }
+  if (best.move < 0.003) return 0;
+  const grade = gradePullback(bars, bars[best.index].min, dir) as { pullback?: boolean; heldVwap?: boolean; volumeFading?: boolean };
+  if (grade.pullback !== true) return 0;
+  if (grade.heldVwap && grade.volumeFading) return 2;
+  if (grade.heldVwap) return 1;
+  return -1;
+}
+
 export async function runPullbackGrades(): Promise<{ graded: number; errors: string[] }> {
   const { minutes, weekday } = etParts(new Date());
   // One shot after the close: 16:05-16:25 ET weekdays; idempotent via the null filter.
