@@ -109,6 +109,23 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   if (existing) return { entered: null, skipped: "signal already traded" };
   const { data: control } = await admin.from("position_manager_control").select("kill_switch").eq("id", true).single();
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
+  // ENTRY-QUALITY GATE (2026-11-24, walk-forward 54%->81% win on unseen months): the
+  // scorer estimates P(this fire never reaches +10%) from fire-time facts and skips
+  // the historically-dying profile. Visible skip — shadow-tracked, so the ledger
+  // keeps score on every trade the gate refuses.
+  {
+    const { scoreEntry } = await import("@/lib/ml/entry-gate");
+    const etParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    const verdict = scoreEntry({
+      bars: ((snapshot?.market as { bars?: Array<{ close: number }> })?.bars ?? []),
+      etMinutes: Number(etParts.hour) * 60 + Number(etParts.minute),
+      dir: signal.action === "enter_call" ? 1 : -1,
+      isIndex: ["SPX", "SPY", "QQQ", "GLD", "SLV"].includes(underlying),
+      dow: ["Mon", "Tue", "Wed", "Thu", "Fri"].indexOf(String(etParts.weekday)),
+      premium: contract.ask,
+    });
+    if (verdict.skip) return { entered: null, skipped: `entry scorer: dying-trade profile (score ${verdict.prob.toFixed(4)} above ${verdict.threshold.toFixed(4)}${verdict.legPct != null ? `, 30-min leg ${verdict.legPct.toFixed(2)}%` : ", leg unknown"})` };
+  }
   const [trading, tradesToday, { data: recentExits, error: recentExitsError }] = await Promise.all([
     getPaperTradingState(), entriesToday(owner.id),
     admin.from("paper_trade_orders").select("contract_ticker,risk_snapshot,updated_at").eq("user_id", owner.id).eq("action", "sell_to_close").gte("updated_at", new Date(Date.now() - PAPER_RULES.cooldownMinutes * 60_000).toISOString()),
