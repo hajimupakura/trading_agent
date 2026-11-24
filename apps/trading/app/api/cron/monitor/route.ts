@@ -159,6 +159,10 @@ export async function GET(request: Request) {
   // during GTH hours, paging (max 3/night) with the live ES read attached.
   const { runOvernightNewsSentry } = await import("@/lib/news/overnight-sentry");
   await runOvernightNewsSentry().catch(error => console.error("overnight news sentry failed", error));
+  // DB-queued research fetches: replay/backtest data pulled server-side where the
+  // Alpaca keys live (one pending research_requests row per tick, read-only).
+  const { runResearchQueue } = await import("@/lib/research/queue");
+  await runResearchQueue().catch(error => console.error("research queue failed", error));
   void overnight;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
