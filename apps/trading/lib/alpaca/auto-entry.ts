@@ -42,7 +42,7 @@ async function entriesToday(userId: string) {
 // fire is recorded and displayed (user call, 2026-11-19: "I want to see those
 // skipped rows"); this list only decides which ones ALSO page Telegram, so a held
 // position doesn't ping the phone every hour while the setup keeps re-firing.
-const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off", "morning budget"];
+const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "already traded this name this side today", "scalp lane off", "morning budget"];
 
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
   // FAIL LOUD (2026-11-23): a throw inside the gate chain used to escape to the cron
@@ -149,6 +149,21 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   const convexityTickers = new Set((convexityRows ?? []).map(row => String(row.contract_ticker)));
   const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex && !convexityTickers.has(`O:${position.symbol}`));
   const sleeveTradesToday = isIndex ? tradesToday.index : tradesToday.equity;
+  // ONE ENTRY PER NAME PER SIDE PER DAY (2026-11-24, after NVDA fired twice in 5
+  // minutes and the lane bought both strikes): the research corpus that validated
+  // every rule records exactly ONE event per (day, symbol, direction) — a same-day
+  // same-side re-entry is behavior the backtests never measured. Align live with
+  // what was validated. Convexity swarms are exempt (their own lane, own budget).
+  const sideChar = signal.action === "enter_call" ? "C" : "P";
+  const { data: todaysSameName } = await admin.from("paper_trade_orders").select("contract_ticker")
+    .eq("action", "buy_to_open").eq("underlying", underlying)
+    .gte("created_at", `${new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date())}T00:00:00-05:00`)
+    .neq("status", "rejected");
+  const sameSideToday = (todaysSameName ?? []).some(row => {
+    const ticker = String(row.contract_ticker);
+    return !convexityTickers.has(ticker) && new RegExp(`\\d{6}${sideChar}\\d{8}$`).test(ticker);
+  });
+  if (sameSideToday) return { entered: null, skipped: "already traded this name this side today" };
   // AFTERNOON RESERVE (recalibrated same night, 2026-11-23): the first version capped
   // mornings at 2 of 5 entries, fitted to the 11/23 replay where afternoon fires
   // carried the day (+$46 vs +$966). A 1-year scan of 3,028 real surge events across
