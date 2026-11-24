@@ -58,11 +58,15 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     // study): far-OTM 3-7 DTE swing. NO premium stop, NO trail, NO profit target —
     // the day+2-close exit beat every target/trail variant (+$157k vs -$55k for 5x
     // targets on the same 979 far-OTM positions). Max loss is the premium, by design.
-    // Exits: expiry-day 14:00 ET guard, else day+2 session close (>= 2 trading days
+    // Exits: expiry-day 12:30 ET guard, else day+2 session close (>= 2 trading days
     // held, 15:45 ET). Weekends hold; nothing else sells.
+    // 12:30 (was 14:00) after the first live swarm's near-miss (2026-11-24): it expires
+    // Fri 11/27, the Thanksgiving HALF DAY that closes at 13:00 — a 14:00 guard and a
+    // 15:45 day+2 flat would BOTH land after the close and the swarm would expire
+    // unsold. 12:30 is inside every session the market has, half days included.
     if (["Sat","Sun"].includes(clock.weekday)) return null;
     const convexityDte = dteFromOcc(position.alpacaSymbol, now) ?? 0;
-    if (convexityDte <= 0 && clock.minutes >= 840) return "mandatory_time_exit";
+    if (convexityDte <= 0 && clock.minutes >= 750) return "mandatory_time_exit";
     if (tradingDaysHeld(openedClock.dateKey, clock.dateKey) >= 2 && clock.minutes >= 945) return "mandatory_time_exit";
     return null;
   }

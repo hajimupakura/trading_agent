@@ -66,7 +66,8 @@ describe("convexity swarm mode (time-only exits)", () => {
   it("holds day+2 before 15:45 ET", () => expect(evaluateExit({ position:conv, bid:0.30, underlyingPrice:null, now:new Date("2026-08-05T19:30:00Z") })).toBe(null));
   // Friday entry -> Tuesday is day+2 (the weekend never counts as held days).
   it("counts trading days across a weekend", () => expect(evaluateExit({ position:{...conv,alpacaSymbol:"NVDA260814C00200000",ticker:"O:NVDA260814C00200000",openedAt:Date.parse("2026-08-07T15:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-10T19:50:00Z") })).toBe(null));
-  it("flats at expiry-day 14:00 ET as the last guard", () => expect(evaluateExit({ position:{...conv,openedAt:Date.parse("2026-08-06T18:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-07T18:00:00Z") })).toBe("mandatory_time_exit"));
+  it("flats at expiry-day 12:30 ET as the last guard (half-day safe)", () => expect(evaluateExit({ position:{...conv,openedAt:Date.parse("2026-08-06T18:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-07T16:31:00Z") })).toBe("mandatory_time_exit"));
+  it("still holds on expiry morning before 12:30", () => expect(evaluateExit({ position:{...conv,openedAt:Date.parse("2026-08-06T18:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-07T16:00:00Z") })).toBe(null));
 });
 
 // ML HYBRID (2026-11-24): when the manager supplies the advisor's probability, the
