@@ -88,6 +88,58 @@ async function fetchNewsHistory(params: Record<string, unknown>, deadline: numbe
   return out;
 }
 
+// Historical pullback scan (user call 2026-11-23: "use the data we already have"):
+// no fire records needed — each day's strongest 30-minute surge per direction is the
+// event, graded with the SAME gradePullback that stamps live fires. Returns only the
+// per-event summaries, so months of bars never leave the server.
+async function runPullbackScan(params: Record<string, unknown>, deadline: number): Promise<Array<Record<string, unknown>>> {
+  const { gradePullback } = await import("@/lib/options/pullback-grade");
+  const symbol = String(params.symbol ?? "");
+  if (!symbol) throw new Error("pullback-scan: params.symbol required");
+  const minLegPct = Number(params.minLegPct ?? 0.8) / 100;
+  const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const byDay = new Map<string, Array<{ min: number; c: number; v: number; vw: number }>>();
+  let pageToken: string | undefined; let pages = 0;
+  do {
+    if (Date.now() > deadline) throw new Error("pullback-scan: time budget exhausted — narrow the window");
+    const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
+    url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", process.env.ALPACA_DATA_PLAN === "paid" ? "sip" : "iex");
+    url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "10000");
+    if (params.start) url.searchParams.set("start", String(params.start));
+    if (params.end) url.searchParams.set("end", String(params.end));
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`pullback-scan: Alpaca ${response.status} for ${symbol}`);
+    const payload = await response.json() as { bars?: Array<{ t: string; c: number; v: number; vw?: number }>; next_page_token?: string | null };
+    for (const bar of payload.bars ?? []) {
+      const parts = Object.fromEntries(formatter.formatToParts(new Date(bar.t)).map(part => [part.type, part.value]));
+      const min = Number(parts.hour) * 60 + Number(parts.minute);
+      if (min < 570 || min > 960) continue;
+      const day = `${parts.year}-${parts.month}-${parts.day}`;
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day)!.push({ min, c: Number(bar.c), v: Number(bar.v) || 0, vw: Number(bar.vw ?? bar.c) });
+    }
+    pageToken = payload.next_page_token ?? undefined;
+  } while (pageToken && ++pages < 12);
+  const events: Array<Record<string, unknown>> = [];
+  for (const [day, bars] of byDay) {
+    if (bars.length < 120) continue; // holiday stub or thin tape
+    for (const dir of [1, -1] as const) {
+      // The day's strongest 30-minute move in this direction is the "fire".
+      let best = { move: 0, index: 0 };
+      for (let i = 0; i + 30 < bars.length; i++) {
+        const move = dir * (bars[i + 30].c - bars[i].c) / bars[i].c;
+        if (move > best.move) best = { move, index: i };
+      }
+      if (best.move < minLegPct) continue;
+      const grade = gradePullback(bars, bars[best.index].min, dir);
+      if (grade.pullback === true) events.push({ sym: symbol, day, dir, fireMin: bars[best.index].min, ...grade });
+    }
+  }
+  return events;
+}
+
 export async function runResearchQueue(): Promise<{ ran: string | null; error?: string }> {
   const admin = createAdminClient();
   const { data: request } = await admin.from("research_requests").select("id,kind,params").eq("status", "pending").order("created_at", { ascending: true }).limit(1).maybeSingle();
@@ -102,6 +154,7 @@ export async function runResearchQueue(): Promise<{ ran: string | null; error?: 
     if (request.kind === "option-bars") result = await fetchOptionBars(params, deadline);
     else if (request.kind === "stock-bars") result = await fetchStockBars(params, deadline);
     else if (request.kind === "news-history") result = await fetchNewsHistory(params, deadline);
+    else if (request.kind === "pullback-scan") result = await runPullbackScan(params, deadline);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
     if (encoded.length > MAX_RESULT_BYTES) throw new Error(`result too large (${encoded.length}b) — split the request`);
