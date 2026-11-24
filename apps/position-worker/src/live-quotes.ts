@@ -9,7 +9,7 @@ import { config } from "./config.js";
 // subscription cost. Display-path only: nothing here feeds trading decisions
 // (signals stay on minute bars; exits stay on the Massive options stream).
 
-const SYMBOLS = ["SPY", "QQQ", "NVDA", "SPCX", "TSLA", "AAPL", "GOOGL", "META", "MSFT", "MU", "ASTS", "SKHY", "SNDK", "SLV", "GLD"];
+const SYMBOLS = ["SPY", "QQQ", "NVDA", "SPCX", "TSLA", "AAPL", "GOOGL", "META", "MSFT", "MU", "ASTS", "SKHY", "SNDK", "SLV", "GLD", "SMCI"];
 const THROTTLE_MS = 1000;
 
 const db = createClient(config.supabaseUrl, config.SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
