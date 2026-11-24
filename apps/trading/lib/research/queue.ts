@@ -370,7 +370,13 @@ export async function runResearchQueue(): Promise<{ ran: string | null; error?: 
     return { minutes: Number(parts.hour) * 60 + Number(parts.minute), weekday: String(parts.weekday) };
   })();
   const inSession = !["Sat", "Sun"].includes(weekday) && minutes >= 565 && minutes <= 975;
-  const batchDeadline = Date.now() + (inSession ? 0 : 34_000); // 0 extra = single pass in session
+  // FULL-THROTTLE override (user call 2026-11-24 "we are done trading today — go full
+  // throttle"): research_full_throttle on the control row lifts the in-session
+  // one-per-tick limit so bulk backfills batch like off-hours. Flip it back off with:
+  //   update position_manager_control set research_full_throttle=false where id=true;
+  const { data: control } = await createAdminClient().from("position_manager_control").select("research_full_throttle").eq("id", true).maybeSingle();
+  const fullThrottle = Boolean((control as { research_full_throttle?: boolean } | null)?.research_full_throttle);
+  const batchDeadline = Date.now() + (inSession && !fullThrottle ? 0 : 34_000); // 0 extra = single pass in session
   let last: { ran: string | null; error?: string } = { ran: null };
   for (;;) {
     last = await runOneResearchRequest();
