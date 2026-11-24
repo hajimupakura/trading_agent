@@ -1,6 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "./config.js";
 import { evaluateExit, easternClock } from "./exit-engine.js";
+import { adviseExit } from "./advisor.js";
+import { createWorkerAlert } from "./store.js";
 import { getSnapshotQuote, MassiveQuoteStream } from "./massive.js";
 import { getLatestOptionQuote } from "./alpaca.js";
 import type { ManagedPosition, OptionQuote } from "./types.js";
@@ -57,8 +59,11 @@ function openedAtFromOrders(position: RhPosition, orders: RhOrder[]) {
 
 export class RobinhoodExitManager {
   managedCount = 0;
+  private mlExits = true;
+  private ownerId: string | null = null;
 
-  async cycle(quotes: MassiveQuoteStream, manageExits: boolean): Promise<{ symbols: string[]; errors: string[] }> {
+  async cycle(quotes: MassiveQuoteStream, manageExits: boolean, mlExits = true): Promise<{ symbols: string[]; errors: string[] }> {
+    this.mlExits = mlExits;
     this.managedCount = 0;
     const errors: string[] = [];
     if (!config.APP_URL || !config.CRON_SECRET) return { symbols: [], errors: [] };
@@ -173,8 +178,25 @@ export class RobinhoodExitManager {
     // Manual Robinhood entries carry no opening-range context -> underlying invalidation is
     // disabled (underlyingPrice null). No-follow-through only applies with an exact open time.
     const dte = Math.max(0, Math.round((Date.parse(`${position.expirationDate}T16:00:00-04:00`) - now) / 86_400_000));
-    let reason = evaluateExit({ position: managed, bid: quote.bid, underlyingPrice: null, longDated: dte > 2 });
+    // ML HYBRID on the real lane (user call 2026-11-24: "small amount of real money —
+    // activate the ml models, same exit strategy as paper"): identical advisor, identical
+    // floor; ml_exits_enabled=false (the override switch) reverts to V0 on the next tick.
+    // adviseExit self-gates to same-day burst positions in-session; the no-follow-through
+    // guard below needs an exact open time, and so does the ML's minutesHeld feature —
+    // without one, the lane stays pure V0.
+    const mlAdvice = this.mlExits && openedAtExact ? adviseExit(managed, quote.bid, now) : null;
+    let reason = evaluateExit({ position: managed, bid: quote.bid, underlyingPrice: null, longDated: dte > 2, ml: mlAdvice });
     if (reason === "no_follow_through" && !openedAtExact) reason = null;
+    if (reason === "ml_advisor_exit" && mlAdvice) {
+      if (!this.ownerId) {
+        const { data: owner } = await db.from("profiles").select("id").limit(1).maybeSingle();
+        this.ownerId = owner ? String(owner.id) : null;
+      }
+      if (this.ownerId) void createWorkerAlert({ userId: this.ownerId, eventKey: `rh-ml-exit-${position.occTicker}-${openedAt}`, severity: "warning",
+        title: `🤖 ML exit (REAL): ${position.occTicker.replace("O:", "")} (hold odds ${(100 * mlAdvice.prob).toFixed(0)}%)`,
+        body: `The exit model puts the odds of another +15% leg at ${(100 * mlAdvice.prob).toFixed(0)}% — below its ${(100 * mlAdvice.threshold).toFixed(0)}% hold bar — with the bid at $${quote.bid.toFixed(2)} vs your $${position.entryPrice.toFixed(2)} entry (peak $${peakBid.toFixed(2)}). Selling on Robinhood now. Override anytime: "Take over" in /positions keeps a position, or flip ml_exits_enabled off to revert every exit to the old rules.`,
+        metadata: { kind: "rh_ml_advisor_exit", contractTicker: position.occTicker, prob: mlAdvice.prob, bid: quote.bid, peakBid } }).catch(() => undefined);
+    }
     const base = { opened_at: new Date(openedAt).toISOString(), opened_at_exact: openedAtExact, peak_bid: peakBid, latest_bid: quote.bid };
     if (!reason) { await saveMonitor(position, { ...base, status: "monitoring", last_error: null }); return; }
     const urgent = reason === "premium_stop" || reason === "mandatory_time_exit";

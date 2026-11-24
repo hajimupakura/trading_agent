@@ -96,3 +96,17 @@ describe("ml hybrid exits", () => {
   it("without the advisor the old trail applies unchanged", () =>
     expect(evaluateExit({ position:{...base,peakBid:6}, bid:4.8, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
 });
+
+// REAL LANE + ML (user call 2026-11-24: "small amount of real money — activate the ml
+// models, same exit strategy as paper"): the Robinhood lane runs the identical hybrid.
+const realPos:ManagedPosition = { ...base, userId:"robinhood" };
+describe("ml hybrid on the real lane", () => {
+  it("real lane holds through the old +20/15 trail when the model likes the tape", () =>
+    expect(evaluateExit({ position:{...realPos,peakBid:5}, bid:4.2, underlyingPrice:771, now:at("14:05"), ml:ML_HOLD })).toBe(null));
+  it("real lane sells on the model's word", () =>
+    expect(evaluateExit({ position:realPos, bid:4.1, underlyingPrice:771, now:at("14:05"), ml:ML_SELL })).toBe("ml_advisor_exit"));
+  it("real lane hard stop still outranks a bullish model", () =>
+    expect(evaluateExit({ position:realPos, bid:2.8, underlyingPrice:771, now:at("14:05"), ml:ML_HOLD })).toBe("premium_stop"));
+  it("real lane without the advisor keeps its calibrated +20/15 trail", () =>
+    expect(evaluateExit({ position:{...realPos,peakBid:5}, bid:4.2, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
+});

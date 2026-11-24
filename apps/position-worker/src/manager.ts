@@ -14,7 +14,7 @@ const fresh = (quote:OptionQuote|null,now:number) => quote && now - quote.timest
 const clientOrderId = (symbol:string,reason:string,now:number) => `velocity-exit-${symbol}-${reason}-${now}`.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,48);
 
 export class PositionManager {
-  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = []; private lastRhSyncAt = 0;
+  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = []; private lastRhSyncAt = 0; private mlExits = true;
   // Consecutive stale-quote cycles per ticker: a single miss (worker restart, stream
   // resubscribe) retries quietly; the critical alert fires only after the threshold.
   private quoteMisses = new Map<string, number>();
@@ -36,12 +36,15 @@ export class PositionManager {
     const inSession = marketSession(new Date());
     const cycleErrors:string[] = [];
     const enabled = config.exitsEnabled && control.auto_exits_enabled;
+    // ML override (user call 2026-11-24): ml_exits_enabled=false reverts EVERY position
+    // (paper and real) to the V0 trail/ratchet envelope on the next tick. Floor unaffected.
+    this.mlExits = (control as { ml_exits_enabled?: boolean }).ml_exits_enabled !== false;
     // Robinhood: full cadence in-session; off-hours a 5-minute discovery heartbeat —
     // never completely blind (setup problems must surface BEFORE the open, and evening
     // manual buys should register), but no wasteful weekend polling either.
     if (inSession || Date.now() - this.lastRhSyncAt >= 5 * 60_000) {
       try {
-        const rh = await this.robinhood.cycle(this.quotes, inSession && enabled);
+        const rh = await this.robinhood.cycle(this.quotes, inSession && enabled, this.mlExits);
         this.rhSymbols = rh.symbols; this.managedCount += this.robinhood.managedCount;
         cycleErrors.push(...rh.errors);
         this.lastRhSyncAt = Date.now();
@@ -143,7 +146,7 @@ export class PositionManager {
     // the advisor scores same-day burst positions (journaling each opinion), and its
     // probability rides into evaluateExit where it replaces the trail/ratchet under the
     // V0 floor. Null (out-of-distribution or advisor failure) = pure V0, unchanged.
-    const mlAdvice = adviseExit(position, quote.bid, now);
+    const mlAdvice = this.mlExits ? adviseExit(position, quote.bid, now) : null;
     const dte = dteFromOcc(position.alpacaSymbol);
     // TREND (ride) mode: MAX CONVEXITY — only the 50% disaster floor sells; the trail
     // and time rules are off so multi-day swings can survive option-price wobbles.

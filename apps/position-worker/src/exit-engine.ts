@@ -150,12 +150,15 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // evidence; if paper's monsters prove the wide arm right, promotion is a data call.
   const realLane = position.userId === "robinhood";
   // ML HYBRID (user call 2026-11-24 "paper trading needs to be automatic"; tournament:
-  // hybrid captured 30-35% of peak vs V0's 19.3% on six unseen months): when the manager
+  // hybrid captured 30-35% of peak vs V0's 19.3% on six unseen months): when the caller
   // supplies the advisor's probability, the ML REPLACES the trail and ratchet on plain
-  // same-day paper positions — the floor above (15:10 flat, hard stop, invalidation,
+  // same-day positions — the floor above (15:10 flat, hard stop, invalidation,
   // no-follow-through below) always keeps the last word. Out-of-distribution positions
-  // (overnight/swing/long-dated/big-premium/real-lane) keep the calibrated V0 envelope.
-  const mlOwns = input.ml != null && !isSwing && !longDated && !heldOvernight && !bigPremium && !realLane;
+  // (overnight/swing/long-dated/big-premium) keep the calibrated V0 envelope.
+  // REAL LANE INCLUDED (user call 2026-11-24 ~09:40: "small amount of real money —
+  // activate the ml models, same exit strategy as paper"): the Robinhood lane runs the
+  // identical hybrid; the real-money distinction lives at ENTRY (human tap only).
+  const mlOwns = input.ml != null && !isSwing && !longDated && !heldOvernight && !bigPremium;
   if (mlOwns) {
     // 3-minute settle so a fill-print wobble can't trigger an instant round-trip.
     if (input.ml!.prob < input.ml!.threshold && now.getTime() - position.openedAt >= 3 * 60_000) return "ml_advisor_exit";

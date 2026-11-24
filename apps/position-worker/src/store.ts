@@ -5,7 +5,7 @@ import type { AlpacaOrder, ManagedPosition, SignalMarket } from "./types.js";
 
 const db = createClient(config.supabaseUrl,config.SUPABASE_SECRET_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
 export async function getControl() {
-  const { data,error } = await db.from("position_manager_control").select("auto_exits_enabled,kill_switch,auto_adopt_unmanaged").eq("id",true).single();
+  const { data,error } = await db.from("position_manager_control").select("auto_exits_enabled,kill_switch,auto_adopt_unmanaged,ml_exits_enabled").eq("id",true).single();
   if (error) throw new Error(`db error: ${error.message}`); return data;
 }
 // Adopt a broker position that has no journal entry (bought directly in Alpaca):
