@@ -158,6 +158,11 @@ export async function GET(request: Request) {
   void setupWatches;
   // SPX Morning Card: one ~9:25 alert with the measured daily checklist (gap read,
   // drive triggers, levels, econ flags, qualify/stand-down verdict). Trades nothing.
+  // Morning news score (9:05-9:25 ET, once/day): overnight tape scored on the
+  // news-shock-study rubric; pages when the security/regulatory-on-a-single-name
+  // cell lights (the one cell with evidenced puts asymmetry). Context, never signal.
+  const { runMorningNewsScore } = await import("@/lib/news/morning-score");
+  await runMorningNewsScore().catch(error => console.error("morning news score failed", error));
   const morningCard = await runSpxMorningCard().catch(error => { console.error("morning card failed", error); return { sent:false }; });
   void morningCard;
   // Overnight SPX watch (Cboe GTH, 8:15 PM-9:25 AM): ES-futures sampling + alerts
