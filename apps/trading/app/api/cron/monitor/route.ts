@@ -33,15 +33,31 @@ export async function GET(request: Request) {
   // 60s budget, and instant alerts must never be the step that gets cut.
   const notify = await dispatchInstantAlerts().catch(error => { console.error("alert dispatch failed", error); return { sent:0, digestPending:0 }; });
   const minute = new Date().getMinutes();
-  // SPY/SPX every minute; their long-dated (3M-1Y) chains refresh on the quarter-hour.
-  // Watch-list tickers rotate: two per minute, so each refreshes every five minutes.
+  // SPY/SPX every minute; long-dated (3M-1Y) chains refresh on the quarter-hour.
+  // Watch names: ALL of them every minute (2026-11-23 — the paid Alpaca plan lifted
+  // the 200/min rate limit that forced the old 2-per-minute rotation). Guarded by a
+  // wall-clock deadline because this route has a 60s budget and ~20 jobs after this
+  // block: refreshes run in batches, and when the deadline hits, the remaining names
+  // are SKIPPED LOUDLY (scan-coverage heartbeat → 3 consecutive ticks page) and
+  // simply catch the next minute's tick. Degraded = slower cadence, never a dead route.
   const includeLongHorizons = minute % 15 === 0;
-  const watchGroup = WATCH_UNDERLYINGS.filter((_, index) => index % 5 === minute % 5);
-  const results = await Promise.allSettled([
+  const tickStart = Date.now();
+  const REFRESH_DEADLINE_MS = 35_000;
+  const indexResults = await Promise.allSettled([
     refreshCommandCenter("SPY", undefined, { includeLongHorizons }),
     refreshCommandCenter("SPX", undefined, { includeLongHorizons }),
-    ...watchGroup.map(symbol => refreshWatchSnapshot(symbol, { includeLongHorizons })),
   ]);
+  const watchGroup: (typeof WATCH_UNDERLYINGS)[number][] = [];
+  const skippedWatch: string[] = [];
+  const watchResults: PromiseSettledResult<CommandCenter>[] = [];
+  const watchQueue = [...WATCH_UNDERLYINGS];
+  while (watchQueue.length) {
+    if (Date.now() - tickStart > REFRESH_DEADLINE_MS) { skippedWatch.push(...watchQueue.splice(0)); break; }
+    const batch = watchQueue.splice(0, 6);
+    watchResults.push(...await Promise.allSettled(batch.map(symbol => refreshWatchSnapshot(symbol, { includeLongHorizons }))));
+    watchGroup.push(...batch);
+  }
+  const results = [...indexResults, ...watchResults];
   // Autonomous paper entries — SPY plus this tick's refreshed watch tickers. Global
   // gates (one position, trades/day, daily loss, cooldown, kill switch) bound the
   // whole fleet; sequential with early exit so one tick can never open two positions.
@@ -162,6 +178,9 @@ export async function GET(request: Request) {
     research: research === null ? null : (research.error ? [research.error] : []),
     news: newsErrors,
     "shadow-mark": shadowMark.quoteError ? [shadowMark.quoteError] : [],
+    // Every-minute scan coverage: a tick that ran out of deadline before reaching all
+    // watch names reports here — three consecutive degraded ticks page the user.
+    "scan-coverage": skippedWatch.length ? [`deadline hit: ${skippedWatch.length} names skipped (${skippedWatch.join(",")})`] : [],
   }).catch(error => console.error("heartbeat failed", error));
-  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, metals, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
+  return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], skipped:skippedWatch, longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, metals, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
