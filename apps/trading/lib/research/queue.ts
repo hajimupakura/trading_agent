@@ -197,15 +197,85 @@ async function fetchMlCorpusDay(params: Record<string, unknown>, deadline: numbe
   return out;
 }
 
+// Swing corpus (user call 2026-11-23, the "patient OTM swarm" strategy): on strong
+// momentum days, buy a 3-7 DTE Friday-expiry contract ~3-5% out of the money and
+// hold THROUGH days — no stop, max loss = premium. This fetches each event's
+// multi-day premium path so the distribution (win rate, monsters, losing streaks)
+// is measured instead of admired. Path minutes encode day offset: min = off*1440+m.
+async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: number): Promise<Array<Record<string, unknown>>> {
+  const day = String(params.day ?? "");
+  const entries = Array.isArray(params.entries) ? params.entries as Array<{ sym: string; dir: number; fireMin: number; spot: number }> : [];
+  if (!day || !entries.length) throw new Error("ml-swing: params.day and entries required");
+  const otm = Number(params.otmPct ?? 4) / 100;
+  const base = new Date(`${day}T12:00:00Z`);
+  // Expiry: the Friday 3-7 days out (this week's if >=3 days away, else next week's).
+  const dow = base.getUTCDay(); // 1=Mon..5=Fri
+  const toFriday = 5 - dow; const add = toFriday >= 3 ? toFriday : toFriday + 7;
+  const expiry = new Date(base.getTime() + add * 86_400_000);
+  const expiryStr = expiry.toISOString().slice(0, 10);
+  const yymmdd = expiryStr.slice(2).replaceAll("-", "");
+  const incFor = (spot: number) => spot >= 500 ? 5 : spot >= 250 ? 2.5 : spot >= 100 ? 1 : 0.5;
+  const occFor = (sym: string, dir: number, strike: number) => `${sym}${yymmdd}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
+  const candidates = entries.flatMap(entry => {
+    const inc = incFor(entry.spot); const alt = inc * 2.5 <= 5 ? inc * 2.5 : inc * 2;
+    const target = entry.spot * (1 + otm * entry.dir);
+    const pick = (step: number) => entry.dir > 0 ? Math.ceil(target / step) * step : Math.floor(target / step) * step;
+    return [{ entry, occ: occFor(entry.sym, entry.dir, pick(inc)) }, { entry, occ: occFor(entry.sym, entry.dir, pick(alt)) }];
+  });
+  const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const dayMs = 86_400_000; const baseUtc = Date.parse(`${day}T00:00:00Z`);
+  const paths = new Map<string, Array<[number, number]>>();
+  for (let chunkStart = 0; chunkStart < candidates.length; chunkStart += 20) {
+    if (Date.now() > deadline) throw new Error("ml-swing: time budget exhausted — split the day");
+    const chunk = candidates.slice(chunkStart, chunkStart + 20);
+    let pageToken: string | undefined; let pages = 0;
+    do {
+      const url = new URL("https://data.alpaca.markets/v1beta1/options/bars");
+      url.searchParams.set("symbols", chunk.map(c => c.occ).join(","));
+      url.searchParams.set("timeframe", "5Min"); url.searchParams.set("limit", "1000"); url.searchParams.set("sort", "asc");
+      url.searchParams.set("start", `${day}T14:00:00Z`); url.searchParams.set("end", `${expiryStr}T22:00:00Z`);
+      if (pageToken) url.searchParams.set("page_token", pageToken);
+      const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw new Error(`ml-swing: Alpaca ${response.status} on ${day}`);
+      const payload = await response.json() as { bars?: Record<string, Array<{ t: string; c: number }>>; next_page_token?: string | null };
+      for (const [occ, bars] of Object.entries(payload.bars ?? {})) {
+        const list = paths.get(occ) ?? [];
+        for (const bar of bars) {
+          const parts = Object.fromEntries(formatter.formatToParts(new Date(bar.t)).map(part => [part.type, part.value]));
+          const minute = Number(parts.hour) * 60 + Number(parts.minute);
+          if (minute < 570 || minute > 960) continue;
+          const offset = Math.max(0, Math.round((Date.parse(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`) - baseUtc) / dayMs));
+          list.push([offset * 1440 + minute, Number(Number(bar.c).toFixed(2))]);
+        }
+        paths.set(occ, list);
+      }
+      pageToken = payload.next_page_token ?? undefined;
+    } while (pageToken && ++pages < 10);
+  }
+  const out: Array<Record<string, unknown>> = [];
+  for (const entry of entries) {
+    const mine = candidates.filter(c => c.entry === entry).map(c => ({ occ: c.occ, path: paths.get(c.occ) ?? [] }));
+    const bestPick = mine.sort((a, b) => b.path.length - a.path.length)[0];
+    if (!bestPick || bestPick.path.length < 30) continue;
+    const path = bestPick.path.filter(([min]) => min >= entry.fireMin);
+    const first = path[0];
+    if (!first || first[1] <= 0.02) continue;
+    out.push({ day, sym: entry.sym, dir: entry.dir, fireMin: entry.fireMin, occ: bestPick.occ, expiry: expiryStr, entryPrint: first[1], path });
+  }
+  return out;
+}
+
 // ML corpus export: bundle every done ml-corpus result into one CSV in Supabase
 // Storage (public research bucket) so training can download it without any secret.
-async function runMlExport(): Promise<{ url: string; positions: number; rows: number }> {
+async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url: string; positions: number; rows: number }> {
+  const sourceKind = String(params.sourceKind ?? "ml-corpus");
   const admin = createAdminClient();
   const lines: string[] = ["day,sym,dir,occ,fireMin,entryPrint,min,price"];
   let positions = 0;
   const pageSize = 50; let from = 0;
   for (;;) {
-    const { data, error } = await admin.from("research_requests").select("result").eq("kind", "ml-corpus").eq("status", "done").order("created_at").range(from, from + pageSize - 1);
+    const { data, error } = await admin.from("research_requests").select("result").eq("kind", sourceKind).eq("status", "done").order("created_at").range(from, from + pageSize - 1);
     if (error) throw new Error(`ml-export read: ${error.message}`);
     if (!data?.length) break;
     for (const row of data) {
@@ -218,7 +288,7 @@ async function runMlExport(): Promise<{ url: string; positions: number; rows: nu
     from += pageSize;
   }
   const body = lines.join("\n");
-  const name = `ml-corpus-${Date.now()}.csv`;
+  const name = `${sourceKind}-${Date.now()}.csv`;
   const { error: uploadError } = await admin.storage.from("research").upload(name, body, { contentType: "text/csv", upsert: true });
   if (uploadError) throw new Error(`ml-export upload: ${uploadError.message}`);
   const { data: urlData } = admin.storage.from("research").getPublicUrl(name);
@@ -260,7 +330,8 @@ async function runOneResearchRequest(): Promise<{ ran: string | null; error?: st
     else if (request.kind === "news-history") result = await fetchNewsHistory(params, deadline);
     else if (request.kind === "pullback-scan") result = await runPullbackScan(params, deadline);
     else if (request.kind === "ml-corpus") result = await fetchMlCorpusDay(params, deadline);
-    else if (request.kind === "ml-export") result = await runMlExport();
+    else if (request.kind === "ml-swing") result = await fetchSwingCorpusDay(params, deadline);
+    else if (request.kind === "ml-export") result = await runMlExport(params);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
     if (encoded.length > MAX_RESULT_BYTES) throw new Error(`result too large (${encoded.length}b) — split the request`);
