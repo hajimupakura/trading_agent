@@ -215,20 +215,32 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
   // allocations compare directly and an ML strike advisor has labels to learn from.
   const levels = Array.isArray(params.levels) ? (params.levels as number[]) : [-2, 1, 4, 8];
   const base = new Date(`${day}T12:00:00Z`);
-  // Expiry: the Friday 3-7 days out (this week's if >=3 days away, else next week's).
-  const dow = base.getUTCDay(); // 1=Mon..5=Fri
-  const toFriday = 5 - dow; const add = toFriday >= 3 ? toFriday : toFriday + 7;
-  const expiry = new Date(base.getTime() + add * 86_400_000);
-  const expiryStr = expiry.toISOString().slice(0, 10);
-  const yymmdd = expiryStr.slice(2).replaceAll("-", "");
+  // Expiry mode: 'friday' (default, the 3-7 DTE patient swing) or 'nearest' (lottery
+  // census, user call 2026-11-24: the 2-cent 50x repricings live on the NEAREST
+  // expiries — try day+0/+1/+2 and keep whichever contract actually traded).
+  const expiryMode = String(params.expiryMode ?? "friday");
+  const expiryStrs: string[] = [];
+  if (expiryMode === "nearest") {
+    for (const add of [0, 1, 2]) {
+      const candidate = new Date(base.getTime() + add * 86_400_000);
+      const dow = candidate.getUTCDay();
+      if (dow >= 1 && dow <= 5) expiryStrs.push(candidate.toISOString().slice(0, 10));
+    }
+  } else {
+    const dow = base.getUTCDay(); // 1=Mon..5=Fri
+    const toFriday = 5 - dow; const add = toFriday >= 3 ? toFriday : toFriday + 7;
+    expiryStrs.push(new Date(base.getTime() + add * 86_400_000).toISOString().slice(0, 10));
+  }
+  const lastExpiry = expiryStrs[expiryStrs.length - 1];
   const incFor = (spot: number) => spot >= 500 ? 5 : spot >= 250 ? 2.5 : spot >= 100 ? 1 : 0.5;
-  const occFor = (sym: string, dir: number, strike: number) => `${sym}${yymmdd}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
-  const candidates = entries.flatMap(entry => levels.flatMap(lvl => {
+  const occFor = (sym: string, dir: number, strike: number, yymmdd: string) => `${sym}${yymmdd}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
+  const candidates = entries.flatMap(entry => levels.flatMap(lvl => expiryStrs.flatMap(expiryStr => {
+    const yymmdd = expiryStr.slice(2).replaceAll("-", "");
     const inc = incFor(entry.spot); const alt = inc * 2.5 <= 5 ? inc * 2.5 : inc * 2;
     const target = entry.spot * (1 + (lvl / 100) * entry.dir);
     const pick = (step: number) => entry.dir > 0 ? Math.ceil(target / step) * step : Math.floor(target / step) * step;
-    return [{ entry, lvl, occ: occFor(entry.sym, entry.dir, pick(inc)) }, { entry, lvl, occ: occFor(entry.sym, entry.dir, pick(alt)) }];
-  }));
+    return [{ entry, lvl, expiryStr, occ: occFor(entry.sym, entry.dir, pick(inc), yymmdd) }, { entry, lvl, expiryStr, occ: occFor(entry.sym, entry.dir, pick(alt), yymmdd) }];
+  })));
   const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
   const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const dayMs = 86_400_000; const baseUtc = Date.parse(`${day}T00:00:00Z`);
@@ -241,7 +253,7 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
       const url = new URL("https://data.alpaca.markets/v1beta1/options/bars");
       url.searchParams.set("symbols", chunk.map(c => c.occ).join(","));
       url.searchParams.set("timeframe", "5Min"); url.searchParams.set("limit", "1000"); url.searchParams.set("sort", "asc");
-      url.searchParams.set("start", `${day}T14:00:00Z`); url.searchParams.set("end", `${expiryStr}T22:00:00Z`);
+      url.searchParams.set("start", `${day}T14:00:00Z`); url.searchParams.set("end", `${lastExpiry}T22:00:00Z`);
       if (pageToken) url.searchParams.set("page_token", pageToken);
       const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) throw new Error(`ml-swing: Alpaca ${response.status} on ${day}`);
@@ -269,7 +281,7 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
       const path = bestPick.path.filter(([min]) => min >= entry.fireMin);
       const first = path[0];
       if (!first || first[1] <= 0.02) continue;
-      out.push({ day, sym: entry.sym, dir: entry.dir, lvl, fireMin: entry.fireMin, occ: bestPick.occ, expiry: expiryStr, entryPrint: first[1], path });
+      out.push({ day, sym: entry.sym, dir: entry.dir, lvl, fireMin: entry.fireMin, occ: bestPick.occ, entryPrint: first[1], path });
     }
   }
   return out;
@@ -340,6 +352,7 @@ async function runOneResearchRequest(): Promise<{ ran: string | null; error?: st
     else if (request.kind === "pullback-scan") result = await runPullbackScan(params, deadline);
     else if (request.kind === "ml-corpus") result = await fetchMlCorpusDay(params, deadline);
     else if (request.kind === "ml-swing") result = await fetchSwingCorpusDay(params, deadline);
+    else if (request.kind === "ml-lottery") result = await fetchSwingCorpusDay({ ...params, expiryMode: "nearest", levels: Array.isArray(params.levels) ? params.levels : [6, 10, 15] }, deadline);
     else if (request.kind === "ml-export") result = await runMlExport(params);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
