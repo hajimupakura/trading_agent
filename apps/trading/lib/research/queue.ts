@@ -295,6 +295,42 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
   const dayGte = typeof params.dayGte === "string" ? params.dayGte : null;
   const dayLt = typeof params.dayLt === "string" ? params.dayLt : null;
   const admin = createAdminClient();
+  // STOCK-BARS export (2026-11-24, the live-context backfill): results are
+  // Record<sym, bars>; rows become day,sym,min(ET),close,vol,vw — session minutes
+  // only (VWAP/volume state is a session concept). Windowing keys on params->>start.
+  if (sourceKind === "stock-bars") {
+    const lines = ["day,sym,min,close,vol,vw"];
+    const et = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
+    const etMin = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    const pageSize = 10; let from = 0; let bars = 0;
+    for (;;) {
+      let query = admin.from("research_requests").select("result").eq("kind", "stock-bars").eq("status", "done");
+      if (dayGte) query = query.gte("params->>start", dayGte);
+      if (dayLt) query = query.lt("params->>start", dayLt);
+      const { data, error } = await query.order("id").range(from, from + pageSize - 1);
+      if (error) throw new Error(`ml-export read: ${error.message}`);
+      if (!data?.length) break;
+      for (const row of data) {
+        for (const [sym, series] of Object.entries((row.result as Record<string, Array<{ t: string; c: number; v: number; vw?: number }>>) ?? {})) {
+          for (const bar of series ?? []) {
+            const when = new Date(bar.t);
+            const parts = Object.fromEntries(etMin.formatToParts(when).map(part => [part.type, part.value]));
+            const minute = Number(parts.hour) * 60 + Number(parts.minute);
+            if (minute < 570 || minute > 960) continue; // session only
+            bars++;
+            lines.push(`${et.format(when)},${sym},${minute},${bar.c},${bar.v},${bar.vw ?? ""}`);
+          }
+        }
+      }
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    const name = `stock-bars${dayGte ? `-from-${dayGte.slice(0, 10)}` : ""}${dayLt ? `-to-${dayLt.slice(0, 10)}` : ""}-${Date.now()}.csv`;
+    const { error: uploadError } = await admin.storage.from("research").upload(name, lines.join("\n"), { contentType: "text/csv", upsert: true });
+    if (uploadError) throw new Error(`ml-export upload: ${uploadError.message}`);
+    const { data: urlData } = admin.storage.from("research").getPublicUrl(name);
+    return { url: urlData.publicUrl, positions: 0, rows: bars };
+  }
   const lines: string[] = ["day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
   let positions = 0;
   const pageSize = 50; let from = 0;
