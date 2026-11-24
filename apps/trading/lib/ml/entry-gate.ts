@@ -17,7 +17,7 @@ for (const check of (MODEL.checks ?? []).slice(0, 3)) {
   if (Math.abs(predictProba(MODEL, xs) - check.p) > 1e-6) throw new Error("entry scorer JSON fails its sklearn checks");
 }
 
-export function scoreEntry(input: { bars: Array<{ close: number }>; etMinutes: number; dir: 1 | -1; isIndex: boolean; dow: number; premium: number }): { prob: number; skip: boolean; legPct: number | null } {
+export function scoreEntry(input: { bars: Array<{ close: number }>; etMinutes: number; dir: 1 | -1; isIndex: boolean; dow: number; premium: number }): { prob: number; skip: boolean; threshold: number; legPct: number | null } {
   const { bars } = input;
   const legPct = bars.length >= 31 ? (bars[bars.length - 1].close / bars[bars.length - 31].close - 1) * 100 * input.dir : null;
   const prob = predictProba(MODEL, [legPct ?? Number.NaN, input.etMinutes, input.dir, input.isIndex ? 1 : 0, input.dow, input.premium]);
