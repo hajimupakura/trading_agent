@@ -134,10 +134,95 @@ async function runPullbackScan(params: Record<string, unknown>, deadline: number
       }
       if (best.move < minLegPct) continue;
       const grade = gradePullback(bars, bars[best.index].min, dir);
-      if (grade.pullback === true) events.push({ sym: symbol, day, dir, fireMin: bars[best.index].min, ...grade });
+      if (grade.pullback === true) events.push({ sym: symbol, day, dir, fireMin: bars[best.index].min, spot: bars[best.index].c, ...grade });
     }
   }
   return events;
+}
+
+// ML corpus day-builder (2026-11-23): for one trading day's surge events, pick the
+// first-OTM same-day-expiry contract from the spot at fire time (strike increment
+// inferred from price, with a doubled-increment alternate in case the guess is off),
+// fetch the real trade prints, and return compact premium paths. One request per
+// day keeps results small; the overnight queue assembles the year.
+async function fetchMlCorpusDay(params: Record<string, unknown>, deadline: number): Promise<Array<Record<string, unknown>>> {
+  const day = String(params.day ?? ""); // YYYY-MM-DD (ET trading day = expiry)
+  const entries = Array.isArray(params.entries) ? params.entries as Array<{ sym: string; dir: number; fireMin: number; spot: number }> : [];
+  if (!day || !entries.length) throw new Error("ml-corpus: params.day and entries required");
+  const yymmdd = day.slice(2).replaceAll("-", "");
+  const incFor = (spot: number) => spot >= 500 ? 5 : spot >= 250 ? 2.5 : spot >= 100 ? 1 : 0.5;
+  const occFor = (sym: string, dir: number, strike: number) => `${sym}${yymmdd}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
+  const candidates = entries.flatMap(entry => {
+    const inc = incFor(entry.spot); const alt = inc * 2.5 <= 5 ? inc * 2.5 : inc * 2;
+    const pick = (step: number) => entry.dir > 0 ? Math.ceil(entry.spot / step) * step : Math.floor(entry.spot / step) * step;
+    return [{ entry, occ: occFor(entry.sym, entry.dir, pick(inc)) }, { entry, occ: occFor(entry.sym, entry.dir, pick(alt)) }];
+  });
+  const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const paths = new Map<string, Array<[number, number]>>();
+  for (let chunkStart = 0; chunkStart < candidates.length; chunkStart += 20) {
+    if (Date.now() > deadline) throw new Error("ml-corpus: time budget exhausted — split the day");
+    const chunk = candidates.slice(chunkStart, chunkStart + 20);
+    let pageToken: string | undefined; let pages = 0;
+    do {
+      const url = new URL("https://data.alpaca.markets/v1beta1/options/bars");
+      url.searchParams.set("symbols", chunk.map(c => c.occ).join(","));
+      url.searchParams.set("timeframe", "1Min"); url.searchParams.set("limit", "1000"); url.searchParams.set("sort", "asc");
+      url.searchParams.set("start", `${day}T14:00:00Z`); url.searchParams.set("end", `${day}T22:00:00Z`);
+      if (pageToken) url.searchParams.set("page_token", pageToken);
+      const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw new Error(`ml-corpus: Alpaca ${response.status} on ${day}`);
+      const payload = await response.json() as { bars?: Record<string, Array<{ t: string; c: number }>>; next_page_token?: string | null };
+      for (const [occ, bars] of Object.entries(payload.bars ?? {})) {
+        const list = paths.get(occ) ?? [];
+        for (const bar of bars) {
+          const parts = Object.fromEntries(formatter.formatToParts(new Date(bar.t)).map(part => [part.type, part.value]));
+          list.push([Number(parts.hour) * 60 + Number(parts.minute), Number(Number(bar.c).toFixed(2))]);
+        }
+        paths.set(occ, list);
+      }
+      pageToken = payload.next_page_token ?? undefined;
+    } while (pageToken && ++pages < 10);
+  }
+  const out: Array<Record<string, unknown>> = [];
+  for (const entry of entries) {
+    const mine = candidates.filter(c => c.entry === entry).map(c => ({ occ: c.occ, path: paths.get(c.occ) ?? [] }));
+    const bestPick = mine.sort((a, b) => b.path.length - a.path.length)[0];
+    if (!bestPick || bestPick.path.length < 30) continue; // no liquid same-day contract — skip honestly
+    const path = bestPick.path.filter(([min]) => min >= entry.fireMin && min <= 915);
+    const first = path[0];
+    if (!first || first[1] <= 0.04) continue;
+    out.push({ day, sym: entry.sym, dir: entry.dir, fireMin: entry.fireMin, occ: bestPick.occ, entryPrint: first[1], path });
+  }
+  return out;
+}
+
+// ML corpus export: bundle every done ml-corpus result into one CSV in Supabase
+// Storage (public research bucket) so training can download it without any secret.
+async function runMlExport(): Promise<{ url: string; positions: number; rows: number }> {
+  const admin = createAdminClient();
+  const lines: string[] = ["day,sym,dir,occ,fireMin,entryPrint,min,price"];
+  let positions = 0;
+  const pageSize = 50; let from = 0;
+  for (;;) {
+    const { data, error } = await admin.from("research_requests").select("result").eq("kind", "ml-corpus").eq("status", "done").order("created_at").range(from, from + pageSize - 1);
+    if (error) throw new Error(`ml-export read: ${error.message}`);
+    if (!data?.length) break;
+    for (const row of data) {
+      for (const position of (row.result as Array<{ day: string; sym: string; dir: number; occ: string; fireMin: number; entryPrint: number; path: Array<[number, number]> }> ?? [])) {
+        positions++;
+        for (const [min, price] of position.path ?? []) lines.push(`${position.day},${position.sym},${position.dir},${position.occ},${position.fireMin},${position.entryPrint},${min},${price}`);
+      }
+    }
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  const body = lines.join("\n");
+  const name = `ml-corpus-${Date.now()}.csv`;
+  const { error: uploadError } = await admin.storage.from("research").upload(name, body, { contentType: "text/csv", upsert: true });
+  if (uploadError) throw new Error(`ml-export upload: ${uploadError.message}`);
+  const { data: urlData } = admin.storage.from("research").getPublicUrl(name);
+  return { url: urlData.publicUrl, positions, rows: lines.length - 1 };
 }
 
 export async function runResearchQueue(): Promise<{ ran: string | null; error?: string }> {
@@ -155,6 +240,8 @@ export async function runResearchQueue(): Promise<{ ran: string | null; error?: 
     else if (request.kind === "stock-bars") result = await fetchStockBars(params, deadline);
     else if (request.kind === "news-history") result = await fetchNewsHistory(params, deadline);
     else if (request.kind === "pullback-scan") result = await runPullbackScan(params, deadline);
+    else if (request.kind === "ml-corpus") result = await fetchMlCorpusDay(params, deadline);
+    else if (request.kind === "ml-export") result = await runMlExport();
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
     if (encoded.length > MAX_RESULT_BYTES) throw new Error(`result too large (${encoded.length}b) — split the request`);
