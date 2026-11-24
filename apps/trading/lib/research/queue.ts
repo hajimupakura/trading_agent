@@ -291,12 +291,20 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
 // Storage (public research bucket) so training can download it without any secret.
 async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url: string; positions: number; rows: number }> {
   const sourceKind = String(params.sourceKind ?? "ml-corpus");
+  // Optional day-range window (on params->>'day') so oversized corpora export in parts.
+  const dayGte = typeof params.dayGte === "string" ? params.dayGte : null;
+  const dayLt = typeof params.dayLt === "string" ? params.dayLt : null;
   const admin = createAdminClient();
   const lines: string[] = ["day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
   let positions = 0;
   const pageSize = 50; let from = 0;
   for (;;) {
-    const { data, error } = await admin.from("research_requests").select("result").eq("kind", sourceKind).eq("status", "done").order("created_at").range(from, from + pageSize - 1);
+    // Order by id: bulk-queued rows share created_at, which made page boundaries
+    // non-deterministic (rows dropped/duplicated across pages).
+    let query = admin.from("research_requests").select("result").eq("kind", sourceKind).eq("status", "done");
+    if (dayGte) query = query.gte("params->>day", dayGte);
+    if (dayLt) query = query.lt("params->>day", dayLt);
+    const { data, error } = await query.order("id").range(from, from + pageSize - 1);
     if (error) throw new Error(`ml-export read: ${error.message}`);
     if (!data?.length) break;
     for (const row of data) {
@@ -309,7 +317,7 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     from += pageSize;
   }
   const body = lines.join("\n");
-  const name = `${sourceKind}-${Date.now()}.csv`;
+  const name = `${sourceKind}${dayGte ? `-from-${dayGte}` : ""}${dayLt ? `-to-${dayLt}` : ""}-${Date.now()}.csv`;
   const { error: uploadError } = await admin.storage.from("research").upload(name, body, { contentType: "text/csv", upsert: true });
   if (uploadError) throw new Error(`ml-export upload: ${uploadError.message}`);
   const { data: urlData } = admin.storage.from("research").getPublicUrl(name);
