@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import { EXIT_RULES, dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
+import { stampExitAdvisor } from "./advisor.js";
 import { cancelOrder, getLatestOptionQuote, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
 import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
@@ -138,6 +139,9 @@ export class PositionManager {
       position.peakBid = Math.max(position.entryPrice, quote.bid);
     }
     position.peakBid = Math.max(position.peakBid,quote.bid);
+    // ADVISORY ONLY (tournament 2026-11-24): the exit advisor journals its opinion once
+    // a minute per same-day position; fire-and-forget so the exit path never waits on it.
+    void stampExitAdvisor(position, quote.bid, now);
     const dte = dteFromOcc(position.alpacaSymbol);
     // TREND (ride) mode: MAX CONVEXITY — only the 50% disaster floor sells; the trail
     // and time rules are off so multi-day swings can survive option-price wobbles.

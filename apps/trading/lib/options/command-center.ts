@@ -84,7 +84,12 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {
     // Phase 3 stamp: the news state known at fire time rides the signal record.
     const newsContext = await import("@/lib/news/market-news").then(module => module.newsContextFor(underlying)).catch(() => null);
-    const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString(), news_context:newsContext });
+    // 30-min directional leg at fire time (research-scan definition, also the convexity
+    // gate's): stamped so the 11:00 lottery-day detector reads real legs, not proxies.
+    const legBars = (market as { bars?: Array<{ close: number }> }).bars ?? [];
+    const legDir = signal.action === "enter_call" ? 1 : -1;
+    const legPct30 = legBars.length >= 31 ? Number(((legBars[legBars.length - 1].close / legBars[legBars.length - 31].close - 1) * 100 * legDir).toFixed(2)) : null;
+    const { error: signalError } = await admin.from("option_signals").upsert({ signal_id:signal.id, underlying, action:signal.action, setup:signal.setup, confidence:signal.confidence, contract_ticker:signal.contract?.ticker, fingerprint:`${signal.action}:${signal.contract?.ticker}:${signal.market.regime}`, market_snapshot:signal.market, contract_snapshot:signal.contract, reasons:signal.reasons, invalidation:signal.invalidation, generated_at:new Date(signal.generatedAt).toISOString(), news_context:newsContext, leg_pct30:legPct30 });
     if (signalError) errors.push(`Signal persistence: ${signalError.message}`);
     // Telegram bot (2026-11-21, user call): EVERY feed fire — all watch names, not
     // just SPX — becomes a one-tap Robinhood buy card. The module dedupes per

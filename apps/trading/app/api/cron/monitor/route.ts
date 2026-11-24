@@ -163,6 +163,10 @@ export async function GET(request: Request) {
   // cell lights (the one cell with evidenced puts asymmetry). Context, never signal.
   const { runMorningNewsScore } = await import("@/lib/news/morning-score");
   await runMorningNewsScore().catch(error => console.error("morning news score failed", error));
+  // Lottery-day detector v2 stamp (11:00-11:15 ET, once/day): day-shape + event
+  // calendar scored by the walk-forward model; armed days page. Advisory only.
+  const { runLotteryDayStamp } = await import("@/lib/ml/lottery-stamp");
+  await runLotteryDayStamp().catch(error => console.error("lottery day stamp failed", error));
   const morningCard = await runSpxMorningCard().catch(error => { console.error("morning card failed", error); return { sent:false }; });
   void morningCard;
   // Overnight SPX watch (Cboe GTH, 8:15 PM-9:25 AM): ES-futures sampling + alerts

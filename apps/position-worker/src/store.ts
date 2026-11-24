@@ -56,6 +56,10 @@ export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask
   const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,exit_mode:position.exitMode,updated_at:new Date().toISOString() });
   if (error) throw new Error(`monitor save failed for ${position.ticker}: ${error.message}`);
 }
+export async function stampAdvisorRow(row:{occ:string;minuteEt:number;prob:number;opinion:"hold"|"exit";features:Record<string,number>}) {
+  const { error } = await db.from("exit_advisor_stamps").insert({ occ:row.occ, minute_et:row.minuteEt, prob:Number(row.prob.toFixed(4)), opinion:row.opinion, features:row.features });
+  if (error) throw new Error(`advisor stamp failed for ${row.occ}: ${error.message}`);
+}
 export async function markMissingPositions(openTickers:string[],orders:AlpacaOrder[]) {
   const { data,error } = await db.from("paper_position_monitors").select("contract_ticker,user_id,signal_id,close_order_id,entry_price").in("status",["monitoring","closing","error"]);
   if (error) throw new Error(`db error: ${error.message}`); const missing = (data ?? []).filter(row=>!openTickers.includes(row.contract_ticker));
