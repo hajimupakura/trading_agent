@@ -163,6 +163,10 @@ export async function GET(request: Request) {
   // Alpaca keys live (one pending research_requests row per tick, read-only).
   const { runResearchQueue } = await import("@/lib/research/queue");
   await runResearchQueue().catch(error => console.error("research queue failed", error));
+  // Post-close pullback grading: every fire's first pullback gets heldVwap /
+  // volumeFading / secondLeg stamped on its shadow row (16:05-16:25 window only).
+  const { runPullbackGrades } = await import("@/lib/options/pullback-grade");
+  const pullbackGrades = await runPullbackGrades().catch(error => ({ graded: 0, errors: [error instanceof Error ? error.message : String(error)] }));
   void overnight;
   // Post-trade autopsies: stage new closed trades and analyze those whose tape arrived.
   const reviews = minute % 15 === 7 ? await runTradeReviews().catch(error => { console.error("trade reviews failed", error); return { staged:0, analyzed:[] as string[] }; }) : null;
@@ -185,6 +189,7 @@ export async function GET(request: Request) {
     // Every-minute scan coverage: a tick that ran out of deadline before reaching all
     // watch names reports here — three consecutive degraded ticks page the user.
     "scan-coverage": skippedWatch.length ? [`deadline hit: ${skippedWatch.length} names skipped (${skippedWatch.join(",")})`] : [],
+    "pullback-grade": pullbackGrades.errors,
   }).catch(error => console.error("heartbeat failed", error));
   return Response.json({ ok:results.every(result => result.status === "fulfilled"), refreshed:["SPY","SPX",...watchGroup], skipped:skippedWatch, longHorizons:includeLongHorizons, autoEntry, rhAutoEntry, radar, surge, metals, convexity, replay, sectors, research, reviews, aiReviews, notify, at:new Date().toISOString() });
 }
