@@ -105,7 +105,10 @@ async function runPullbackScan(params: Record<string, unknown>, deadline: number
     if (Date.now() > deadline) throw new Error("pullback-scan: time budget exhausted — narrow the window");
     const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
     url.searchParams.set("timeframe", "1Min"); url.searchParams.set("feed", process.env.ALPACA_DATA_PLAN === "paid" ? "sip" : "iex");
-    url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "10000");
+    // adjustment 'raw' lets pre-split windows report the PRICES THAT ACTUALLY TRADED,
+    // so option strikes built from spot match the era's real contracts (SMCI early
+    // 2024). Only valid for windows containing no split; default stays 'all'.
+    url.searchParams.set("adjustment", String(params.adjustment ?? "all")); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "10000");
     if (params.start) url.searchParams.set("start", String(params.start));
     if (params.end) url.searchParams.set("end", String(params.end));
     if (pageToken) url.searchParams.set("page_token", pageToken);
