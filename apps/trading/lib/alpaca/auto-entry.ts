@@ -142,14 +142,17 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   const isIndexOcc = (symbol: string) => /^(SPXW|SPX|SPY)\d/.test(symbol.replace(/^O:/, ""));
   const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex);
   const sleeveTradesToday = isIndex ? tradesToday.index : tradesToday.equity;
-  // MORNING BUDGET (user call 2026-11-23: "all 5 entries should not happen in the
-  // morning"): the equity sleeve may spend at most 2 of its 5 daily entries before
-  // 12:30 ET. Real-tape replay of 11/23: first-come-first-served burned all 5 slots
-  // by 10:39 on morning chop (+$46); holding 3 slots for the afternoon trend fires
-  // (META +159% peak, MU +130%, SPCX re-fire) made +$966 under identical exits. The
-  // skip is recorded + shadow-tracked like every veto, so the ledger keeps scoring
-  // what the held-back morning fires would have done.
-  if (!isIndex && etMin < 750 && tradesToday.equityMorning >= 2) return { entered: null, skipped: "morning budget: 2 equity entries already taken before 12:30 ET — remaining slots held for afternoon setups" };
+  // AFTERNOON RESERVE (recalibrated same night, 2026-11-23): the first version capped
+  // mornings at 2 of 5 entries, fitted to the 11/23 replay where afternoon fires
+  // carried the day (+$46 vs +$966). A 1-year scan of 3,028 real surge events across
+  // the watchlist then showed 11/23 was the OUTLIER: 47% of strong surges start
+  // 9:30-10:00, morning follow-through 68.7% decaying monotonically to 54.2% after
+  // 12:30 (user's instinct, confirmed). The durable lesson from 11/23 is only "never
+  // exhaust every slot": mornings may now spend all but TWO of the day's entries;
+  // two stay reserved for afternoon continuation re-fires. Skips remain shadow-
+  // tracked, so the ledger keeps scoring whatever this reserve costs or saves.
+  const afternoonReserve = 2;
+  if (!isIndex && etMin < 750 && tradesToday.equityMorning >= Math.max(1, sleeveSettings.maxTradesPerDay - afternoonReserve)) return { entered: null, skipped: `morning budget: ${sleeveSettings.maxTradesPerDay - afternoonReserve} equity entries already taken before 12:30 ET — ${afternoonReserve} slots held for afternoon setups` };
   // CHEAPER-STRIKE FALLBACK (user call 2026-11-23: MU fired 11 times, every pick
   // $1,000+, all skipped on the $500 cap): when the signal's quality pick busts the
   // sleeve's per-trade cap, buy the highest-delta ELIGIBLE strike that fits instead —
