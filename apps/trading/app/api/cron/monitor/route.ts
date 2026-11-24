@@ -181,6 +181,11 @@ export async function GET(request: Request) {
   // Alpaca keys live (one pending research_requests row per tick, read-only).
   const { runResearchQueue } = await import("@/lib/research/queue");
   await runResearchQueue().catch(error => console.error("research queue failed", error));
+  // Daily corpus growth (16:20-16:35 ET, once/day): today's fires become ml-corpus/
+  // ml-swing/ml-lottery day-requests so the enter-everything research dataset grows
+  // every trading day — budgeted sleeves rehearse deployment; the corpus explores.
+  const { enqueueDailyCorpus } = await import("@/lib/research/daily-corpus");
+  await enqueueDailyCorpus().catch(error => console.error("daily corpus enqueue failed", error));
   // Post-close pullback grading: every fire's first pullback gets heldVwap /
   // volumeFading / secondLeg stamped on its shadow row (16:05-16:25 window only).
   const { runPullbackGrades } = await import("@/lib/options/pullback-grade");
