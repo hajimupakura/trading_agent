@@ -19,14 +19,28 @@ export async function ingestMarketNews(): Promise<{ stored: number }> {
   // Cursor: newest stored published_at minus a minute of overlap (upsert dedupes).
   const { data: newest } = await admin.from("market_news").select("published_at").order("published_at", { ascending: false }).limit(1).maybeSingle();
   const start = newest?.published_at ? new Date(Date.parse(String(newest.published_at)) - 60_000) : new Date(Date.now() - 12 * 3_600_000);
-  const url = new URL(NEWS_URL);
-  url.searchParams.set("start", start.toISOString());
-  url.searchParams.set("limit", "50");
-  url.searchParams.set("sort", "desc");
-  const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error(`Alpaca news ${response.status}`);
-  const payload = await response.json() as { news?: Array<{ id: number | string; headline?: string; summary?: string; source?: string; url?: string; symbols?: string[]; created_at?: string; updated_at?: string }> };
-  const rows = (payload.news ?? [])
+  // OLDEST-FIRST + PAGINATED (bug fix 2026-11-23): the original pull asked for the
+  // 50 NEWEST since the cursor with no pagination — in any busy window with >50
+  // items the OLDER ones were silently dropped and the cursor jumped past them
+  // forever. Steady PR drip survived; clustered hot-name news (the NVDA/MU catalyst
+  // bursts) was exactly what got eaten — 11/23 stored 496 headlines with ZERO
+  // Nvidia items. Ascending + page_token means the cursor only advances through
+  // items actually stored; a burst just takes an extra tick to catch up.
+  const news: Array<{ id: number | string; headline?: string; summary?: string; source?: string; url?: string; symbols?: string[]; created_at?: string; updated_at?: string }> = [];
+  let pageToken: string | undefined; let pages = 0;
+  do {
+    const url = new URL(NEWS_URL);
+    url.searchParams.set("start", start.toISOString());
+    url.searchParams.set("limit", "50");
+    url.searchParams.set("sort", "asc");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`Alpaca news ${response.status}`);
+    const payload = await response.json() as { news?: typeof news; next_page_token?: string | null };
+    news.push(...(payload.news ?? []));
+    pageToken = payload.next_page_token ?? undefined;
+  } while (pageToken && ++pages < 6);
+  const rows = news
     .filter(item => item.id != null && item.headline)
     .map(item => ({
       news_id: String(item.id), headline: String(item.headline).slice(0, 500),

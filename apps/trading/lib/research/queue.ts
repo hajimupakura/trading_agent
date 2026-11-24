@@ -65,6 +65,29 @@ async function fetchStockBars(params: Record<string, unknown>, deadline: number)
   return bars;
 }
 
+// Historical news for retro-labeling fires (the Phase-3 catalyst study does not have
+// to wait for live stamps to accumulate — Alpaca serves Benzinga history).
+async function fetchNewsHistory(params: Record<string, unknown>, deadline: number): Promise<Array<{ id: string; headline: string; symbols: string[]; published_at: string }>> {
+  const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
+  const out: Array<{ id: string; headline: string; symbols: string[]; published_at: string }> = [];
+  let pageToken: string | undefined; let pages = 0;
+  do {
+    if (Date.now() > deadline) throw new Error("news-history: time budget exhausted — narrow the window");
+    const url = new URL("https://data.alpaca.markets/v1beta1/news");
+    if (Array.isArray(params.symbols) && params.symbols.length) url.searchParams.set("symbols", params.symbols.map(String).slice(0, 30).join(","));
+    if (params.start) url.searchParams.set("start", String(params.start));
+    if (params.end) url.searchParams.set("end", String(params.end));
+    url.searchParams.set("limit", "50"); url.searchParams.set("sort", "asc");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`news-history: Alpaca ${response.status}`);
+    const payload = await response.json() as { news?: Array<{ id: number | string; headline?: string; symbols?: string[]; created_at?: string }>; next_page_token?: string | null };
+    for (const item of payload.news ?? []) if (item.id != null && item.headline) out.push({ id: String(item.id), headline: String(item.headline).slice(0, 300), symbols: (item.symbols ?? []).map(String), published_at: item.created_at ?? "" });
+    pageToken = payload.next_page_token ?? undefined;
+  } while (pageToken && ++pages < 40);
+  return out;
+}
+
 export async function runResearchQueue(): Promise<{ ran: string | null; error?: string }> {
   const admin = createAdminClient();
   const { data: request } = await admin.from("research_requests").select("id,kind,params").eq("status", "pending").order("created_at", { ascending: true }).limit(1).maybeSingle();
@@ -78,6 +101,7 @@ export async function runResearchQueue(): Promise<{ ran: string | null; error?: 
     let result: unknown;
     if (request.kind === "option-bars") result = await fetchOptionBars(params, deadline);
     else if (request.kind === "stock-bars") result = await fetchStockBars(params, deadline);
+    else if (request.kind === "news-history") result = await fetchNewsHistory(params, deadline);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
     if (encoded.length > MAX_RESULT_BYTES) throw new Error(`result too large (${encoded.length}b) — split the request`);
