@@ -46,9 +46,25 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // yesterday's.
   const peakDollarGain = (position.peakBid - position.entryPrice) * position.quantity * 100;
   const lockSuspended = position.exitMode === "drive" && clock.minutes < 615;
-  if (position.exitMode !== "trend" && !lockSuspended && peakDollarGain >= 300) {
+  // trend (RIDE) and convexity are exempt: the swarm study (5,325 ladder positions,
+  // 2026-11-24) showed every early profit-take amputates the monsters that pay for
+  // the duds — convexity's charter is max loss = premium, exit on TIME only.
+  if (!["trend", "convexity"].includes(position.exitMode) && !lockSuspended && peakDollarGain >= 300) {
     const lockPrice = position.entryPrice + (position.peakBid - position.entryPrice) * 0.6;
     if (bid <= lockPrice) return "trailing_stop";
+  }
+  if (position.exitMode === "convexity") {
+    // CONVEXITY SLEEVE (user-authorized 2026-11-24; calibrated on the 22-month swarm
+    // study): far-OTM 3-7 DTE swing. NO premium stop, NO trail, NO profit target —
+    // the day+2-close exit beat every target/trail variant (+$157k vs -$55k for 5x
+    // targets on the same 979 far-OTM positions). Max loss is the premium, by design.
+    // Exits: expiry-day 14:00 ET guard, else day+2 session close (>= 2 trading days
+    // held, 15:45 ET). Weekends hold; nothing else sells.
+    if (["Sat","Sun"].includes(clock.weekday)) return null;
+    const convexityDte = dteFromOcc(position.alpacaSymbol, now) ?? 0;
+    if (convexityDte <= 0 && clock.minutes >= 840) return "mandatory_time_exit";
+    if (tradingDaysHeld(openedClock.dateKey, clock.dateKey) >= 2 && clock.minutes >= 945) return "mandatory_time_exit";
+    return null;
   }
   if (position.exitMode === "scalp") {
     // The 15:10 flat and overnight guards still apply (a worker outage must never
@@ -151,6 +167,21 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   // positions are governed by the stop and trails instead.
   if (!isSwing && !longDated && !heldOvernight && now.getTime() - position.openedAt >= EXIT_RULES.noFollowThroughMs && position.peakBid < position.entryPrice * (1 + EXIT_RULES.followThroughPct)) return "no_follow_through";
   return null;
+}
+
+// Weekdays strictly after openKey up to and including nowKey (ET date keys,
+// YYYY-MM-DD). Entry Friday -> Tuesday = 2; weekends never count as held days.
+export function tradingDaysHeld(openKey:string, nowKey:string):number {
+  if (nowKey <= openKey) return 0;
+  let count = 0;
+  const cursor = new Date(`${openKey}T12:00:00Z`);
+  const end = Date.parse(`${nowKey}T12:00:00Z`);
+  while (cursor.getTime() < end) {
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const day = cursor.getUTCDay();
+    if (day !== 0 && day !== 6) count++;
+  }
+  return count;
 }
 
 // Days to expiry from an OCC symbol date (YYMMDD segment), in ET.

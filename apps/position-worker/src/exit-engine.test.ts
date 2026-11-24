@@ -54,3 +54,17 @@ describe("long-dated position handling", () => {
   it("keeps the 30% stop for long-dated positions", () => expect(evaluateExit({ position:base, bid:2.7, underlyingPrice:771, longDated:true, now:at("19:10") })).toBe("premium_stop"));
   it("keeps the trailing stop for long-dated positions", () => expect(evaluateExit({ position:{...base,peakBid:8}, bid:6.7, underlyingPrice:771, longDated:true, now:at("14:05") })).toBe("trailing_stop"));
 });
+
+describe("convexity swarm mode (time-only exits)", () => {
+  // Entry Monday 2026-08-03, Friday 2026-08-07 expiry (4 DTE), far-OTM swarm.
+  const conv:ManagedPosition = { ...base, ticker:"O:NVDA260807C00200000", alpacaSymbol:"NVDA260807C00200000", entryPrice:0.10, peakBid:0.10, openedAt:Date.parse("2026-08-03T14:00:00Z"), exitMode:"convexity" };
+  it("never premium-stops: a -70% bid holds", () => expect(evaluateExit({ position:conv, bid:0.03, underlyingPrice:null, now:new Date("2026-08-03T18:00:00Z") })).toBe(null));
+  it("never trails: a 10x spike fading 50% holds", () => expect(evaluateExit({ position:{...conv,peakBid:1.0}, bid:0.5, underlyingPrice:null, now:new Date("2026-08-04T18:00:00Z") })).toBe(null));
+  it("is exempt from the $300 dollar lock", () => expect(evaluateExit({ position:{...conv,quantity:250,peakBid:0.40}, bid:0.20, underlyingPrice:null, now:new Date("2026-08-04T18:00:00Z") })).toBe(null));
+  it("holds through day+1 close", () => expect(evaluateExit({ position:conv, bid:0.30, underlyingPrice:null, now:new Date("2026-08-04T20:50:00Z") })).toBe(null));
+  it("flats at day+2 15:45 ET", () => expect(evaluateExit({ position:conv, bid:0.30, underlyingPrice:null, now:new Date("2026-08-05T19:45:00Z") })).toBe("mandatory_time_exit"));
+  it("holds day+2 before 15:45 ET", () => expect(evaluateExit({ position:conv, bid:0.30, underlyingPrice:null, now:new Date("2026-08-05T19:30:00Z") })).toBe(null));
+  // Friday entry -> Tuesday is day+2 (the weekend never counts as held days).
+  it("counts trading days across a weekend", () => expect(evaluateExit({ position:{...conv,alpacaSymbol:"NVDA260814C00200000",ticker:"O:NVDA260814C00200000",openedAt:Date.parse("2026-08-07T15:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-10T19:50:00Z") })).toBe(null));
+  it("flats at expiry-day 14:00 ET as the last guard", () => expect(evaluateExit({ position:{...conv,openedAt:Date.parse("2026-08-06T18:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-07T18:00:00Z") })).toBe("mandatory_time_exit"));
+});

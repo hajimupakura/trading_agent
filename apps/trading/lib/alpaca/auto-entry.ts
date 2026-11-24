@@ -25,12 +25,15 @@ async function entriesToday(userId: string) {
   const representedAsUtc = Date.UTC(Number(localAtGuess.year), Number(localAtGuess.month) - 1, Number(localAtGuess.day), Number(localAtGuess.hour), Number(localAtGuess.minute), Number(localAtGuess.second));
   const since = new Date(midnightGuess - (representedAsUtc - midnightGuess)).toISOString();
   // Sleeve-aware (2026-11-23): index (SPX/SPY) and equity entries count separately.
-  const { data, error } = await createAdminClient().from("paper_trade_orders").select("underlying,created_at").eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
+  // Convexity-swarm rows (2026-11-24) belong to the THIRD sleeve and count toward
+  // neither — without this filter one swarm would silently eat an equity slot.
+  const { data, error } = await createAdminClient().from("paper_trade_orders").select("underlying,created_at,risk_snapshot").eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
   if (error) throw new Error(`Trade journal unavailable: ${error.message}`);
-  const index = (data ?? []).filter(row => ["SPX", "SPY"].includes(String(row.underlying))).length;
+  const rows = (data ?? []).filter(row => (row.risk_snapshot as { strategy?: string } | null)?.strategy !== "convexity-swarm");
+  const index = rows.filter(row => ["SPX", "SPY"].includes(String(row.underlying))).length;
   // Morning sub-count for the equity sleeve's budget: entries before 12:30 ET.
   const morningCutoff = new Date(new Date(since).getTime() + 750 * 60_000).toISOString();
-  const equityRows = (data ?? []).filter(row => !["SPX", "SPY"].includes(String(row.underlying)));
+  const equityRows = rows.filter(row => !["SPX", "SPY"].includes(String(row.underlying)));
   return { index, equity: equityRows.length, equityMorning: equityRows.filter(row => String(row.created_at) < morningCutoff).length };
 }
 
@@ -140,7 +143,11 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   const isIndex = ["SPX", "SPY"].includes(underlying);
   const sleeveSettings = isIndex ? { ...settings, maxTradeDebit: 1800, maxOpenPositions: 1, maxTradesPerDay: 3 } : settings;
   const isIndexOcc = (symbol: string) => /^(SPXW|SPX|SPY)\d/.test(symbol.replace(/^O:/, ""));
-  const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex);
+  // Convexity-swarm positions (third sleeve, 3-7 DTE) share OCC roots with the equity
+  // sleeve — exclude them so a live swarm never consumes an equity concurrency slot.
+  const { data: convexityRows } = await admin.from("paper_trade_orders").select("contract_ticker").eq("action", "buy_to_open").eq("risk_snapshot->>strategy", "convexity-swarm").gte("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString());
+  const convexityTickers = new Set((convexityRows ?? []).map(row => String(row.contract_ticker)));
+  const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex && !convexityTickers.has(`O:${position.symbol}`));
   const sleeveTradesToday = isIndex ? tradesToday.index : tradesToday.equity;
   // AFTERNOON RESERVE (recalibrated same night, 2026-11-23): the first version capped
   // mornings at 2 of 5 entries, fitted to the 11/23 replay where afternoon fires

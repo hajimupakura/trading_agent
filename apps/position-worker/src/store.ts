@@ -28,7 +28,7 @@ export async function adoptBrokerPosition(alpacaSymbol:string,entryPrice:number,
 }
 export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,orders:AlpacaOrder[]):Promise<ManagedPosition|null> {
   const ticker = `O:${alpacaSymbol}`;
-  const { data:entry, error } = await db.from("paper_trade_orders").select("user_id,signal_id,alpaca_order_id,created_at").eq("contract_ticker",ticker).eq("action","buy_to_open").order("created_at",{ascending:false}).limit(1).maybeSingle();
+  const { data:entry, error } = await db.from("paper_trade_orders").select("user_id,signal_id,alpaca_order_id,created_at,risk_snapshot").eq("contract_ticker",ticker).eq("action","buy_to_open").order("created_at",{ascending:false}).limit(1).maybeSingle();
   if (error) throw new Error(`db error: ${error.message}`); if (!entry) return null;
   const [{data:signal,error:signalError},{data:state,error:stateError}] = await Promise.all([
     entry.signal_id ? db.from("option_signals").select("action,setup,market_snapshot").eq("signal_id",entry.signal_id).maybeSingle() : Promise.resolve({data:null,error:null} as {data:null,error:null}),
@@ -43,11 +43,14 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   return { ticker,alpacaSymbol,side:signal ? (signal.action === "enter_put" ? "put":"call") : occSide,quantity:1,entryPrice,
     peakBid:Number(state?.peak_bid ?? entryPrice),openedAt:Date.parse(state?.opened_at ?? brokerEntry?.filled_at ?? entry.created_at),signalId:entry.signal_id,userId:entry.user_id,
     market,closeOrderId:state?.close_order_id ?? null,closeOrderSubmittedAt:state?.close_order_submitted_at ? Date.parse(state.close_order_submitted_at):null,lastQuoteAt:state?.last_quote_at ? Date.parse(state.last_quote_at):null,
-    // First sighting (no monitor row yet): scalp signals get the scalp profile, opening
-    // drives get the drive profile (trail suspended until 10:00), 3+ day contracts are
-    // swings defaulting to trend (RIDE). Existing rows keep their stored mode.
-    exitMode:state ? (["trend","scalp","drive","thesis"].includes(String(state.exit_mode)) ? state.exit_mode as "trend"|"scalp"|"drive"|"thesis" : "burst")
-      : ((signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
+    // First sighting (no monitor row yet): convexity-sleeve entries (journaled with
+    // strategy 'convexity-swarm') get the time-only convexity profile, scalp signals
+    // get the scalp profile, opening drives get the drive profile (trail suspended
+    // until 10:00), other 3+ day contracts are swings defaulting to trend (RIDE).
+    // Existing rows keep their stored mode.
+    exitMode:state ? (["trend","scalp","drive","thesis","convexity"].includes(String(state.exit_mode)) ? state.exit_mode as "trend"|"scalp"|"drive"|"thesis"|"convexity" : "burst")
+      : ((entry.risk_snapshot as {strategy?:string}|null)?.strategy === "convexity-swarm" ? "convexity"
+        : (signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
 }
 export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask:number;quoteAt:number;status:string;exitReason?:string|null;closeOrderId?:string|null;error?:string|null}) {
   const { error } = await db.from("paper_position_monitors").upsert({ contract_ticker:position.ticker,user_id:position.userId,signal_id:position.signalId,status:input.status,entry_price:position.entryPrice,peak_bid:position.peakBid,latest_bid:input.bid,latest_ask:input.ask,opened_at:new Date(position.openedAt).toISOString(),last_quote_at:new Date(input.quoteAt).toISOString(),exit_reason:input.exitReason ?? null,close_order_id:input.closeOrderId ?? position.closeOrderId,last_error:input.error ?? null,exit_mode:position.exitMode,updated_at:new Date().toISOString() });

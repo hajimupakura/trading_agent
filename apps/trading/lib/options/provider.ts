@@ -41,7 +41,7 @@ interface AlpacaOptionSnapshot {
   impliedVolatility?: number | null;
   greeks?: { delta?: number | null; gamma?: number | null; theta?: number | null } | null;
 }
-async function alpacaChainRows(underlying: Underlying, expiration: string, dte: number): Promise<Parameters<typeof rankContracts>[0]> {
+export async function alpacaChainRows(underlying: Underlying, expiration: string, dte: number): Promise<Parameters<typeof rankContracts>[0]> {
   const headers = alpacaKeys();
   // The S&P 500 lists under TWO Cboe roots, and Alpaca addresses each as its own
   // underlying symbol: "SPX" carries only the AM-settled third-Friday monthlies

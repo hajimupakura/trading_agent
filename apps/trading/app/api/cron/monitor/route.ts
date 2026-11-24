@@ -78,6 +78,15 @@ export async function GET(request: Request) {
     autoEntry = await runAutoEntry(candidate.snapshot, candidate.underlying).catch(error => { console.error("auto entry failed", candidate.underlying, error); return { entered:null, skipped:String(error) }; });
     if (autoEntry.entered) break;
   }
+  // Convexity sleeve (third sleeve, 2026-11-24): an independent pass over the same
+  // fires — a fire the main lanes traded or skipped can still qualify for a swarm.
+  // Its own budget (1/day, 2 concurrent) caps it; break on the first entry.
+  const { runConvexityEntry } = await import("@/lib/alpaca/convexity-sleeve");
+  let convexityEntry: { entered: string | null; skipped?: string } = { entered: null };
+  for (const candidate of autoCandidates) {
+    convexityEntry = await runConvexityEntry(candidate.snapshot, candidate.underlying).catch(error => { console.error("convexity entry failed", candidate.underlying, error); return { entered:null, skipped:String(error) }; });
+    if (convexityEntry.entered) break;
+  }
   // Shadow ledger live-mark: open skipped-signal rows pick up fresh quotes (last
   // bid, peak bid) so the dashboard's Signal Feed shows what each veto cost.
   const shadowMark = await markShadowLedger(autoCandidates[0]?.snapshot ?? null).catch(error => { console.error("shadow ledger mark failed", error); return { marked: 0, closed: 0, quoteError: error instanceof Error ? error.message : String(error) }; });
