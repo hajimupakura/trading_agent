@@ -209,7 +209,11 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
   const day = String(params.day ?? "");
   const entries = Array.isArray(params.entries) ? params.entries as Array<{ sym: string; dir: number; fireMin: number; spot: number }> : [];
   if (!day || !entries.length) throw new Error("ml-swing: params.day and entries required");
-  const otm = Number(params.otmPct ?? 4) / 100;
+  // STRIKE LADDER (user call 2026-11-23: "few close to the money or many out of the
+  // money?"): each event fetches FOUR moneyness levels — slightly ITM (-2%), near
+  // the money (+1%), OTM (+4%), far OTM (+8%) — same expiry, so equal-dollar
+  // allocations compare directly and an ML strike advisor has labels to learn from.
+  const levels = Array.isArray(params.levels) ? (params.levels as number[]) : [-2, 1, 4, 8];
   const base = new Date(`${day}T12:00:00Z`);
   // Expiry: the Friday 3-7 days out (this week's if >=3 days away, else next week's).
   const dow = base.getUTCDay(); // 1=Mon..5=Fri
@@ -219,12 +223,12 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
   const yymmdd = expiryStr.slice(2).replaceAll("-", "");
   const incFor = (spot: number) => spot >= 500 ? 5 : spot >= 250 ? 2.5 : spot >= 100 ? 1 : 0.5;
   const occFor = (sym: string, dir: number, strike: number) => `${sym}${yymmdd}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
-  const candidates = entries.flatMap(entry => {
+  const candidates = entries.flatMap(entry => levels.flatMap(lvl => {
     const inc = incFor(entry.spot); const alt = inc * 2.5 <= 5 ? inc * 2.5 : inc * 2;
-    const target = entry.spot * (1 + otm * entry.dir);
+    const target = entry.spot * (1 + (lvl / 100) * entry.dir);
     const pick = (step: number) => entry.dir > 0 ? Math.ceil(target / step) * step : Math.floor(target / step) * step;
-    return [{ entry, occ: occFor(entry.sym, entry.dir, pick(inc)) }, { entry, occ: occFor(entry.sym, entry.dir, pick(alt)) }];
-  });
+    return [{ entry, lvl, occ: occFor(entry.sym, entry.dir, pick(inc)) }, { entry, lvl, occ: occFor(entry.sym, entry.dir, pick(alt)) }];
+  }));
   const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
   const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const dayMs = 86_400_000; const baseUtc = Date.parse(`${day}T00:00:00Z`);
@@ -258,13 +262,15 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
   }
   const out: Array<Record<string, unknown>> = [];
   for (const entry of entries) {
-    const mine = candidates.filter(c => c.entry === entry).map(c => ({ occ: c.occ, path: paths.get(c.occ) ?? [] }));
-    const bestPick = mine.sort((a, b) => b.path.length - a.path.length)[0];
-    if (!bestPick || bestPick.path.length < 30) continue;
-    const path = bestPick.path.filter(([min]) => min >= entry.fireMin);
-    const first = path[0];
-    if (!first || first[1] <= 0.02) continue;
-    out.push({ day, sym: entry.sym, dir: entry.dir, fireMin: entry.fireMin, occ: bestPick.occ, expiry: expiryStr, entryPrint: first[1], path });
+    for (const lvl of levels) {
+      const mine = candidates.filter(c => c.entry === entry && c.lvl === lvl).map(c => ({ occ: c.occ, path: paths.get(c.occ) ?? [] }));
+      const bestPick = mine.sort((a, b) => b.path.length - a.path.length)[0];
+      if (!bestPick || bestPick.path.length < 30) continue;
+      const path = bestPick.path.filter(([min]) => min >= entry.fireMin);
+      const first = path[0];
+      if (!first || first[1] <= 0.02) continue;
+      out.push({ day, sym: entry.sym, dir: entry.dir, lvl, fireMin: entry.fireMin, occ: bestPick.occ, expiry: expiryStr, entryPrint: first[1], path });
+    }
   }
   return out;
 }
@@ -274,7 +280,7 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
 async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url: string; positions: number; rows: number }> {
   const sourceKind = String(params.sourceKind ?? "ml-corpus");
   const admin = createAdminClient();
-  const lines: string[] = ["day,sym,dir,occ,fireMin,entryPrint,min,price"];
+  const lines: string[] = ["day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
   let positions = 0;
   const pageSize = 50; let from = 0;
   for (;;) {
@@ -282,9 +288,9 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     if (error) throw new Error(`ml-export read: ${error.message}`);
     if (!data?.length) break;
     for (const row of data) {
-      for (const position of (row.result as Array<{ day: string; sym: string; dir: number; occ: string; fireMin: number; entryPrint: number; path: Array<[number, number]> }> ?? [])) {
+      for (const position of (row.result as Array<{ day: string; sym: string; dir: number; lvl?: number; occ: string; fireMin: number; entryPrint: number; path: Array<[number, number]> }> ?? [])) {
         positions++;
-        for (const [min, price] of position.path ?? []) lines.push(`${position.day},${position.sym},${position.dir},${position.occ},${position.fireMin},${position.entryPrint},${min},${price}`);
+        for (const [min, price] of position.path ?? []) lines.push(`${position.day},${position.sym},${position.dir},${position.lvl ?? 0},${position.occ},${position.fireMin},${position.entryPrint},${min},${price}`);
       }
     }
     if (data.length < pageSize) break;
