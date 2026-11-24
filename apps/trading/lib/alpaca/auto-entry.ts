@@ -25,10 +25,13 @@ async function entriesToday(userId: string) {
   const representedAsUtc = Date.UTC(Number(localAtGuess.year), Number(localAtGuess.month) - 1, Number(localAtGuess.day), Number(localAtGuess.hour), Number(localAtGuess.minute), Number(localAtGuess.second));
   const since = new Date(midnightGuess - (representedAsUtc - midnightGuess)).toISOString();
   // Sleeve-aware (2026-11-23): index (SPX/SPY) and equity entries count separately.
-  const { data, error } = await createAdminClient().from("paper_trade_orders").select("underlying").eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
+  const { data, error } = await createAdminClient().from("paper_trade_orders").select("underlying,created_at").eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
   if (error) throw new Error(`Trade journal unavailable: ${error.message}`);
   const index = (data ?? []).filter(row => ["SPX", "SPY"].includes(String(row.underlying))).length;
-  return { index, equity: (data ?? []).length - index };
+  // Morning sub-count for the equity sleeve's budget: entries before 12:30 ET.
+  const morningCutoff = new Date(new Date(since).getTime() + 750 * 60_000).toISOString();
+  const equityRows = (data ?? []).filter(row => !["SPX", "SPY"].includes(String(row.underlying)));
+  return { index, equity: equityRows.length, equityMorning: equityRows.filter(row => String(row.created_at) < morningCutoff).length };
 }
 
 // Housekeeping skips — the setup is already expressed (holding / duplicate id) or
@@ -36,7 +39,7 @@ async function entriesToday(userId: string) {
 // fire is recorded and displayed (user call, 2026-11-19: "I want to see those
 // skipped rows"); this list only decides which ones ALSO page Telegram, so a held
 // position doesn't ping the phone every hour while the setup keeps re-firing.
-const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off"];
+const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "scalp lane off", "morning budget"];
 
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
   // FAIL LOUD (2026-11-23): a throw inside the gate chain used to escape to the cron
@@ -88,7 +91,7 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // days (one of them a crash tape) are not evidence, the next month is.
   // SPX keeps its PAIR structure (quality + convex kicker) below.
   const signal = snapshot?.signal;
-  const contract = signal?.contract;
+  let contract = signal?.contract;
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
   // Freshness: act only on signals generated within the last two minutes.
   if (Date.now() - signal.generatedAt > 120_000) return { entered: null, skipped: "stale signal" };
@@ -123,7 +126,8 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   // Never re-enter a contract already held: with maxOpenPositions > 1 the global cap
   // permits a second position, but doubling the SAME contract is unintended averaging.
-  if (trading.positions.some(position => `O:${position.symbol}` === contract.ticker)) return { entered: null, skipped: "already holding this contract" };
+  const pickTicker = contract.ticker;
+  if (trading.positions.some(position => `O:${position.symbol}` === pickTicker)) return { entered: null, skipped: "already holding this contract" };
   // NOTE: event-day caution applies to the REAL-MONEY lane only — paper deliberately
   // trades unfiltered (its record measures the raw strategy, event days included).
   // TWO SLEEVES (user call, 2026-11-23: "give SPX and SPY their own budget of 2000 —
@@ -138,6 +142,28 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   const isIndexOcc = (symbol: string) => /^(SPXW|SPX|SPY)\d/.test(symbol.replace(/^O:/, ""));
   const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex);
   const sleeveTradesToday = isIndex ? tradesToday.index : tradesToday.equity;
+  // MORNING BUDGET (user call 2026-11-23: "all 5 entries should not happen in the
+  // morning"): the equity sleeve may spend at most 2 of its 5 daily entries before
+  // 12:30 ET. Real-tape replay of 11/23: first-come-first-served burned all 5 slots
+  // by 10:39 on morning chop (+$46); holding 3 slots for the afternoon trend fires
+  // (META +159% peak, MU +130%, SPCX re-fire) made +$966 under identical exits. The
+  // skip is recorded + shadow-tracked like every veto, so the ledger keeps scoring
+  // what the held-back morning fires would have done.
+  if (!isIndex && etMin < 750 && tradesToday.equityMorning >= 2) return { entered: null, skipped: "morning budget: 2 equity entries already taken before 12:30 ET — remaining slots held for afternoon setups" };
+  // CHEAPER-STRIKE FALLBACK (user call 2026-11-23: MU fired 11 times, every pick
+  // $1,000+, all skipped on the $500 cap): when the signal's quality pick busts the
+  // sleeve's per-trade cap, buy the highest-delta ELIGIBLE strike that fits instead —
+  // the same capped-quality-pick rule the Telegram cards already use. Never sit out
+  // a live thesis on a technicality (participation-over-perfection doctrine).
+  if (contract.ask * 100 > sleeveSettings.maxTradeDebit) {
+    const pick = contract;
+    const affordable = (snapshot?.contracts ?? [])
+      .filter(row => row.side === pick.side && row.expirationDate === pick.expirationDate && row.eligible && row.bid > 0 && row.ask > 0 && row.ask * 100 <= sleeveSettings.maxTradeDebit && row.ticker !== pick.ticker)
+      .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0];
+    if (!affordable) return { entered: null, skipped: `pick costs $${(pick.ask * 100).toFixed(0)} (cap $${sleeveSettings.maxTradeDebit}) and no eligible cheaper strike fits` };
+    contract = affordable;
+    if (trading.positions.some(position => `O:${position.symbol}` === affordable.ticker)) return { entered: null, skipped: "already holding this contract" };
+  }
   const quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings: sleeveSettings });
   const risk = validatePaperEntry({ signal, contract, ...trading, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
