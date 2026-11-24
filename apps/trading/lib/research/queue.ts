@@ -226,6 +226,25 @@ async function runMlExport(): Promise<{ url: string; positions: number; rows: nu
 }
 
 export async function runResearchQueue(): Promise<{ ran: string | null; error?: string }> {
+  // Off-hours the monitor tick is light and the queue is the only customer, so it
+  // may chew a BATCH per tick (bulk corpus nights finish by morning instead of in
+  // days). During the trading session it stays strictly one request per tick so
+  // research can never crowd the live jobs (2026-11-23).
+  const { minutes, weekday } = (() => {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    return { minutes: Number(parts.hour) * 60 + Number(parts.minute), weekday: String(parts.weekday) };
+  })();
+  const inSession = !["Sat", "Sun"].includes(weekday) && minutes >= 565 && minutes <= 975;
+  const batchDeadline = Date.now() + (inSession ? 0 : 34_000); // 0 extra = single pass in session
+  let last: { ran: string | null; error?: string } = { ran: null };
+  for (;;) {
+    last = await runOneResearchRequest();
+    if (last.ran == null) return last; // queue empty
+    if (Date.now() > batchDeadline - 5_000) return last; // not enough budget for another
+  }
+}
+
+async function runOneResearchRequest(): Promise<{ ran: string | null; error?: string }> {
   const admin = createAdminClient();
   const { data: request } = await admin.from("research_requests").select("id,kind,params").eq("status", "pending").order("created_at", { ascending: true }).limit(1).maybeSingle();
   if (!request) return { ran: null };
