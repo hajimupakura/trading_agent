@@ -86,12 +86,19 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
   // Budget: one new swarm per day, two concurrent max (classified by strategy, so
   // the equity/index sleeves never share slots with this lane).
   const et = etNow();
-  const [{ data: todayRows }, { data: recentRows }, trading] = await Promise.all([
+  const [{ data: todayRows }, { data: recentRows }, { data: dayStamp }, trading] = await Promise.all([
     admin.from("paper_trade_orders").select("id").eq("action", "buy_to_open").eq("risk_snapshot->>strategy", "convexity-swarm").gte("created_at", `${et.dateKey}T00:00:00-05:00`).neq("status", "rejected"),
     admin.from("paper_trade_orders").select("contract_ticker").eq("action", "buy_to_open").eq("risk_snapshot->>strategy", "convexity-swarm").gte("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString()),
+    admin.from("lottery_day_stamps").select("armed,prob").eq("day", et.dateKey).maybeSingle(),
     getPaperTradingState(),
   ]);
-  if ((todayRows?.length ?? 0) >= RULES.maxPerDay) return { entered: null, skipped: "convexity budget: 1 swarm already opened today" };
+  // Lottery-armed days widen the daily budget to 2 swarms (user call 2026-11-24: the
+  // detector acts automatically on paper). Rationale: monsters arrive in litters —
+  // 11/19 alone birthed ten 10x+ contracts — and the armed top-20% of unseen 2026
+  // days carried 59% of all penny-swarm profit.
+  const armedDay = Boolean(dayStamp?.armed);
+  const maxToday = armedDay ? 2 : RULES.maxPerDay;
+  if ((todayRows?.length ?? 0) >= maxToday) return { entered: null, skipped: `convexity budget: ${todayRows?.length} swarm(s) already opened today${armedDay ? " (armed-day cap 2)" : ""}` };
   const openSymbols = new Set(trading.positions.map(position => `O:${position.symbol}`));
   const concurrent = new Set((recentRows ?? []).map(row => String(row.contract_ticker)).filter(ticker => openSymbols.has(ticker)));
   if (concurrent.size >= RULES.maxConcurrent) return { entered: null, skipped: `convexity budget: ${concurrent.size} swarms already open` };

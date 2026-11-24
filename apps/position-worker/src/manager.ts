@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { EXIT_RULES, dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
-import { stampExitAdvisor } from "./advisor.js";
+import { adviseExit } from "./advisor.js";
 import { cancelOrder, getLatestOptionQuote, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
 import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
@@ -139,9 +139,11 @@ export class PositionManager {
       position.peakBid = Math.max(position.entryPrice, quote.bid);
     }
     position.peakBid = Math.max(position.peakBid,quote.bid);
-    // ADVISORY ONLY (tournament 2026-11-24): the exit advisor journals its opinion once
-    // a minute per same-day position; fire-and-forget so the exit path never waits on it.
-    void stampExitAdvisor(position, quote.bid, now);
+    // ML HYBRID on paper (user call 2026-11-24 "paper trading needs to be automatic"):
+    // the advisor scores same-day burst positions (journaling each opinion), and its
+    // probability rides into evaluateExit where it replaces the trail/ratchet under the
+    // V0 floor. Null (out-of-distribution or advisor failure) = pure V0, unchanged.
+    const mlAdvice = adviseExit(position, quote.bid, now);
     const dte = dteFromOcc(position.alpacaSymbol);
     // TREND (ride) mode: MAX CONVEXITY — only the 50% disaster floor sells; the trail
     // and time rules are off so multi-day swings can survive option-price wobbles.
@@ -167,7 +169,15 @@ export class PositionManager {
     const expiryFlat = dte != null && dte <= 0 && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= EXIT_RULES.mandatoryExitMinutes;
     const reason = trendMode
       ? (quote.bid <= position.entryPrice * 0.5 ? "premium_stop" as const : expiryFlat ? "mandatory_time_exit" as const : null)
-      : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2});
+      : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2,ml:mlAdvice});
+    // Telegram-visible WHY for every model-driven sell (user call 2026-11-24: "send me
+    // a message so I understand what's going on and why").
+    if (reason === "ml_advisor_exit" && mlAdvice) {
+      void createWorkerAlert({ userId:position.userId, signalId:position.signalId, eventKey:`ml-exit-${position.alpacaSymbol}-${position.openedAt}`, severity:"info",
+        title:`🤖 ML exit: ${position.alpacaSymbol} (hold odds ${(100*mlAdvice.prob).toFixed(0)}%)`,
+        body:`The exit model puts the odds of another +15% leg at ${(100*mlAdvice.prob).toFixed(0)}% — below its ${(100*mlAdvice.threshold).toFixed(0)}% hold bar — with the bid at $${quote.bid.toFixed(2)} vs $${position.entryPrice.toFixed(2)} entry (peak $${position.peakBid.toFixed(2)}). On six unseen months this hybrid banked 30-35% of peak value vs 19.3% for the old trail rules. The V0 floor (hard stop, 15:10 flat, no-follow-through) was not what fired here — the model simply judges the upside spent.`,
+        metadata:{ kind:"ml_advisor_exit", contractTicker:position.ticker, prob:mlAdvice.prob, bid:quote.bid, peakBid:position.peakBid } }).catch(()=>undefined);
+    }
     const symbolOrders = orders.filter(order => order.symbol === position.alpacaSymbol && order.side === "sell");
     const openClose = symbolOrders.find(activeOrder); const recentlyFilled = symbolOrders.find(order => order.status === "filled" && order.filled_at && now-Date.parse(order.filled_at)<30_000);
     if (!reason) { await saveMonitor(position,{...quoteState,status:"monitoring"}); return; }

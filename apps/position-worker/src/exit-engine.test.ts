@@ -68,3 +68,31 @@ describe("convexity swarm mode (time-only exits)", () => {
   it("counts trading days across a weekend", () => expect(evaluateExit({ position:{...conv,alpacaSymbol:"NVDA260814C00200000",ticker:"O:NVDA260814C00200000",openedAt:Date.parse("2026-08-07T15:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-10T19:50:00Z") })).toBe(null));
   it("flats at expiry-day 14:00 ET as the last guard", () => expect(evaluateExit({ position:{...conv,openedAt:Date.parse("2026-08-06T18:00:00Z")}, bid:0.30, underlyingPrice:null, now:new Date("2026-08-07T18:00:00Z") })).toBe("mandatory_time_exit"));
 });
+
+// ML HYBRID (2026-11-24): when the manager supplies the advisor's probability, the
+// model replaces the trail and ratchet on plain same-day positions — the V0 floor
+// (stop, flat, no-follow-through, invalidation) always keeps the last word.
+const ML_HOLD = { prob: 0.9, threshold: 0.55 };
+const ML_SELL = { prob: 0.2, threshold: 0.55 };
+describe("ml hybrid exits", () => {
+  it("holds through what the old trail would have sold when the model likes the tape", () =>
+    expect(evaluateExit({ position:{...base,peakBid:6}, bid:4.8, underlyingPrice:771, now:at("14:05"), ml:ML_HOLD })).toBe(null));
+  it("skips the breakeven ratchet while the model holds", () =>
+    expect(evaluateExit({ position:{...base,peakBid:5.1}, bid:4, underlyingPrice:771, now:at("14:05"), ml:ML_HOLD })).toBe(null));
+  it("sells when the model says the upside is spent", () =>
+    expect(evaluateExit({ position:base, bid:4.1, underlyingPrice:771, now:at("14:05"), ml:ML_SELL })).toBe("ml_advisor_exit"));
+  it("gives a fresh fill three minutes before the model may sell", () =>
+    expect(evaluateExit({ position:base, bid:4.1, underlyingPrice:771, now:at("14:02"), ml:ML_SELL })).toBe(null));
+  it("hard stop outranks a bullish model", () =>
+    expect(evaluateExit({ position:base, bid:2.8, underlyingPrice:771, now:at("14:05"), ml:ML_HOLD })).toBe("premium_stop"));
+  it("15:10 flat outranks a bullish model", () =>
+    expect(evaluateExit({ position:base, bid:4.5, underlyingPrice:771, now:at("19:10"), ml:ML_HOLD })).toBe("mandatory_time_exit"));
+  it("no-follow-through floor still fires under a bullish model", () =>
+    expect(evaluateExit({ position:{...base,peakBid:4.2}, bid:3.9, underlyingPrice:771, now:at("14:11"), ml:ML_HOLD })).toBe("no_follow_through"));
+  it("overnight positions ignore the model and keep V0 (out of distribution)", () =>
+    expect(evaluateExit({ position:{...base,peakBid:6}, bid:4.7, underlyingPrice:771, now:new Date("2026-08-07T14:30:00Z"), ml:ML_HOLD })).toBe("trailing_stop"));
+  it("big-premium contracts keep their calibrated envelope, not the model", () =>
+    expect(evaluateExit({ position:{...base,entryPrice:40,peakBid:46}, bid:42, underlyingPrice:771, now:at("14:05"), ml:ML_SELL })).toBe("trailing_stop"));
+  it("without the advisor the old trail applies unchanged", () =>
+    expect(evaluateExit({ position:{...base,peakBid:6}, bid:4.8, underlyingPrice:771, now:at("14:05") })).toBe("trailing_stop"));
+});
