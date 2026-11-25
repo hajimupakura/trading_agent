@@ -29,7 +29,9 @@ async function entriesToday(userId: string) {
   // neither — without this filter one swarm would silently eat an equity slot.
   const { data, error } = await createAdminClient().from("paper_trade_orders").select("underlying,created_at,risk_snapshot").eq("user_id", userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
   if (error) throw new Error(`Trade journal unavailable: ${error.message}`);
-  const rows = (data ?? []).filter(row => (row.risk_snapshot as { strategy?: string } | null)?.strategy !== "convexity-swarm");
+  // Explore-mode entries taken OUTSIDE the old budget (2026-11-25) are excluded too, so
+  // the budget keeps counting exactly what it would have allowed on its own.
+  const rows = (data ?? []).filter(row => { const snap = row.risk_snapshot as { strategy?: string; outsideBudget?: boolean } | null; return snap?.strategy !== "convexity-swarm" && snap?.outsideBudget !== true; });
   const index = rows.filter(row => ["SPX", "SPY"].includes(String(row.underlying))).length;
   // Morning sub-count for the equity sleeve's budget: entries before 12:30 ET.
   const morningCutoff = new Date(new Date(since).getTime() + 750 * 60_000).toISOString();
@@ -117,8 +119,21 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // One order per signal, ever.
   const { data: existing } = await admin.from("paper_trade_orders").select("id").eq("signal_id", signal.id).limit(1).maybeSingle();
   if (existing) return { entered: null, skipped: "signal already traded" };
-  const { data: control } = await admin.from("position_manager_control").select("kill_switch").eq("id", true).single();
+  const { data: control } = await admin.from("position_manager_control").select("kill_switch,paper_explore_all").eq("id", true).single();
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
+  // EXPLORE MODE (user call 2026-11-25: "does it make sense to cap the number of trades
+  // on the paper account — we are missing some real bangers"). Paper losses are free and
+  // missing data is not: with the flag on, the EQUITY sleeve takes every first signal per
+  // name per side per day. The count budgets below (cross-name cooldown, morning budget,
+  // last-slots gate, trades/day, concurrent cap, daily-loss stop) stop being vetoes and
+  // become a TAG — risk_snapshot.outsideBudget + budgetReason — so the capped record
+  // (the real-money rehearsal) is still there, alongside the full picture. Their own
+  // justification came from the hindsight-entry corpus and is unvalidated. Everything
+  // that is not a count budget still applies: opening hold, entry gate, one entry per
+  // name per side, earnings guard, $ per-trade cap, buying power, entry window, kill
+  // switch. The index sleeve (SPX/SPY) and real money are untouched.
+  const exploreAll = Boolean((control as { paper_explore_all?: boolean } | null)?.paper_explore_all) && !["SPX", "SPY"].includes(underlying);
+  let budgetReason: string | null = null;
   // ENTRY-QUALITY GATE (2026-11-24, walk-forward 54%->81% win on unseen months): the
   // scorer estimates P(this fire never reaches +10%) from fire-time facts and skips
   // the historically-dying profile. Visible skip — shadow-tracked, so the ledger
@@ -144,7 +159,9 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // a transient query error must never read as "no recent exits, clear to enter".
   if (recentExitsError) return { entered: null, skipped: `cooldown data unavailable: ${recentExitsError.message}` };
   const cooldown = entryCooldownActive({ action: signal.action, recentExits: (recentExits ?? []).map(row => ({ contractTicker: String(row.contract_ticker), exitReason: (row.risk_snapshot as { exitReason?: string } | null)?.exitReason ?? null, at: String(row.updated_at) })) });
-  if (cooldown) return { entered: null, skipped: "cooldown" };
+  // The cooldown is global across names (it exists to protect the trades/day budget);
+  // same-name same-side re-entry is already barred below, so in explore mode it only tags.
+  if (cooldown) { if (!exploreAll) return { entered: null, skipped: "cooldown" }; budgetReason ??= "cooldown after a same-side stop-out"; }
   const etMin = (() => { const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()); return Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value); })();
   // MORNING-ONLY RULE REMOVED (user call, 2026-11-19): the 2026-08-27 cutoff was
   // measured on 10:00-10:59 CHASES of spent moves; on 11/19 it vetoed a FRESH
@@ -174,7 +191,10 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // sleeve — exclude them so a live swarm never consumes an equity concurrency slot.
   const { data: convexityRows } = await admin.from("paper_trade_orders").select("contract_ticker").eq("action", "buy_to_open").eq("risk_snapshot->>strategy", "convexity-swarm").gte("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString());
   const convexityTickers = new Set((convexityRows ?? []).map(row => String(row.contract_ticker)));
-  const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex && !convexityTickers.has(`O:${position.symbol}`));
+  // Outside-budget explore positions do not occupy the budget's concurrency slots either.
+  const { data: outsideRows } = await admin.from("paper_trade_orders").select("contract_ticker").eq("action", "buy_to_open").eq("risk_snapshot->>outsideBudget", "true").gte("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString());
+  const outsideTickers = new Set((outsideRows ?? []).map(row => String(row.contract_ticker)));
+  const sleevePositions = trading.positions.filter(position => isIndexOcc(String(position.symbol)) === isIndex && !convexityTickers.has(`O:${position.symbol}`) && !outsideTickers.has(`O:${position.symbol}`));
   const sleeveTradesToday = isIndex ? tradesToday.index : tradesToday.equity;
   // ONE ENTRY PER NAME PER SIDE PER DAY (2026-11-24, after NVDA fired twice in 5
   // minutes and the lane bought both strikes): the research corpus that validated
@@ -201,7 +221,11 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // two stay reserved for afternoon continuation re-fires. Skips remain shadow-
   // tracked, so the ledger keeps scoring whatever this reserve costs or saves.
   const afternoonReserve = 2;
-  if (!isIndex && etMin < 750 && tradesToday.equityMorning >= Math.max(1, sleeveSettings.maxTradesPerDay - afternoonReserve)) return { entered: null, skipped: `morning budget: ${sleeveSettings.maxTradesPerDay - afternoonReserve} equity entries already taken before 12:30 ET — ${afternoonReserve} slots held for afternoon setups` };
+  if (!isIndex && etMin < 750 && tradesToday.equityMorning >= Math.max(1, sleeveSettings.maxTradesPerDay - afternoonReserve)) {
+    const reason = `morning budget: ${sleeveSettings.maxTradesPerDay - afternoonReserve} equity entries already taken before 12:30 ET — ${afternoonReserve} slots held for afternoon setups`;
+    if (!exploreAll) return { entered: null, skipped: reason };
+    budgetReason ??= reason;
+  }
   // LAST-SLOTS HEALTH GATE (user call 2026-11-23: "can things like vwap be used to
   // choose"): when the equity sleeve is down to its final 2 daily entries, a fire may
   // spend one only if the name's dip today HELD session VWAP (health >= 1) — the
@@ -210,10 +234,14 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // pullback yet (health 0) and the year says they are the best cohort — only the
   // LAST bullets demand proof. Best-effort (a bars hiccup scores 0, which only
   // matters in the last-2 regime); every veto is shadow-tracked like all skips.
-  if (!isIndex && sleeveSettings.maxTradesPerDay - sleeveTradesToday <= 2) {
+  if (!isIndex && budgetReason == null && sleeveSettings.maxTradesPerDay - sleeveTradesToday <= 2) {
     const { pullbackHealthNow } = await import("@/lib/options/pullback-grade");
     const health = await pullbackHealthNow(underlying, signal.action === "enter_call" ? 1 : -1).catch(() => 0);
-    if (health < 1) return { entered: null, skipped: `last ${sleeveSettings.maxTradesPerDay - sleeveTradesToday} slots are reserved for proven setups — ${underlying}'s dip has not held VWAP today (health ${health})` };
+    if (health < 1) {
+      const reason = `last ${sleeveSettings.maxTradesPerDay - sleeveTradesToday} slots are reserved for proven setups — ${underlying}'s dip has not held VWAP today (health ${health})`;
+      if (!exploreAll) return { entered: null, skipped: reason };
+      budgetReason ??= reason;
+    }
   }
   // CHEAPER-STRIKE FALLBACK (user call 2026-11-23: MU fired 11 times, every pick
   // $1,000+, all skipped on the $500 cap): when the signal's quality pick busts the
@@ -230,22 +258,36 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     if (trading.positions.some(position => `O:${position.symbol}` === affordable.ticker)) return { entered: null, skipped: "already holding this contract" };
   }
   const quantity = computePositionSize({ ask: contract.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings: sleeveSettings });
-  const risk = validatePaperEntry({ signal, contract, ...trading, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
+  // "An order is already open" is account-wide; in explore mode several names can fire in
+  // the same minute, so only a pending order on THIS name blocks.
+  const gateOrders = exploreAll ? trading.orders.filter(order => order.symbol.startsWith(underlying) && /\d/.test(order.symbol.charAt(underlying.length))) : trading.orders;
+  let risk = validatePaperEntry({ signal, contract, ...trading, orders: gateOrders, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
+  if (!risk.allowed && exploreAll) {
+    // Count budgets inside the risk gate (entries/day, concurrent positions, daily-loss
+    // stop) tag instead of veto; every other risk error still blocks.
+    const isBudgetError = (message: string) => /entries per day reached|open option positions reached|Daily loss limit/.test(message);
+    const budgetErrors = risk.errors.filter(isBudgetError);
+    if (budgetErrors.length) {
+      budgetReason ??= budgetErrors[0]!;
+      risk = validatePaperEntry({ signal, contract, ...trading, orders: gateOrders, positions: [], tradesToday: 0, settings: { ...sleeveSettings, maxTradesPerDay: 10_000, maxOpenPositions: 10_000, maxDailyLoss: Number.MAX_SAFE_INTEGER }, quantity });
+    }
+  }
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
+  const outsideBudget = budgetReason != null;
   const clientOrderId = `velocity-auto-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
   const entryLimit = Math.max(0.01, Number(contract.midpoint.toFixed(2)));
   const order = await submitPaperOptionOrder({ symbol: contract.ticker, limitPrice: entryLimit, clientOrderId, quantity: risk.quantity });
   await createAlert({
     userId: owner.id, signalId: signal.id, eventKey: `paper-entry-${order.id}`, severity: "success",
     title: `AUTONOMOUS entry: bought ${risk.quantity} ${signal.action === "enter_call" ? "call" : "put"}${risk.quantity === 1 ? "" : "s"} on ${underlying}`,
-    body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on its own: BUY ${risk.quantity} × ${contract.ticker} at a $${entryLimit.toFixed(2)} limit — about $${risk.debit.toFixed(0)} at risk, sized to the account. The worker guards the exit from here (stop, trail, time rules). Emergency stop in the dashboard halts future entries anytime.`,
-    metadata: { kind: "auto_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: entryLimit, quantity: risk.quantity, maxDebit: risk.debit },
+    body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on its own: BUY ${risk.quantity} × ${contract.ticker} at a $${entryLimit.toFixed(2)} limit — about $${risk.debit.toFixed(0)} at risk, sized to the account. The worker guards the exit from here (stop, trail, time rules). Emergency stop in the dashboard halts future entries anytime.${outsideBudget ? ` EXPLORE entry — outside the old daily budget (${budgetReason}); taken because paper now trades every first signal per name and tags it.` : ""}`,
+    metadata: { kind: "auto_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: entryLimit, quantity: risk.quantity, maxDebit: risk.debit, outsideBudget, budgetReason },
   }).catch(error => console.error("auto entry alert failed", error));
   const { error: journalError } = await admin.from("paper_trade_orders").insert({
     user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
-    risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES }, broker_response: order,
+    risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason }, broker_response: order,
   });
   if (journalError) console.error("auto entry journal failed", journalError);
   // CONVEX KICKER (user call, 2026-11-19): alongside the quality contract, one cheap
