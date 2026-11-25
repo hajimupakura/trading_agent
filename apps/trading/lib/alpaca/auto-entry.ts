@@ -42,7 +42,7 @@ async function entriesToday(userId: string) {
 // fire is recorded and displayed (user call, 2026-11-19: "I want to see those
 // skipped rows"); this list only decides which ones ALSO page Telegram, so a held
 // position doesn't ping the phone every hour while the setup keeps re-firing.
-const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "already traded this name this side today", "scalp lane off", "morning budget"];
+const SILENT_SKIPS = ["paper lane is SPX-only", "stale signal", "signal already traded", "already holding this contract", "already traded this name this side today", "opening hold", "scalp lane off", "morning budget"];
 
 export async function runAutoEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
   // FAIL LOUD (2026-11-23): a throw inside the gate chain used to escape to the cron
@@ -98,6 +98,16 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   if (!signal || !contract || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
   // Freshness: act only on signals generated within the last two minutes.
   if (Date.now() - signal.generatedAt > 120_000) return { entered: null, skipped: "stale signal" };
+  // OPENING HOLD (user call 2026-11-25): no new paper entries before 9:45 ET. History,
+  // with the cutoff chosen on validation months and confirmed on two unseen windows
+  // (7/day cap, on top of the entry gate): Jun-Sep $101k/77% win vs $90k/65% taking
+  // opening fires; Oct-Nov holdout $58k/80% vs $54k/73%. The opening's few monsters
+  // don't pay for the slots its many early stop-outs consume. Skips are shadow-tracked;
+  // names that fire again after 9:45 remain fully eligible.
+  {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    if (Number(p.hour) * 60 + Number(p.minute) < 585) return { entered: null, skipped: "opening hold: no new entries before 9:45 ET" };
+  }
   const admin = createAdminClient();
   const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();
   if (!owner) return { entered: null };
