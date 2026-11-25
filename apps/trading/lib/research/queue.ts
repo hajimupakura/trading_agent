@@ -290,7 +290,7 @@ async function fetchSwingCorpusDay(params: Record<string, unknown>, deadline: nu
 
 // ML corpus export: bundle every done ml-corpus result into one CSV in Supabase
 // Storage (public research bucket) so training can download it without any secret.
-async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url: string; positions: number; rows: number }> {
+async function runMlExport(params: Record<string, unknown> = {}, deadline: number = Date.now() + TIME_BUDGET_MS): Promise<{ url: string; positions: number; rows: number }> {
   const sourceKind = String(params.sourceKind ?? "ml-corpus");
   // Optional day-range window (on params->>'day') so oversized corpora export in parts.
   const dayGte = typeof params.dayGte === "string" ? params.dayGte : null;
@@ -309,6 +309,7 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
       let query = admin.from("research_requests").select("result").eq("kind", "stock-bars").eq("status", "done").is("params->>probe", null);
       if (dayGte) query = query.gte("params->>start", dayGte);
       if (dayLt) query = query.lt("params->>start", dayLt);
+      if (Date.now() > deadline) throw new Error("ml-export: time budget exhausted — narrow the day window");
       const { data, error } = await query.order("id").range(from, from + pageSize - 1);
       if (error) throw new Error(`ml-export read: ${error.message}`);
       if (!data?.length) break;
@@ -348,6 +349,7 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     query = gen ? query.eq("params->>gen", gen) : query.is("params->>gen", null);
     if (dayGte) query = query.gte("params->>day", dayGte);
     if (dayLt) query = query.lt("params->>day", dayLt);
+    if (Date.now() > deadline) throw new Error("ml-export: time budget exhausted — narrow the day window");
     const { data, error } = await query.order("id").range(from, from + pageSize - 1);
     if (error) throw new Error(`ml-export read: ${error.message}`);
     if (!data?.length) break;
@@ -369,7 +371,22 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
   return { url: urlData.publicUrl, positions, rows: lines.length - 1 };
 }
 
-export async function runResearchQueue(): Promise<{ ran: string | null; error?: string }> {
+// Kinds that read or build megabytes (bundled exports, the causal replay). In session
+// they wait: on 2026-11-25 quarter-wide exports queued at 10:17 ET ran the monitor
+// tick into its 60s limit 19 times in 40 minutes, killing the blind-spot checks and
+// job-health heartbeat that run after this queue. Off-hours, or with
+// research_full_throttle on, they run normally.
+const HEAVY_KINDS = ["ml-export", "ml-causal"];
+
+export async function runResearchQueue(tickStartedAt: number = Date.now()): Promise<{ ran: string | null; error?: string }> {
+  // The tick owns 60s in total; research may only use what is left of the first 48s,
+  // and never starts with less than 12s in hand.
+  const hardStop = tickStartedAt + 48_000;
+  if (hardStop - Date.now() < 12_000) return { ran: null, error: "tick budget spent before research" };
+  // A row left 'running' means its function died mid-request (timeout). Say so instead
+  // of leaving it to look in-flight forever.
+  await createAdminClient().from("research_requests").update({ status: "error", error: "stalled: the cron tick ended before this request finished — split or narrow it", updated_at: new Date().toISOString() })
+    .eq("status", "running").lt("updated_at", new Date(Date.now() - 3 * 60_000).toISOString());
   // Off-hours the monitor tick is light and the queue is the only customer, so it
   // may chew a BATCH per tick (bulk corpus nights finish by morning instead of in
   // days). During the trading session it stays strictly one request per tick so
@@ -385,23 +402,26 @@ export async function runResearchQueue(): Promise<{ ran: string | null; error?: 
   //   update position_manager_control set research_full_throttle=false where id=true;
   const { data: control } = await createAdminClient().from("position_manager_control").select("research_full_throttle").eq("id", true).maybeSingle();
   const fullThrottle = Boolean((control as { research_full_throttle?: boolean } | null)?.research_full_throttle);
-  const batchDeadline = Date.now() + (inSession && !fullThrottle ? 0 : 34_000); // 0 extra = single pass in session
+  const lightOnly = inSession && !fullThrottle;
+  const batchDeadline = Math.min(hardStop, Date.now() + (lightOnly ? 0 : 34_000)); // 0 extra = single pass in session
   let last: { ran: string | null; error?: string } = { ran: null };
   for (;;) {
-    last = await runOneResearchRequest();
+    last = await runOneResearchRequest(hardStop, lightOnly);
     if (last.ran == null) return last; // queue empty
     if (Date.now() > batchDeadline - 5_000) return last; // not enough budget for another
   }
 }
 
-async function runOneResearchRequest(): Promise<{ ran: string | null; error?: string }> {
+async function runOneResearchRequest(hardStop: number, lightOnly: boolean): Promise<{ ran: string | null; error?: string }> {
   const admin = createAdminClient();
-  const { data: request } = await admin.from("research_requests").select("id,kind,params").eq("status", "pending").order("created_at", { ascending: true }).limit(1).maybeSingle();
+  let pending = admin.from("research_requests").select("id,kind,params").eq("status", "pending");
+  if (lightOnly) pending = pending.not("kind", "in", `(${HEAVY_KINDS.join(",")})`);
+  const { data: request } = await pending.order("created_at", { ascending: true }).limit(1).maybeSingle();
   if (!request) return { ran: null };
   // Optimistic claim: only proceed if we flipped pending→running (cron overlap safety).
   const { data: claimed } = await admin.from("research_requests").update({ status: "running", updated_at: new Date().toISOString() }).eq("id", request.id).eq("status", "pending").select("id");
   if (!claimed?.length) return { ran: null };
-  const deadline = Date.now() + TIME_BUDGET_MS;
+  const deadline = Math.min(Date.now() + TIME_BUDGET_MS, hardStop);
   try {
     const params = (request.params ?? {}) as Record<string, unknown>;
     let result: unknown;
@@ -413,7 +433,7 @@ async function runOneResearchRequest(): Promise<{ ran: string | null; error?: st
     else if (request.kind === "ml-swing") result = await fetchSwingCorpusDay(params, deadline);
     else if (request.kind === "ml-lottery") result = await fetchSwingCorpusDay({ ...params, expiryMode: "nearest", levels: Array.isArray(params.levels) ? params.levels : [6, 10, 15] }, deadline);
     else if (request.kind === "ml-causal") result = await runCausalCorpus(params, deadline);
-    else if (request.kind === "ml-export") result = await runMlExport(params);
+    else if (request.kind === "ml-export") result = await runMlExport(params, deadline);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
     if (encoded.length > MAX_RESULT_BYTES) throw new Error(`result too large (${encoded.length}b) — split the request`);

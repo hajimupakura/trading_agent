@@ -60,14 +60,15 @@ async function loadSessions(symbol: string, starts: string[]): Promise<Map<strin
 
 type Fire = { day: string; sym: string; dir: number; fireMin: number; spot: number; setup: string };
 
-function replayMonth(symbol: string, sessions: Map<string, Row[]>, monthPrefix: string): Fire[] {
+function replayMonth(symbol: string, sessions: Map<string, Row[]>, monthPrefix: string, deadline: number, dayFrom: string, dayTo: string): Fire[] {
   const contracts = [synthetic("call", symbol), synthetic("put", symbol)];
   const fires: Fire[] = [];
   let prior: { high: number; low: number; close: number } | null = null;
   for (const day of [...sessions.keys()].sort()) {
     const rows = sessions.get(day)!;
     const levels: { high: number; low: number; close: number } | null = rows.length ? { high: Math.max(...rows.map(r => r.h)), low: Math.min(...rows.map(r => r.l)), close: rows.at(-1)!.c } : prior;
-    if (day.startsWith(monthPrefix) && rows.length >= 120) {
+    if (Date.now() > deadline) throw new Error("ml-causal: time budget exhausted in replay — split the month");
+    if (day.startsWith(monthPrefix) && day >= dayFrom && day <= dayTo && rows.length >= 120) {
       const bars: Bar[] = rows.map(r => ({ timestamp: r.ts, open: r.o, high: r.h, low: r.l, close: r.c, volume: r.v, vwap: r.vw }));
       const first = new Set<number>(); const firstLate = new Set<number>();
       for (let t = 0; t < bars.length; t++) {
@@ -171,7 +172,8 @@ export async function runCausalCorpus(params: Record<string, unknown>, deadline:
   const month = new Date(start);
   const previous = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() - 1, 1)).toISOString().replace(".000Z", "Z");
   const sessions = await loadSessions(symbol, [previous, start]); // previous month only supplies prior-day levels
-  const fires = replayMonth(symbol, sessions, start.slice(0, 7));
+  // Optional dayFrom/dayTo (YYYY-MM-DD, inclusive) split a month that will not fit one tick.
+  const fires = replayMonth(symbol, sessions, start.slice(0, 7), deadline, String(params.dayFrom ?? "0000-00-00"), String(params.dayTo ?? "9999-99-99"));
   const byDay = new Map<string, Fire[]>();
   for (const fire of fires) byDay.set(fire.day, [...(byDay.get(fire.day) ?? []), fire]);
   const days = [...byDay.keys()].sort();

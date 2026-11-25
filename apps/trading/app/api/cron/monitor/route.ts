@@ -29,6 +29,7 @@ import type { CommandCenter } from "@/lib/options/types";
 export const maxDuration = 60;
 export async function GET(request: Request) {
   if (!process.env.CRON_SECRET || request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) return new Response("Unauthorized", { status:401 });
+  const tickStartedAt = Date.now();
   // Telegram dispatch runs FIRST: on heavy ticks the refreshes below can exhaust the
   // 60s budget, and instant alerts must never be the step that gets cut.
   const notify = await dispatchInstantAlerts().catch(error => { console.error("alert dispatch failed", error); return { sent:0, digestPending:0 }; });
@@ -180,7 +181,7 @@ export async function GET(request: Request) {
   // DB-queued research fetches: replay/backtest data pulled server-side where the
   // Alpaca keys live (one pending research_requests row per tick, read-only).
   const { runResearchQueue } = await import("@/lib/research/queue");
-  await runResearchQueue().catch(error => console.error("research queue failed", error));
+  await runResearchQueue(tickStartedAt).catch(error => console.error("research queue failed", error));
   // Daily corpus growth (16:20-16:35 ET, once/day): today's fires become ml-corpus/
   // ml-swing/ml-lottery day-requests so the enter-everything research dataset grows
   // every trading day — budgeted sleeves rehearse deployment; the corpus explores.
