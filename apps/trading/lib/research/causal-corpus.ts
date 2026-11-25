@@ -92,7 +92,10 @@ function replayMonth(symbol: string, sessions: Map<string, Row[]>, monthPrefix: 
   return fires;
 }
 
-const incFor = (spot: number) => spot >= 500 ? 5 : spot >= 250 ? 2.5 : spot >= 100 ? 1 : 0.5;
+// Strike grids differ by name and expiry (SPY lists $1 strikes at $750; MSFT weeklies
+// $2.50/$5), so try every plausible step and keep the traded strike NEAREST the spot —
+// the lane buys ~0.45 delta, i.e. the first strike out of the money, not $5-$10 away.
+const stepsFor = (spot: number) => spot >= 250 ? [1, 2.5, 5, 10] : spot >= 100 ? [1, 2.5, 5] : [0.5, 1, 2.5];
 const occFor = (sym: string, dir: number, strike: number, expiry: string) => `${sym}${expiry.slice(2).replaceAll("-", "")}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
 function weekdaysFrom(day: string, count: number): string[] {
   const out: string[] = []; const base = Date.parse(`${day}T12:00:00Z`);
@@ -107,9 +110,8 @@ async function fetchDay(day: string, fires: Fire[], deadline: number): Promise<C
   const expiries = weekdaysFrom(day, 6); // always spans a Friday
   const windowEnd = weekdaysFrom(day, 2)[1]!; // tape through the NEXT session's close
   const candidates = fires.flatMap(fire => expiries.flatMap(expiry => {
-    const inc = incFor(fire.spot); const alt = inc * 2.5 <= 5 ? inc * 2.5 : inc * 2;
     const pick = (step: number) => fire.dir > 0 ? Math.ceil(fire.spot / step) * step : Math.floor(fire.spot / step) * step;
-    return [...new Set([pick(inc), pick(alt)])].map(strike => ({ fire, expiry, occ: occFor(fire.sym, fire.dir, strike, expiry) }));
+    return [...new Set(stepsFor(fire.spot).map(pick))].map(strike => ({ fire, expiry, strike, occ: occFor(fire.sym, fire.dir, strike, expiry) }));
   }));
   const occs = [...new Set(candidates.map(c => c.occ))];
   const headers = { "APCA-API-KEY-ID": process.env.ALPACA_API_KEY_ID ?? "", "APCA-API-SECRET-KEY": process.env.ALPACA_API_SECRET_KEY ?? "" };
@@ -144,14 +146,19 @@ async function fetchDay(day: string, fires: Fire[], deadline: number): Promise<C
     let kept = 0;
     for (const expiry of expiries) { // nearest first
       if (kept >= 2) break;
-      const best = candidates.filter(c => c.fire === fire && c.expiry === expiry).map(c => ({ occ: c.occ, path: paths.get(c.occ) ?? [] })).sort((a, b) => b.path.length - a.path.length)[0];
-      // "Traded" is judged on the FIRE DAY up to the fire minute plus the tape after it:
-      // a contract with almost no prints is not one the lane could have bought.
-      if (!best || best.path.length < 30) continue;
-      const path = best.path.filter(([min]) => min >= fire.fireMin);
-      const firstPrint = path[0];
-      if (!firstPrint || firstPrint[0] > fire.fireMin + 10 || firstPrint[1] <= 0.04) continue; // no print within 10 min of the fire = not fillable
-      out.push({ day, sym: fire.sym, dir: fire.dir, lvl: kept, occ: best.occ, fireMin: fire.fireMin, entryPrint: firstPrint[1], setup: fire.setup, spot: fire.spot, path });
+      // Fillable = a real tape (>=30 prints) with a print inside 10 minutes of the fire;
+      // among fillable strikes take the one nearest the spot.
+      const fillable = candidates.filter(c => c.fire === fire && c.expiry === expiry).flatMap(c => {
+        const full = paths.get(c.occ) ?? [];
+        if (full.length < 30) return [];
+        const path = full.filter(([min]) => min >= fire.fireMin);
+        const firstPrint = path[0];
+        if (!firstPrint || firstPrint[0] > fire.fireMin + 10 || firstPrint[1] <= 0.04) return [];
+        return [{ occ: c.occ, path, entryPrint: firstPrint[1], distance: Math.abs(c.strike - fire.spot) }];
+      }).sort((a, b) => a.distance - b.distance);
+      const best = fillable[0];
+      if (!best) continue;
+      out.push({ day, sym: fire.sym, dir: fire.dir, lvl: kept, occ: best.occ, fireMin: fire.fireMin, entryPrint: best.entryPrint, setup: fire.setup, spot: fire.spot, path: best.path });
       kept++;
     }
   }
