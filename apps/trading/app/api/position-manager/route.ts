@@ -18,16 +18,21 @@ async function state(userId:string) {
   ]);
   // Robinhood real-money snapshot for the dashboard strip (worker-synced, no broker round-trip).
   const todayEt = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date());
-  const [{data:rhPortfolio},{data:rhOpen},{count:rhTradesToday},{data:rhSettings}] = await Promise.all([
+  // rh_position_monitors has NO exit_mode column (that lives on paper_position_monitors
+  // only). Selecting it made the read fail, rhOpen came back null, and the dashboard's
+  // Robinhood strip showed zero open positions even with real money on (2026-11-25).
+  // manual_hold rows are open real positions too, so they are listed and labelled.
+  const [{data:rhPortfolio},{data:rhOpen,error:rhOpenError},{count:rhTradesToday},{data:rhSettings}] = await Promise.all([
     admin.from("broker_portfolio_snapshots").select("payload,updated_at").eq("broker","robinhood").maybeSingle(),
-    admin.from("rh_position_monitors").select("occ_ticker,entry_price,latest_bid,peak_bid,exit_mode").in("status",["monitoring","closing"]),
+    admin.from("rh_position_monitors").select("occ_ticker,entry_price,latest_bid,peak_bid,status").in("status",["monitoring","closing","manual_hold"]),
     admin.from("rh_entry_orders").select("id",{count:"exact",head:true}).gte("created_at",new Date(`${todayEt}T00:00:00-04:00`).toISOString()).neq("status","rejected"),
     admin.from("user_settings").select("rh_auto_entries_enabled,rh_max_trades_per_day,rh_max_trade_debit").eq("user_id",userId).maybeSingle(),
   ]);
+  if (rhOpenError) console.error("position-manager: robinhood open-positions read failed", rhOpenError.message);
   const rh = {
     portfolio: (rhPortfolio?.payload ?? null) as { totalValue?:number; cash?:number; buyingPower?:number; optionsValue?:number } | null,
     portfolioAt: rhPortfolio?.updated_at ?? null,
-    openPositions: (rhOpen??[]).map(row=>({ ticker:String(row.occ_ticker).replace(/^O:/,""), entry:Number(row.entry_price), bid:Number(row.latest_bid), exitMode:String(row.exit_mode??"burst") })),
+    openPositions: (rhOpen??[]).map(row=>({ ticker:String(row.occ_ticker).replace(/^O:/,""), entry:Number(row.entry_price), bid:Number(row.latest_bid), exitMode:row.status==="manual_hold"?"manual hold":"burst" })),
     tradesToday: rhTradesToday ?? 0,
     autonomy: Boolean(rhSettings?.rh_auto_entries_enabled),
     maxTradesPerDay: Number(rhSettings?.rh_max_trades_per_day ?? 2),

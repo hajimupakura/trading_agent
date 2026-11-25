@@ -30,10 +30,18 @@ export async function notifyManualHoldDips(): Promise<{ alerted: number }> {
   const clock = et();
   if (["Sat", "Sun"].includes(clock.weekday) || clock.minutes < 575 || clock.minutes >= 960) return { alerted: 0 };
   const admin = createAdminClient();
-  const { data: holds } = await admin.from("rh_position_monitors")
-    .select("occ_ticker,chain_symbol,quantity,entry_price,latest_bid,updated_at,user_id")
+  // rh_position_monitors is a single-owner table with NO user_id column. Selecting it
+  // made PostgREST answer 400 on every tick, the error was discarded, and this job
+  // reported "nothing to alert" — the dip companion never fired once between 11/23 and
+  // 11/25. The alert's owner comes from profiles (as everywhere else in the real lane),
+  // and a failed read now throws so the cron's catch logs it instead of hiding it.
+  const { data: holds, error: holdsError } = await admin.from("rh_position_monitors")
+    .select("occ_ticker,chain_symbol,quantity,entry_price,latest_bid,updated_at")
     .eq("status", "manual_hold");
+  if (holdsError) throw new Error(`manual-hold dip check could not read positions: ${holdsError.message}`);
   if (!holds?.length) return { alerted: 0 };
+  const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();
+  if (!owner) return { alerted: 0 };
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   let alerted = 0;
   for (const hold of holds) {
@@ -69,7 +77,7 @@ export async function notifyManualHoldDips(): Promise<{ alerted: number }> {
     const news = await latestNewsFor(newsSymbol).catch(() => null);
     const newsLine = news ? ` Fresh news: "${news.headline.slice(0, 120)}" (${newsAge(news.publishedAt)}).` : ` No ${newsSymbol} headline in 3h — this dip is flow, not information.`;
     await createAlert({
-      userId: String(hold.user_id), eventKey, severity: "warning",
+      userId: String(owner.id), eventKey, severity: "warning",
       title: `Dip check: ${occ.replace("O:", "")} is ${Math.round(drawdown * 100)}% off its peak`,
       body: `${Math.floor(Number(hold.quantity))}× ${occ.replace("O:", "")} — bid $${bid.toFixed(2)}, session peak $${peak.toFixed(2)} (${tier.label}). Versus YOUR ENTRY ($${entry.toFixed(2)}) it is ${vsEntryPct == null ? "?" : `${vsEntryPct >= 0 ? "+" : ""}${vsEntryPct.toFixed(0)}%`}.${newsLine} The peak number is fear's metric; the entry number is your plan's. This position is manual-exit — nothing sells unless you do. If you'd rather the trail decide, "Hand back" in /positions re-arms it.`,
       metadata: { kind: "tg_dip_alert", occTicker: occ, bid, peak, drawdownPct: Math.round(drawdown * 100), vsEntryPct },
