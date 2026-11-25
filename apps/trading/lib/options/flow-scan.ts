@@ -25,6 +25,33 @@ async function ownerId(): Promise<string | null> {
   return data?.id ?? null;
 }
 
+// What today's scans already wrote for this underlying. Volume is CUMULATIVE, so a
+// contract that crosses the thresholds at 10:00 crosses them on every later tick —
+// and each one used to cost two serial HTTP round-trips per refresh (an alerts insert
+// answered 409-duplicate, then a flow_watches upsert that ignored the duplicate). By
+// 11:15 on 2026-11-25 that was ~420 known contracts re-sent every minute: ~800
+// sequential calls, 32-40s of the monitor tick's 60s budget, and on slow-database
+// minutes the whole 60 (the tick died inside the refresh block, taking the blind-spot
+// checks and the job heartbeat with it). Two indexed lookups replace all of that; only
+// genuinely NEW contracts are written. A failed lookup returns empty sets, which is
+// the old write-everything behavior — slower, never wrong.
+async function alreadyRecorded(userId: string, underlying: string, today: string): Promise<{ alertKeys: Set<string>; watchTickers: Set<string> }> {
+  const admin = createAdminClient();
+  // `O:SPX%` deliberately covers both index roots (SPX monthlies and SPXW weeklies).
+  // The created_at floor is only there to ride the (user_id, created_at) index; the
+  // date suffix in the pattern is what scopes the keys to today.
+  const [alerts, watches] = await Promise.all([
+    admin.from("alerts").select("event_key").eq("user_id", userId).gte("created_at", new Date(Date.now() - 36 * 3_600_000).toISOString()).like("event_key", `flow-O:${underlying}%-${today}`).limit(5000),
+    admin.from("flow_watches").select("contract_ticker").eq("flow_date", today).like("contract_ticker", `O:${underlying}%`).limit(5000),
+  ]);
+  if (alerts.error) console.error("flow scan known-alerts lookup failed", underlying, alerts.error.message);
+  if (watches.error) console.error("flow scan known-watches lookup failed", underlying, watches.error.message);
+  return {
+    alertKeys: new Set((alerts.data ?? []).map(row => String(row.event_key))),
+    watchTickers: new Set((watches.data ?? []).map(row => String(row.contract_ticker))),
+  };
+}
+
 export async function scanUnusualFlow(underlying: Underlying, contracts: Contract[]): Promise<void> {
   if (!contracts.length) return;
   // RTH only (2026-11-20): overnight the chains still carry YESTERDAY'S volume while
@@ -39,17 +66,22 @@ export async function scanUnusualFlow(underlying: Underlying, contracts: Contrac
 
   // Per-contract aggressive positioning (short-dated book only — long-dated OI is stale by design).
   const shortDated = contracts.filter(contract => contract.dte <= 7);
+  const qualifies = (contract: Contract) => contract.volume >= CONTRACT_MIN_VOLUME && contract.volume >= CONTRACT_VOL_OI_RATIO * Math.max(contract.openInterest, 1) && contract.volume * contract.midpoint * 100 >= CONTRACT_MIN_PREMIUM;
+  const known = shortDated.some(qualifies)
+    ? await alreadyRecorded(userId, underlying, today).catch(error => { console.error("flow scan known-rows lookup failed", underlying, error); return { alertKeys: new Set<string>(), watchTickers: new Set<string>() }; })
+    : { alertKeys: new Set<string>(), watchTickers: new Set<string>() };
   for (const contract of shortDated) {
     const premium = contract.volume * contract.midpoint * 100;
-    if (contract.volume >= CONTRACT_MIN_VOLUME && contract.volume >= CONTRACT_VOL_OI_RATIO * Math.max(contract.openInterest, 1) && premium >= CONTRACT_MIN_PREMIUM) {
-      await createAlert({
-        userId, eventKey: `flow-${contract.ticker}-${today}`, severity: "warning",
+    if (qualifies(contract)) {
+      const eventKey = `flow-${contract.ticker}-${today}`;
+      if (!known.alertKeys.has(eventKey)) await createAlert({
+        userId, eventKey, severity: "warning",
         title: `Unusual flow: ${underlying} ${contract.strike}${contract.side === "call" ? "C" : "P"} ${contract.expirationDate}`,
         body: `${contract.volume.toLocaleString()} contracts traded vs ${contract.openInterest.toLocaleString()} open interest (${(contract.volume / Math.max(contract.openInterest, 1)).toFixed(1)}x) — roughly $${(premium / 1_000_000).toFixed(1)}M in premium. Heavy fresh positioning in a ${contract.dte}DTE ${contract.side}. Flow is information, not instruction: check it against the engine's read before acting.`,
         metadata: { ticker: contract.ticker, volume: contract.volume, openInterest: contract.openInterest, premium, dte: contract.dte },
       }).catch(() => undefined);
       // Smart money tracker: every $500k+ print becomes a scored watch (flow-watch.ts).
-      await recordFlowWatch({ ticker: contract.ticker, premium, side: contract.side }).catch(() => undefined);
+      await recordFlowWatch({ ticker: contract.ticker, premium, side: contract.side, alreadyRecorded: known.watchTickers.has(contract.ticker) }).catch(() => undefined);
     }
   }
 

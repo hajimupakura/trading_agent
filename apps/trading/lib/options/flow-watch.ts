@@ -19,12 +19,15 @@ const CONFIRM_PCT = 3; // directional move that counts as confirmation over <=3 
 // this to genuinely exceptional prints (SPCX 8/12 $28.2M, MU 8/10 $13.8M scale).
 const FOLLOW_MIN_PREMIUM = 5_000_000;
 
-export async function recordFlowWatch(input: { ticker: string; premium: number; side: "call" | "put" }): Promise<void> {
+export async function recordFlowWatch(input: { ticker: string; premium: number; side: "call" | "put"; alreadyRecorded?: boolean }): Promise<void> {
   if (input.premium < WATCH_MIN_PREMIUM) return;
   const symbol = (/^O:([A-Z]+?)\d{6}/.exec(input.ticker)?.[1] ?? "").replace(/W$/, "");
   if (!symbol) return;
   const flowDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-  await createAdminClient().from("flow_watches").upsert({
+  // alreadyRecorded: the caller has seen today's row for this contract, so the
+  // upsert below (ignoreDuplicates) would be a no-op round-trip — skip it. The
+  // follow-pair branch underneath still runs exactly as before.
+  if (!input.alreadyRecorded) await createAdminClient().from("flow_watches").upsert({
     symbol, direction: input.side === "call" ? "bullish" : "bearish",
     contract_ticker: input.ticker, premium: input.premium, flow_date: flowDate,
   }, { onConflict: "contract_ticker,flow_date", ignoreDuplicates: true }).then(({ error }) => { if (error) console.error("flow watch record failed", error.message); });
