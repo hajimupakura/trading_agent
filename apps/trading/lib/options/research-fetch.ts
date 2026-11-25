@@ -6,19 +6,31 @@ import { createAlert } from "@/lib/alerts/server";
 // Generic research fetch queue: ad-hoc minute-aggregate pulls for any ticker, executed
 // server-side where the data keys live. Insert a row into research_fetches; the cron
 // processes one per light tick and stores compact bars [[t,o,h,l,c,v],...] as jsonb.
-// Options (O:...) go through Massive; plain equities go through Alpaca (IEX).
+// Everything goes through Alpaca. Options (O:...) used to go through Massive, which was
+// retired and never renewed: every option job since 2026-11-24 died with "Massive API
+// 403", the 'research' heartbeat paged, and the post-trade autopsies (trade-review.ts,
+// the only producer of option jobs) never got a tape. Alpaca's option bars carry the
+// same minute tape. Index tickers (I:...) have no Alpaca feed and fail with a plain
+// message instead of calling a dead service.
 
-async function massiveBars(ticker: string, from: string, to: string, timeframe: string): Promise<number[][]> {
-  const key = process.env.MASSIVE_API_KEY;
-  if (!key) throw new Error("MASSIVE_API_KEY is not configured");
-  const unit = timeframe === "1Day" ? "day" : "minute";
-  const url = new URL(`https://api.massive.com/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/1/${unit}/${from}/${to}`);
-  url.searchParams.set("adjusted", "true"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "50000");
-  url.searchParams.set("apiKey", key);
-  const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`Massive API ${response.status} (${url.pathname})`);
-  const payload = await response.json() as { results?: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }> };
-  return (payload.results ?? []).map(bar => [bar.t, bar.o, bar.h, bar.l, bar.c, bar.v]);
+async function alpacaOptionBars(ticker: string, from: string, to: string, timeframe: string): Promise<number[][]> {
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) throw new Error("Alpaca keys are not configured");
+  const occ = ticker.replace(/^O:/, "");
+  const out: number[][] = [];
+  let pageToken: string | undefined; let pages = 0;
+  do {
+    const url = new URL("https://data.alpaca.markets/v1beta1/options/bars");
+    url.searchParams.set("symbols", occ); url.searchParams.set("timeframe", timeframe); url.searchParams.set("limit", "10000");
+    url.searchParams.set("start", from); url.searchParams.set("end", `${to}T23:59:59-04:00`); url.searchParams.set("sort", "asc");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`Alpaca option bars ${response.status} for ${occ} ${(await response.text()).slice(0, 160)}`);
+    const payload = await response.json() as { bars?: Record<string, Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>>; next_page_token?: string | null };
+    for (const bar of payload.bars?.[occ] ?? []) out.push([Date.parse(bar.t), bar.o, bar.h, bar.l, bar.c, bar.v]);
+    pageToken = payload.next_page_token ?? undefined;
+  } while (pageToken && ++pages < 10);
+  return out;
 }
 
 async function alpacaBars(ticker: string, from: string, to: string, timeframe: string): Promise<number[][]> {
@@ -52,8 +64,9 @@ export async function runResearchFetches(): Promise<{ processed: string | null; 
   try {
     const ticker = String(job.ticker);
     const timeframe = String(job.timeframe ?? "1Min");
-    const bars = ticker.startsWith("O:") || ticker.startsWith("I:")
-      ? await massiveBars(ticker, String(job.from_date), String(job.to_date), timeframe)
+    if (ticker.startsWith("I:")) throw new Error(`index bars are not available for ${ticker}: Alpaca has no index feed (Massive is retired)`);
+    const bars = ticker.startsWith("O:")
+      ? await alpacaOptionBars(ticker, String(job.from_date), String(job.to_date), timeframe)
       : await alpacaBars(ticker, String(job.from_date), String(job.to_date), timeframe);
     const { error } = await admin.from("research_fetches").update({
       status: "done", bars, bar_count: bars.length, processed_at: new Date().toISOString(), error: null,
