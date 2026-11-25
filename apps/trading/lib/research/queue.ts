@@ -294,31 +294,32 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
   // Optional day-range window (on params->>'day') so oversized corpora export in parts.
   const dayGte = typeof params.dayGte === "string" ? params.dayGte : null;
   const dayLt = typeof params.dayLt === "string" ? params.dayLt : null;
+  const gen = typeof params.gen === "string" ? params.gen : null;
   const admin = createAdminClient();
   // STOCK-BARS export (2026-11-24, the live-context backfill): results are
   // Record<sym, bars>; rows become day,sym,min(ET),close,vol,vw — session minutes
   // only (VWAP/volume state is a session concept). Windowing keys on params->>start.
   if (sourceKind === "stock-bars") {
-    const lines = ["day,sym,min,close,vol,vw"];
+    const lines = ["day,sym,min,open,high,low,close,vol,vw"];
     const et = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
     const etMin = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
     const pageSize = 10; let from = 0; let bars = 0;
     for (;;) {
-      let query = admin.from("research_requests").select("result").eq("kind", "stock-bars").eq("status", "done");
+      let query = admin.from("research_requests").select("result").eq("kind", "stock-bars").eq("status", "done").is("params->>probe", null);
       if (dayGte) query = query.gte("params->>start", dayGte);
       if (dayLt) query = query.lt("params->>start", dayLt);
       const { data, error } = await query.order("id").range(from, from + pageSize - 1);
       if (error) throw new Error(`ml-export read: ${error.message}`);
       if (!data?.length) break;
       for (const row of data) {
-        for (const [sym, series] of Object.entries((row.result as Record<string, Array<{ t: string; c: number; v: number; vw?: number }>>) ?? {})) {
+        for (const [sym, series] of Object.entries((row.result as Record<string, Array<{ t: string; o?: number; h?: number; l?: number; c: number; v: number; vw?: number }>>) ?? {})) {
           for (const bar of series ?? []) {
             const when = new Date(bar.t);
             const parts = Object.fromEntries(etMin.formatToParts(when).map(part => [part.type, part.value]));
             const minute = Number(parts.hour) * 60 + Number(parts.minute);
             if (minute < 570 || minute > 960) continue; // session only
             bars++;
-            lines.push(`${et.format(when)},${sym},${minute},${bar.c},${bar.v},${bar.vw ?? ""}`);
+            lines.push(`${et.format(when)},${sym},${minute},${bar.o ?? bar.c},${bar.h ?? bar.c},${bar.l ?? bar.c},${bar.c},${bar.v},${bar.vw ?? ""}`);
           }
         }
       }
@@ -338,6 +339,9 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     // Order by id: bulk-queued rows share created_at, which made page boundaries
     // non-deterministic (rows dropped/duplicated across pages).
     let query = admin.from("research_requests").select("result").eq("kind", sourceKind).eq("status", "done");
+    // Generation tag (2026-11-25): the first corpus entered at hindsight-chosen minutes;
+    // rebuilt rows carry params.gen so the two never mix in one export.
+    query = gen ? query.eq("params->>gen", gen) : query.is("params->>gen", null);
     if (dayGte) query = query.gte("params->>day", dayGte);
     if (dayLt) query = query.lt("params->>day", dayLt);
     const { data, error } = await query.order("id").range(from, from + pageSize - 1);
@@ -353,7 +357,7 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     from += pageSize;
   }
   const body = lines.join("\n");
-  const name = `${sourceKind}${dayGte ? `-from-${dayGte}` : ""}${dayLt ? `-to-${dayLt}` : ""}-${Date.now()}.csv`;
+  const name = `${sourceKind}${gen ? `-${gen}` : ""}${dayGte ? `-from-${dayGte}` : ""}${dayLt ? `-to-${dayLt}` : ""}-${Date.now()}.csv`;
   const { error: uploadError } = await admin.storage.from("research").upload(name, body, { contentType: "text/csv", upsert: true });
   if (uploadError) throw new Error(`ml-export upload: ${uploadError.message}`);
   const { data: urlData } = admin.storage.from("research").getPublicUrl(name);
