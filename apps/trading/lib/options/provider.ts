@@ -233,6 +233,21 @@ async function getEquityMarketState(symbol: Exclude<Underlying,"SPX">): Promise<
     throw new Error(`No Alpaca IEX ${symbol} bars returned`);
   }
   const current = bars.at(-1)!; const opening = bars.slice(0, 15);
+  // STALE-FEED GUARD (2026-11-25): without a real-time entitlement Alpaca serves SIP
+  // minute bars 15 minutes late and returns 200 — only the snapshot/latest endpoints
+  // 403. Found when the paid plan dropped overnight: the engine would have fired
+  // signals (and Telegram buy cards) off 15-minute-old prices with no error anywhere.
+  // On the consolidated feed a liquid name prints every minute, so a newest bar more
+  // than 6 minutes old during the session means the feed is delayed, not quiet.
+  {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", weekday:"short", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(new Date());
+    const minutes = Number(parts.find(part => part.type === "hour")?.value) * 60 + Number(parts.find(part => part.type === "minute")?.value);
+    const weekday = parts.find(part => part.type === "weekday")?.value ?? "";
+    const ageMinutes = (Date.now() - current.timestamp) / 60_000;
+    if (STOCK_FEED === "sip" && !["Sat","Sun"].includes(weekday) && minutes >= 575 && minutes < 960 && ageMinutes > 6) {
+      throw new Error(`Stale ${symbol} market data: newest bar is ${Math.round(ageMinutes)} min old — Alpaca is serving delayed SIP (check the market-data subscription)`);
+    }
+  }
   const openingRangeHigh = Math.max(...opening.map(bar => bar.high)); const openingRangeLow = Math.min(...opening.map(bar => bar.low));
   const totalVolume = bars.reduce((sum, bar) => sum + bar.volume, 0);
   const referencePrice = totalVolume
