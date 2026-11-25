@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { runCausalCorpus } from "./causal-corpus";
 
 // DB-queued research fetches (2026-11-23). Historical replay work needs Alpaca data,
 // but the market-data keys are sensitive-locked on Vercel and unusable from a local
@@ -332,7 +333,10 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     const { data: urlData } = admin.storage.from("research").getPublicUrl(name);
     return { url: urlData.publicUrl, positions: 0, rows: bars };
   }
-  const lines: string[] = ["day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
+  // ml-causal positions carry setup + spot and long two-session tapes: one line per
+  // position with the path packed as min:price|min:price keeps a month under ~10 MB.
+  const packed = sourceKind === "ml-causal";
+  const lines: string[] = [packed ? "day,sym,dir,lvl,occ,fireMin,entryPrint,setup,spot,path" : "day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
   let positions = 0;
   const pageSize = 50; let from = 0;
   for (;;) {
@@ -350,6 +354,7 @@ async function runMlExport(params: Record<string, unknown> = {}): Promise<{ url:
     for (const row of data) {
       for (const position of (row.result as Array<{ day: string; sym: string; dir: number; lvl?: number; occ: string; fireMin: number; entryPrint: number; path: Array<[number, number]> }> ?? [])) {
         positions++;
+        if (packed) { const extra = position as unknown as { setup?: string; spot?: number }; lines.push(`${position.day},${position.sym},${position.dir},${position.lvl ?? 0},${position.occ},${position.fireMin},${position.entryPrint},${extra.setup ?? ""},${extra.spot ?? ""},${(position.path ?? []).map(([min, price]) => `${min}:${price}`).join("|")}`); continue; }
         for (const [min, price] of position.path ?? []) lines.push(`${position.day},${position.sym},${position.dir},${position.lvl ?? 0},${position.occ},${position.fireMin},${position.entryPrint},${min},${price}`);
       }
     }
@@ -407,6 +412,7 @@ async function runOneResearchRequest(): Promise<{ ran: string | null; error?: st
     else if (request.kind === "ml-corpus") result = await fetchMlCorpusDay(params, deadline);
     else if (request.kind === "ml-swing") result = await fetchSwingCorpusDay(params, deadline);
     else if (request.kind === "ml-lottery") result = await fetchSwingCorpusDay({ ...params, expiryMode: "nearest", levels: Array.isArray(params.levels) ? params.levels : [6, 10, 15] }, deadline);
+    else if (request.kind === "ml-causal") result = await runCausalCorpus(params, deadline);
     else if (request.kind === "ml-export") result = await runMlExport(params);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);
