@@ -64,13 +64,41 @@ export async function markMissingPositions(openTickers:string[],orders:AlpacaOrd
   const { data,error } = await db.from("paper_position_monitors").select("contract_ticker,user_id,signal_id,close_order_id,entry_price").in("status",["monitoring","closing","error"]);
   if (error) throw new Error(`db error: ${error.message}`); const missing = (data ?? []).filter(row=>!openTickers.includes(row.contract_ticker));
   if (missing.length) { const tickers=missing.map(row=>row.contract_ticker);const {error:updateError}=await db.from("paper_position_monitors").update({status:"closed",updated_at:new Date().toISOString()}).in("contract_ticker",tickers); if(updateError) throw updateError;
-    for(const row of missing){const symbol=String(row.contract_ticker).replace(/^O:/,"");const filled=orders.find(order=>order.symbol===symbol&&order.side==="sell"&&order.status==="filled");if(!filled)continue;const fill=Number(filled.filled_avg_price??filled.limit_price??0);const {error:orderError}=await db.from("paper_trade_orders").update({status:filled.status,limit_price:fill||Number(filled.limit_price),broker_response:filled,updated_at:new Date().toISOString()}).eq("alpaca_order_id",filled.id);if(orderError)throw orderError;await createWorkerAlert({userId:row.user_id,signalId:row.signal_id,eventKey:`paper-exit-filled-${filled.id}`,severity:"success",title:"Paper exit filled",body:`SELL ${filled.qty} ${symbol} filled near $${fill.toFixed(2)}. The position is closed.`,metadata:{orderId:filled.id,contractTicker:row.contract_ticker,fillPrice:fill,entryPrice:Number(row.entry_price)}});}
+    for(const row of missing){const symbol=String(row.contract_ticker).replace(/^O:/,"");const filled=orders.find(order=>order.symbol===symbol&&order.side==="sell"&&order.status==="filled");if(!filled)continue;const fill=Number(filled.filled_avg_price??filled.limit_price??0);const {data:journaled,error:orderError}=await db.from("paper_trade_orders").update({status:filled.status,limit_price:fill||Number(filled.limit_price),broker_response:filled,updated_at:new Date().toISOString()}).eq("alpaca_order_id",filled.id).select("id");if(orderError)throw orderError;
+      // The order that filled is not in the journal: it is the successor of a REPLACED
+      // close order (an Alpaca replace issues a new order id). Without this the journal
+      // row stayed at "replaced" forever — no fill price, no autopsy, understated P&L
+      // (MU and SPY 11/24, SNDK 11/25, MSFT 11/27).
+      if(!journaled?.length) await adoptReplacedExit(String(row.contract_ticker),filled,fill);await createWorkerAlert({userId:row.user_id,signalId:row.signal_id,eventKey:`paper-exit-filled-${filled.id}`,severity:"success",title:"Paper exit filled",body:`SELL ${filled.qty} ${symbol} filled near $${fill.toFixed(2)}. The position is closed.`,metadata:{orderId:filled.id,contractTicker:row.contract_ticker,fillPrice:fill,entryPrice:Number(row.entry_price)}});}
   }
 }
 export async function journalExit(position:ManagedPosition,order:AlpacaOrder,limitPrice:number,reason:string) {
   const exitRoot = position.alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"");
   const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:exitRoot==="SPXW"?"SPX":exitRoot,contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order },{onConflict:"alpaca_order_id"});
   if (error) throw new Error(`db error: ${error.message}`);
+}
+// Re-point a close order's journal row at the order that replaced it, so the row
+// follows the live order instead of dying with the old id.
+export async function repointExitJournal(oldOrderId:string,order:AlpacaOrder,limitPrice:number) {
+  const { error } = await db.from("paper_trade_orders").update({ alpaca_order_id:order.id,client_order_id:order.client_order_id,status:order.status,limit_price:limitPrice,broker_response:order,updated_at:new Date().toISOString() }).eq("alpaca_order_id",oldOrderId).eq("action","sell_to_close");
+  // 23505 = the new id is already journaled (a later tick got there first): nothing to move.
+  if (error && error.code !== "23505") throw new Error(`db error: ${error.message}`);
+}
+// A filled close order with no journal row: move the newest unfilled sell row for that
+// contract (its replaced predecessor) onto it. Prefers the exact predecessor when the
+// broker names it.
+async function adoptReplacedExit(contractTicker:string,filled:AlpacaOrder,fill:number) {
+  const patch = { alpaca_order_id:filled.id,client_order_id:filled.client_order_id,status:filled.status,limit_price:fill||Number(filled.limit_price),broker_response:filled,updated_at:new Date().toISOString() };
+  if (filled.replaces) {
+    const { data,error } = await db.from("paper_trade_orders").update(patch).eq("alpaca_order_id",filled.replaces).eq("action","sell_to_close").select("id");
+    if (error && error.code !== "23505") throw new Error(`db error: ${error.message}`);
+    if (data?.length) return;
+  }
+  const { data:stale,error:findError } = await db.from("paper_trade_orders").select("id").eq("action","sell_to_close").eq("contract_ticker",contractTicker).neq("status","filled").gte("created_at",new Date(Date.now()-24*3_600_000).toISOString()).order("created_at",{ascending:false}).limit(1).maybeSingle();
+  if (findError) throw new Error(`db error: ${findError.message}`);
+  if (!stale) { console.error(JSON.stringify({ event:"paper_exit_unjournaled", contractTicker, orderId:filled.id })); return; }
+  const { error } = await db.from("paper_trade_orders").update(patch).eq("id",stale.id);
+  if (error && error.code !== "23505") throw new Error(`db error: ${error.message}`);
 }
 export async function updateEntryJournal(alpacaOrderId:string,fields:{status?:string;limit_price?:number;alpaca_order_id?:string}) {
   const { error } = await db.from("paper_trade_orders").update({ ...fields, updated_at:new Date().toISOString() }).eq("alpaca_order_id",alpacaOrderId);

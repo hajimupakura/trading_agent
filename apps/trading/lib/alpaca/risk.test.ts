@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePositionSize, entryCooldownActive, validatePaperEntry } from "./risk";
+import { computePositionSize, entryCooldownActive, invalidAtEntry, validatePaperEntry } from "./risk";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 import type { Contract, Signal } from "@/lib/options/types";
 
@@ -80,5 +80,22 @@ describe("re-entry cooldown", () => {
   });
   it("ignores winners released by the trailing stop", () => {
     expect(entryCooldownActive({ action:"enter_call", recentExits:[{ ...stopExit, exitReason:"trailing_stop" }], now })).toBeNull();
+  });
+});
+
+describe("already-invalid-at-entry gate", () => {
+  const market = { openingRangeHigh: 726.09, openingRangeLow: 720.92 };
+  it("vetoes a call when the live price is back at or below the range high (SPY 726C, 2026-11-27)", () => {
+    expect(invalidAtEntry({ action: "enter_call", market, price: 725.98 })).toBe(true);
+    expect(invalidAtEntry({ action: "enter_call", market, price: 726.09 })).toBe(true);
+    expect(invalidAtEntry({ action: "enter_call", market, price: 726.30 })).toBe(false);
+  });
+  it("vetoes a put when the live price is back at or above the range low", () => {
+    expect(invalidAtEntry({ action: "enter_put", market, price: 721.10 })).toBe(true);
+    expect(invalidAtEntry({ action: "enter_put", market, price: 720.50 })).toBe(false);
+  });
+  it("never vetoes without a live price", () => {
+    expect(invalidAtEntry({ action: "enter_call", market, price: null })).toBe(false);
+    expect(invalidAtEntry({ action: "enter_call", market, price: 0 })).toBe(false);
   });
 });

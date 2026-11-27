@@ -83,3 +83,19 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   }
   return { allowed:errors.length === 0, errors, equity, dayPnl:equity - lastEquity, debit, quantity };
 }
+
+// ALREADY INVALID AT ENTRY (2026-11-27). The worker sells a SPY/SPX position the moment
+// the underlying is back inside its opening range (calls: at or below the range high;
+// puts: at or above the range low — for an opening drive the stored level is the day's
+// open). A signal is built from completed minute bars, so by the time the order goes in
+// the live price can already be on the wrong side: the position is bought and sold
+// seconds apart for nothing but the spread. The paper record held 7 of these in 23
+// trading days (all SPY, all closed within 81 seconds, -$356 combined, none a winner).
+// This is the worker's own exit test, asked BEFORE buying instead of after.
+export function invalidAtEntry(input: { action: Signal["action"]; market: Pick<Signal["market"], "openingRangeHigh" | "openingRangeLow">; price: number | null | undefined }): boolean {
+  const price = Number(input.price);
+  if (!(price > 0)) return false; // no live price -> never veto on a guess
+  if (input.action === "enter_call") return price <= input.market.openingRangeHigh;
+  if (input.action === "enter_put") return price >= input.market.openingRangeLow;
+  return false;
+}

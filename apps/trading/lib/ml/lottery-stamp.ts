@@ -1,29 +1,32 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createAlert } from "@/lib/alerts/server";
-import detector from "./lottery-detector-v2.json";
-import { predictProba, type HistGbtModel } from "./histgbt";
+import { MIN_LEG_PCT, morningLegs } from "./morning-legs";
 
-// LOTTERY-DAY DETECTOR v2 — ADVISORY STAMPS ONLY (shipped on the user's call
-// 2026-11-24: "add all your recommendations to production"). Once per trading day
-// at ~11:00 ET the morning's fire shape (count, max 30-min leg, breadth, first-fire
-// time) plus the event calendar (CPI/jobs/FOMC/megacap earnings-reaction days from
-// market_events) is scored by the walk-forward-validated by-11 model. On unseen
-// 2026 days the armed top-20% carried 59% of penny-swarm profit on 13% of days.
-// AUC is 0.567 — a tilt, not an oracle: the stamp annotates the day and pages when
-// armed; it gates NOTHING. Known approximations, accepted deliberately: previous
-// trading day ignores market holidays (a next-day-after-holiday reaction flag can
-// land a day early ~9 times a year), and leg_pct30 only exists on fires written
-// after 2026-11-24, so maxleg_by11 reads 0 on any fire missing it (conservative:
-// pushes prob DOWN, never arms on fabricated strength).
+// LOTTERY-DAY STAMP — INPUTS ONLY SINCE 2026-11-27. It never arms.
+//
+// What was wrong. Detector v2 was trained on each day's STRONGEST 30-minute move per
+// name, selected with the whole day in view and kept only if a pullback followed it
+// (the research pullback-scan). None of that is knowable at 11:00. The live job fed it
+// something else again — a count of every engine signal row, re-fires included, and a
+// max leg read from a column only index signals fill — so its inputs sat at the edge
+// of anything it was trained on and it stamped `armed` on EVERY day from 11/24 to
+// 11/27 (Thanksgiving included), which doubled the swarm sleeve's daily cap each time.
+//
+// What history says (373 census days, same label: a 10x repricing happened). Scored on
+// inputs that ARE known at 11:00 — each name's strongest COMPLETED 30-minute move so
+// far — the old model has AUC 0.515 on unseen 2026 and would arm 39% of days. Retrained
+// on those inputs it scores 0.524 (95% range 0.40-0.64). The walk-forward folds look
+// better (0.56-0.68, precision ~36% against a ~19% base rate) but they are 53-86 days
+// each. That is not enough to let a stamp change a trading limit.
+//
+// So this job now does the one thing that is certainly useful: it records the real
+// 11:00 inputs every day (per-name moves included, so any universe can be rebuilt),
+// and stamps armed=false. A detector goes back in only after it validates on these.
 
-const MODEL = detector as HistGbtModel;
+// The names the historical bar set covers; the aggregate inputs use exactly these so
+// live stamps stay comparable with the history a future model is trained on.
+const UNIVERSE = ["SLV", "QQQ", "SPY", "GLD", "TSLA", "MU", "NVDA", "META", "MSFT", "GOOGL", "AAPL", "SMCI", "SPCX", "SNDK"];
 const MEGACAPS = new Set(["NVDA", "AAPL", "TSLA", "MSFT", "META", "GOOGL"]);
-// Loud port guard: if the bundled JSON ever drifts from the predictor, refuse to
-// score rather than stamp garbage (silent-failure doctrine).
-for (const check of (MODEL.checks ?? []).slice(0, 3)) {
-  if (Math.abs(predictProba(MODEL, check.x) - check.p) > 1e-6) throw new Error("lottery detector JSON fails its sklearn checks");
-}
 
 const ET = "America/New_York";
 const etNow = () => {
@@ -45,18 +48,21 @@ export async function runLotteryDayStamp(): Promise<{ stamped: boolean; skipped?
   if (existing) return { stamped: false, skipped: "already stamped" };
   const prev1 = prevWeekday(clock.dateKey);
   const prev2 = prevWeekday(prev1);
-  const [{ data: fires }, { data: events }] = await Promise.all([
-    admin.from("option_signals").select("underlying,generated_at,leg_pct30")
-      .in("action", ["enter_call", "enter_put"])
-      .gte("generated_at", `${clock.dateKey}T09:30:00-05:00`)
-      .lt("generated_at", `${clock.dateKey}T11:00:00-05:00`),
+  const [{ data: snapshots }, { data: events }] = await Promise.all([
+    // Only the bars — a full snapshot payload is ~1 MB per name.
+    admin.from("options_monitor_snapshots").select("underlying,bars:payload->market->bars"),
     admin.from("market_events").select("date,event_type,detail").in("date", [clock.dateKey, prev1, prev2]),
   ]);
-  const rows = fires ?? [];
-  const etMinute = (iso: string) => {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: ET, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso)).map(part => [part.type, part.value]));
-    return Number(parts.hour) * 60 + Number(parts.minute);
-  };
+  const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone: ET });
+  const todaysBars = (snapshots ?? []).filter(row => row.underlying !== "SPX").map(row => ({
+    sym: String(row.underlying),
+    bars: ((row.bars as Array<{ timestamp: number; close: number }> | null) ?? []).filter(bar => dayOf.format(new Date(bar.timestamp)) === clock.dateKey),
+  }));
+  // No bars dated TODAY means a holiday or dead snapshots, not a quiet morning —
+  // refuse to stamp a fabricated "nothing moved" day (11/26, Thanksgiving, got a stamp).
+  if (!todaysBars.some(row => row.bars.length >= 31)) return { stamped: false, skipped: "no bars for today in any snapshot (holiday or stale data)" };
+  const allLegs = todaysBars.flatMap(row => morningLegs(row.sym, row.bars));
+  const legs = allLegs.filter(leg => UNIVERSE.includes(leg.sym));
   const has = (date: string, type: string, megacapOnly = false, ticker?: string) =>
     (events ?? []).some(event => event.date === date && event.event_type === type
       && (!megacapOnly || MEGACAPS.has(String(event.detail)))
@@ -65,31 +71,19 @@ export async function runLotteryDayStamp(): Promise<{ stamped: boolean; skipped?
   const reactPrev = has(prev1, "earnings_bmo", true) || has(prev2, "earnings_amc", true);
   const nvdaReact = has(clock.dateKey, "earnings_bmo", true, "NVDA") || has(prev1, "earnings_amc", true, "NVDA");
   const dow = ["Mon", "Tue", "Wed", "Thu", "Fri"].indexOf(clock.weekday);
-  const features = [
-    rows.length,                                                                    // n_by11
-    rows.reduce((max, row) => Math.max(max, Math.abs(Number(row.leg_pct30 ?? 0))), 0), // maxleg_by11
-    new Set(rows.map(row => String(row.underlying))).size,                          // syms_by11
-    rows.length ? Math.min(...rows.map(row => etMinute(String(row.generated_at)))) : 960, // first_fire (960 = no fires yet)
+  const features = {
+    n_by11: legs.length,
+    maxleg_by11: legs.reduce((max, leg) => Math.max(max, leg.legPct), 0),
+    syms_by11: new Set(legs.map(leg => leg.sym)).size,
+    first_fire: legs.length ? Math.min(...legs.map(leg => leg.startMin)) : 960,
     dow,
-    has(clock.dateKey, "cpi") ? 1 : 0, has(clock.dateKey, "jobs") ? 1 : 0,
-    has(clock.dateKey, "fomc") ? 1 : 0, has(prev1, "fomc") ? 1 : 0,
-    reactToday ? 1 : 0, reactPrev ? 1 : 0, nvdaReact ? 1 : 0,
-  ];
-  const prob = predictProba(MODEL, features);
-  const armed = prob >= MODEL.threshold;
-  const { error } = await admin.from("lottery_day_stamps").insert({
-    day: clock.dateKey, prob: Number(prob.toFixed(4)), armed,
-    features: Object.fromEntries(MODEL.feats.map((name, i) => [name, features[i]])),
-  });
+    cpi: has(clock.dateKey, "cpi") ? 1 : 0, jobs: has(clock.dateKey, "jobs") ? 1 : 0,
+    fomc: has(clock.dateKey, "fomc") ? 1 : 0, fomc_prev: has(prev1, "fomc") ? 1 : 0,
+    megacap_react: reactToday ? 1 : 0, react_prev: reactPrev ? 1 : 0, nvda_react: nvdaReact ? 1 : 0,
+    // Every name's legs, universe or not, so the inputs can be rebuilt for any name set.
+    legs: allLegs, universe: UNIVERSE, minLegPct: MIN_LEG_PCT,
+  };
+  const { error } = await admin.from("lottery_day_stamps").insert({ day: clock.dateKey, prob: 0, armed: false, features, model: "inputs-only-2026-11-27" });
   if (error) throw new Error(`lottery stamp persistence: ${error.message}`);
-  if (armed) {
-    const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();
-    if (owner) await createAlert({
-      userId: String(owner.id), eventKey: `lottery-armed-${clock.dateKey}`, severity: "warning",
-      title: `🎰 LOTTERY SOIL: today scores in the detector's armed band (p=${prob.toFixed(2)})`,
-      body: `By 11:00 the day's shape (${rows.length} fires, max leg ${features[1].toFixed(1)}%, ${features[2]} symbols${features[9] ? ", megacap earnings reaction day" : ""}${features[7] ? ", Fed day" : ""}) puts today in the detector's top band. On unseen 2026 data, armed days carried 59% of all penny-swarm profit while being 13% of days — but the model is a tilt (AUC 0.57), not an oracle: most armed days still produce nothing. Context for sizing courage, never a trigger.`,
-      metadata: { kind: "lottery_day_armed", day: clock.dateKey, prob, features },
-    }).catch(() => undefined);
-  }
   return { stamped: true };
 }

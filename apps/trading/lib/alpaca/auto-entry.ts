@@ -2,7 +2,8 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
-import { PAPER_RULES, computePositionSize, entryCooldownActive, validatePaperEntry } from "./risk";
+import { PAPER_RULES, computePositionSize, entryCooldownActive, invalidAtEntry, validatePaperEntry } from "./risk";
+import { STOCK_FEED } from "./data-plan";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { recordShadowSkip } from "@/lib/options/shadow-ledger";
@@ -273,6 +274,18 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     }
   }
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
+  // Last check before the order: is this position already one the worker would sell?
+  // Only SPY and SPX carry the underlying-invalidation exit (the worker has a live
+  // price for those two alone), and scalp entries are exempt from it. A missing or
+  // stale price never vetoes. The skip is shadow-tracked and alerted like every other.
+  if ((underlying === "SPY" || underlying === "SPX") && signal.setup !== "scalp_reclaim") {
+    const livePrice = underlying === "SPY" ? await latestTradePrice("SPY").catch(() => null) : snapshot?.spotPrice ?? null;
+    if (invalidAtEntry({ action: signal.action, market: signal.market, price: livePrice })) {
+      const call = signal.action === "enter_call";
+      const level = call ? signal.market.openingRangeHigh : signal.market.openingRangeLow;
+      return { entered: null, skipped: `already invalid at entry: ${underlying} at ${Number(livePrice).toFixed(2)} is back ${call ? "at or below" : "at or above"} ${level.toFixed(2)}, the level the exit rule sells on` };
+    }
+  }
   const outsideBudget = budgetReason != null;
   const clientOrderId = `velocity-auto-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
   const entryLimit = Math.max(0.01, Number(contract.midpoint.toFixed(2)));
@@ -322,4 +335,18 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     }
   } catch (kickerError) { console.error("convex kicker failed", kickerError instanceof Error ? kickerError.message : kickerError); }
   return { entered: contract.ticker };
+}
+
+// Latest trade for a stock, or null when it cannot be had FRESH (a delayed or failed
+// feed must not veto an entry — see the 2026-11-25 delayed-feed incident).
+async function latestTradePrice(symbol: string): Promise<number | null> {
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) return null;
+  const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/trades/latest`);
+  url.searchParams.set("feed", STOCK_FEED);
+  const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(4_000) });
+  if (!response.ok) return null;
+  const payload = await response.json() as { trade?: { p?: number; t?: string } };
+  const price = Number(payload.trade?.p); const at = payload.trade?.t ? Date.parse(payload.trade.t) : NaN;
+  return price > 0 && Number.isFinite(at) && Date.now() - at < 60_000 ? price : null;
 }

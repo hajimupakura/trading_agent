@@ -4,7 +4,7 @@ import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { adviseExit } from "./advisor.js";
 import { cancelOrder, getLatestOptionQuote, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
-import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, saveMonitor, updateEntryJournal } from "./store.js";
+import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, repointExitJournal, saveMonitor, updateEntryJournal } from "./store.js";
 import { RobinhoodExitManager } from "./robinhood.js";
 import type { AlpacaOrder, OptionQuote } from "./types.js";
 
@@ -192,8 +192,9 @@ export class PositionManager {
       const age = now-Date.parse(openClose.updated_at ?? openClose.created_at); const currentLimit = Number(openClose.limit_price);
       // Escalate after 30s working (or immediately for urgent reasons): cross 5% below the bid.
       const target = exitLimit(urgent || age >= 30_000);
-      if (age >= 10_000 && Math.abs(currentLimit-target)>=.01) await replaceCloseOrder(openClose.id,target);
       await journalExit(position,openClose,currentLimit || quote.bid,reason);
+      // A replace issues a NEW order id; move the journal row onto it right away.
+      if (age >= 10_000 && Math.abs(currentLimit-target)>=.01) { const replaced = await replaceCloseOrder(openClose.id,target); if (replaced?.id && replaced.id !== openClose.id) await repointExitJournal(openClose.id,replaced,target); }
       await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`paper-exit-working-${openClose.id}`,severity:"warning",title:"Paper exit working",body:`SELL ${position.quantity} ${position.alpacaSymbol} is ${openClose.status} near $${(currentLimit||quote.bid).toFixed(2)} · ${reason.replaceAll("_"," ")}`,metadata:{orderId:openClose.id,contractTicker:position.ticker,limitPrice:currentLimit||quote.bid,exitReason:reason,status:openClose.status}});
       await saveMonitor(position,{...quoteState,status:"closing",exitReason:reason,closeOrderId:openClose.id}); return;
     }

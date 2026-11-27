@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { aiConfigured, chatComplete } from "@/lib/ai/openrouter";
+import { sessionCloseMs } from "./session-time";
 
 // Self-healing loop, step 1: every closed trade gets an automatic autopsy.
 // For each filled sell_to_close, pull the contract's minute tape (research_fetches
@@ -41,11 +42,11 @@ async function stageNewReviews(): Promise<number> {
       .order("created_at", { ascending: false }).limit(1);
     const buy = buys?.[0];
     const entryAt = buy?.created_at ?? sell.created_at;
-    const fromDate = etDate(entryAt); const toDate = etDate(sell.created_at);
-    // Tape request covers entry through the exit session (post-exit window included).
-    const { data: fetchExists } = await admin.from("research_fetches").select("id")
-      .eq("ticker", sell.contract_ticker).eq("from_date", fromDate).eq("to_date", toDate).limit(1).maybeSingle();
-    if (!fetchExists) await admin.from("research_fetches").insert({ ticker: sell.contract_ticker, from_date: fromDate, to_date: toDate, timeframe: "1Min" });
+    // The tape is NOT requested here. Until 2026-11-27 it was queued at staging time and
+    // arrived minutes after the exit, so "post-exit peak / close" described the next
+    // ~20 minutes, not the rest of the day — 96 of the first 113 autopsies carry that
+    // flaw, and every "sold too early" label built on it. The tape is now requested
+    // only after the exit session has closed (see analyzeReadyReviews).
     await admin.from("trade_reviews").insert({
       sell_order_id: sell.id, contract_ticker: sell.contract_ticker, underlying: sell.underlying,
       quantity: sell.quantity, entry_price: buy?.limit_price ?? null, exit_price: sell.limit_price,
@@ -57,16 +58,28 @@ async function stageNewReviews(): Promise<number> {
   return staged;
 }
 
-// Stage 2: analyze reviews whose tape has arrived.
+// Stage 2: analyze reviews once the exit session is over and a tape fetched AFTER the
+// close has arrived — so "post-exit" covers the whole rest of the day.
 async function analyzeReadyReviews(): Promise<string[]> {
   const admin = createAdminClient();
   const done: string[] = [];
-  const { data: pending } = await admin.from("trade_reviews").select("*").eq("status", "pending_data").limit(3);
+  const { data: pending } = await admin.from("trade_reviews").select("*").eq("status", "pending_data").order("exit_at", { ascending: true }).limit(12);
+  let analyzed = 0;
   for (const review of pending ?? []) {
-    const { data: fetch } = await admin.from("research_fetches").select("bars,status")
-      .eq("ticker", review.contract_ticker).eq("from_date", etDate(review.entry_at)).eq("to_date", etDate(review.exit_at))
+    const fromDate = etDate(review.entry_at); const toDate = etDate(review.exit_at);
+    const closeMs = sessionCloseMs(toDate);
+    if (Date.now() < closeMs) continue; // session still open — wait for the full tape
+    const { data: fetch } = await admin.from("research_fetches").select("bars,status,processed_at")
+      .eq("ticker", review.contract_ticker).eq("from_date", fromDate).eq("to_date", toDate)
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (!fetch || fetch.status === "queued" || fetch.status === "running") continue;
+    if (fetch && (fetch.status === "queued" || fetch.status === "running")) continue;
+    // No tape yet, or the newest one was pulled before the close (partial day): ask again.
+    if (!fetch || !fetch.processed_at || Date.parse(String(fetch.processed_at)) < closeMs) {
+      await admin.from("research_fetches").insert({ ticker: review.contract_ticker, from_date: fromDate, to_date: toDate, timeframe: "1Min" });
+      continue;
+    }
+    if (analyzed >= 3) break; // at most three narratives per tick
+    analyzed += 1;
     try {
       if (fetch.status === "error") throw new Error("tape fetch failed");
       const bars = (fetch.bars as number[][] | null) ?? [];

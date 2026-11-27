@@ -119,6 +119,9 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
   // detector acts automatically on paper). Rationale: monsters arrive in litters —
   // 11/19 alone birthed ten 10x+ contracts — and the armed top-20% of unseen 2026
   // days carried 59% of all penny-swarm profit.
+  // 2026-11-27: the stamp is inputs-only and never arms until a detector validates on
+  // inputs that exist at 11:00 (see lottery-stamp.ts) — so this is 1/day in practice,
+  // and the user's extra slots are the way to take more.
   const armedDay = Boolean(dayStamp?.armed);
   const maxToday = armedDay ? 2 : RULES.maxPerDay;
   const openSymbols = new Set(trading.positions.map(position => `O:${position.symbol}`));
