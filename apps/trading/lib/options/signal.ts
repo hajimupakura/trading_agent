@@ -200,3 +200,29 @@ export function generateSignal(market: MarketState, contracts: Contract[], optio
   }
   return { id, generatedAt:Date.now(), action, setup:action.startsWith("enter") ? (setupOverride ?? "opening_range") : "none", confidence, reasons, invalidation, contract, market:summary };
 }
+
+// SWARM-ONLY TRIGGER (2026-11-27). generateSignal can only fire when a contract exists
+// to attach the fire to, and the watch scan only fetches expiries in the next three
+// sessions — so a name with nothing expiring that soon could never fire at all: every
+// Friday-only weekly (SNDK, SKHY, SMCI, APP, ASTS) on Mondays and Tuesdays, and ANT for
+// the whole week of 11/23 (nearest expiry 12/04; it ran +11% on 11/27 with two swarm
+// slots armed and was structurally unable to trigger one). The convexity sleeve never
+// needed that contract — it buys its own far-OTM Friday expiry — it only needs to know
+// the entry conditions fired. This runs the SAME engine against stand-in contracts so
+// there is one copy of the entry rules, and returns the fire with no contract attached.
+// The caller stores it as `swarmSignal`; it must never reach a day-trade lane.
+const STAND_IN_TICKER = "SWARM-TRIGGER-STAND-IN";
+export function generateDirectionSignal(market: MarketState, options?: { trendDayEnabled?: boolean }): Signal {
+  const standIn = (side: Contract["side"]): Contract => ({
+    ticker: STAND_IN_TICKER, underlying: market.symbol, expirationDate: "", dte: 0, side, strike: 0, exerciseStyle: "american",
+    bid: 0, ask: 0, midpoint: 0, spreadPct: 0, quoteUpdatedAt: null, volume: 0, openInterest: 0, volumeToOpenInterest: 0,
+    impliedVolatility: null, delta: side === "call" ? .45 : -.45, gamma: null, theta: null, underlyingPrice: null,
+    liquidityScore: 0, eligible: true, rejectionReasons: [],
+  });
+  const signal = generateSignal(market, [standIn("call"), standIn("put")], { minDte: 0, trendDayEnabled: options?.trendDayEnabled });
+  return {
+    ...signal, contract: null,
+    id: `${market.symbol}-${market.asOf}-${signal.action}-swarm`,
+    reasons: [...signal.reasons.filter(reason => !reason.includes(STAND_IN_TICKER)), "No contract expires in the next three sessions — swarm trigger only, no day trade"],
+  };
+}

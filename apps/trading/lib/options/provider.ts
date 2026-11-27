@@ -53,21 +53,36 @@ export async function alpacaChainRows(underlying: Underlying, expiration: string
   // non-monthly week the short-dated chain would have been empty outright.
   const roots = underlying === "SPX" ? ["SPX", "SPXW"] : [underlying];
   // Open interest enrichment (trading API). Failure never blocks the chain.
-  const openInterestBySymbol = new Map<string, number>();
-  try {
-    let pageToken: string | undefined; let pages = 0;
-    do {
-      const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
-      url.searchParams.set("underlying_symbols", roots.join(",")); url.searchParams.set("expiration_date", expiration);
-      url.searchParams.set("limit", "1000");
-      if (pageToken) url.searchParams.set("page_token", pageToken);
-      const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
-      if (!response.ok) break;
-      const payload = await response.json() as { option_contracts?: Array<{ symbol: string; open_interest?: string | number | null }>; next_page_token?: string | null };
-      for (const contract of payload.option_contracts ?? []) openInterestBySymbol.set(contract.symbol, Number(contract.open_interest ?? 0) || 0);
-      pageToken = payload.next_page_token ?? undefined;
-    } while (pageToken && ++pages < 4);
-  } catch { /* enrichment only */ }
+  // Cached (2026-11-27): open interest is published once a day, yet this listing was
+  // re-requested for every expiry of every name on every tick — ~60 trading-API calls
+  // a minute, several hundred on the quarter-hour — against an API that is rate-limited
+  // per account and is the same one the exit worker places orders through.
+  const oiKey = `${roots.join(",")}|${expiration}`;
+  const cachedOi = openInterestCache.get(oiKey);
+  const oiFresh = cachedOi != null && Date.now() - cachedOi.at < (cachedOi.byOcc.size ? OI_TTL_MS : OI_EMPTY_TTL_MS);
+  const openInterestBySymbol = oiFresh ? cachedOi.byOcc : new Map<string, number>();
+  if (!oiFresh) {
+    try {
+      let pageToken: string | undefined; let pages = 0; let complete = false;
+      do {
+        const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
+        url.searchParams.set("underlying_symbols", roots.join(",")); url.searchParams.set("expiration_date", expiration);
+        url.searchParams.set("limit", "1000");
+        if (pageToken) url.searchParams.set("page_token", pageToken);
+        const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(12_000) });
+        if (!response.ok) break;
+        const payload = await response.json() as { option_contracts?: Array<{ symbol: string; open_interest?: string | number | null }>; next_page_token?: string | null };
+        for (const contract of payload.option_contracts ?? []) openInterestBySymbol.set(contract.symbol, Number(contract.open_interest ?? 0) || 0);
+        pageToken = payload.next_page_token ?? undefined;
+        if (!pageToken) complete = true;
+      } while (pageToken && ++pages < 4);
+      // Only a COMPLETE listing is remembered; a throttled or cut-off one retries next call.
+      if (complete) {
+        for (const [key, entry] of openInterestCache) if (Date.now() - entry.at > OI_TTL_MS) openInterestCache.delete(key);
+        openInterestCache.set(oiKey, { at: Date.now(), byOcc: openInterestBySymbol });
+      }
+    } catch { /* enrichment only */ }
+  }
   const rows: Parameters<typeof rankContracts>[0] = [];
   const rootErrors: string[] = [];
   for (const root of roots) {
@@ -127,6 +142,9 @@ export async function alpacaChainRows(underlying: Underlying, expiration: string
   return rows;
 }
 let opraAvailable: boolean | null = null;
+const OI_TTL_MS = 4 * 60 * 60_000;
+const OI_EMPTY_TTL_MS = 30 * 60_000; // an expiry with no listed contracts: re-check sooner
+const openInterestCache = new Map<string, { at: number; byOcc: Map<string, number> }>();
 // Latest quotes for specific OCC symbols. Needed by the shadow ledger: a skipped
 // contract that goes deep ITM (exactly the big counterfactual winners) drops out
 // of the snapshot's ranked top-40, so marking must quote it directly.
@@ -346,32 +364,73 @@ export async function getHistoricalSpyBars(date: string): Promise<Bar[]> {
 // 2-month contracts are not silently skipped between the tab anchors.
 const HORIZON_TARGETS: Record<LongHorizon, number[]> = { "1M": [7, 14, 21, 30, 45], "3M": [60, 91, 120], "6M": [150, 182], "9M": [240, 273], "1Y": [330, 365] };
 
-export async function getHorizonChains(underlying: Underlying, horizons: Array<"NEAR"|LongHorizon>, settings:RiskSettings=DEFAULT_RISK_SETTINGS): Promise<Contract[]> {
+// Every listed expiration for a name, from ONE trading-API request per name per day
+// (2026-11-27). The old resolver asked the contract listing twelve times per name on
+// every quarter-hour — 200+ requests in a few seconds against a per-account rate limit
+// — and threw away every failure: the first six names in the watch list resolved all
+// their expiries, the rest got zero to three, and a name with none fell back to
+// days-old chains without a word. Calls only, inside a strike band around spot, so the
+// response is a few hundred rows instead of the whole chain; the explicit date ceiling
+// matters because the endpoint otherwise defaults to "expiring before next weekend".
+const listedExpirationsCache = new Map<string, { day: string; expirations: string[] }>();
+async function listedExpirations(underlying: Underlying, spot: number | null): Promise<string[]> {
   const today = dateEt();
-  const targets = horizons.flatMap((horizon): Array<{ horizon: "NEAR" | LongHorizon; targetDays: number }> => horizon === "NEAR" ? [{ horizon, targetDays: 0 }] : HORIZON_TARGETS[horizon].map(targetDays => ({ horizon, targetDays })));
-  const expirations = await Promise.all(targets.map(async ({ horizon, targetDays }) => {
-    // Floor scales with the tenor so a short target can't resolve to a near-week expiry.
-    const floor = targetDays === 0 ? today : addDays(today, Math.max(0, targetDays - Math.min(21, Math.round(targetDays / 3))));
-    // Nearest listed expiry on/after the floor, via the trading API's contract listing.
+  const cached = listedExpirationsCache.get(underlying);
+  if (cached?.day === today) return cached.expirations;
+  const found = new Set<string>();
+  let pageToken: string | undefined; let pages = 0;
+  do {
     const url = new URL(`${PAPER_TRADING_BASE}/v2/options/contracts`);
-    // SPX again spans both roots: without SPXW, the NEAR tenor can only resolve to a
-    // third-Friday monthly (see the root note on alpacaChainRows).
-    url.searchParams.set("underlying_symbols", underlying === "SPX" ? "SPX,SPXW" : underlying); url.searchParams.set("expiration_date_gte", floor);
-    url.searchParams.set("limit", "200");
-    const payload = await fetch(url, { headers: alpacaKeys(), cache: "no-store", signal: AbortSignal.timeout(12_000) })
-      .then(response => response.ok ? response.json() as Promise<{ option_contracts?: Array<{ expiration_date?: string }> }> : null)
-      .catch(() => null);
-    const expirations = (payload?.option_contracts ?? []).map(contract => String(contract.expiration_date ?? "")).filter(Boolean).sort();
-    return expirations.length ? { horizon, expiration: expirations[0] } : null;
-  }));
-  const unique = [...new Map(expirations.filter((item): item is {horizon:"NEAR"|LongHorizon;expiration:string} => item != null).map(item => [item.expiration, item])).values()];
+    // SPX spans both roots: without SPXW only the third-Friday monthlies are listed
+    // (see the root note on alpacaChainRows).
+    url.searchParams.set("underlying_symbols", underlying === "SPX" ? "SPX,SPXW" : underlying);
+    url.searchParams.set("type", "call");
+    url.searchParams.set("expiration_date_gte", today); url.searchParams.set("expiration_date_lte", addDays(today, 800));
+    if (spot != null && spot > 0) {
+      // Wide enough that every expiry — including LEAPS with coarse strikes — lists at
+      // least one strike inside it; narrow enough to keep the response small.
+      const band = underlying === "SPX" ? .02 : spot < 50 ? .2 : spot < 200 ? .1 : .04;
+      url.searchParams.set("strike_price_gte", (spot * (1 - band)).toFixed(2)); url.searchParams.set("strike_price_lte", (spot * (1 + band)).toFixed(2));
+    }
+    url.searchParams.set("limit", "10000");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    const response = await fetch(url, { headers: alpacaKeys(), cache: "no-store", signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Alpaca expiry listing ${response.status} for ${underlying}`);
+    const payload = await response.json() as { option_contracts?: Array<{ expiration_date?: string }>; next_page_token?: string | null };
+    for (const contract of payload.option_contracts ?? []) if (contract.expiration_date) found.add(String(contract.expiration_date));
+    pageToken = payload.next_page_token ?? undefined;
+  } while (pageToken && ++pages < 5);
+  const expirations = [...found].sort();
+  if (!expirations.length) throw new Error(`Alpaca lists no option expirations for ${underlying}`);
+  listedExpirationsCache.set(underlying, { day: today, expirations });
+  return expirations;
+}
+
+export async function getHorizonChains(underlying: Underlying, horizons: Array<"NEAR"|LongHorizon>, settings:RiskSettings=DEFAULT_RISK_SETTINGS, spot: number | null = null): Promise<Contract[]> {
+  const today = dateEt();
+  // A failed listing THROWS (the caller records it and keeps the previous longs with
+  // their age); it is never mistaken for "this name has no long-dated options".
+  const listed = await listedExpirations(underlying, spot);
+  const targetDays = horizons.flatMap(horizon => horizon === "NEAR" ? [0] : HORIZON_TARGETS[horizon]);
+  // Nearest listed expiry on/after each tenor's floor. The floor scales with the tenor
+  // so a short target can't resolve to a near-week expiry.
+  const unique = [...new Set(targetDays.flatMap(days => {
+    const floor = days === 0 ? today : addDays(today, Math.max(0, days - Math.min(21, Math.round(days / 3))));
+    const expiration = listed.find(candidate => candidate >= floor);
+    return expiration ? [expiration] : [];
+  }))];
   const dteOf = (expiration: string) => Math.max(0, Math.round((Date.parse(`${expiration}T16:00:00-04:00`) - Date.now()) / 86_400_000));
-  const buckets = await Promise.all(unique.map(async ({ expiration }) => {
+  const settled = await Promise.allSettled(unique.map(async expiration => {
     const rows = await alpacaChainRows(underlying, expiration, dteOf(expiration));
     // Cap per expiration bucket so one horizon cannot starve the others downstream.
     return rankContracts(rows, settings, { monitorOnly:true }).slice(0, 80);
   }));
-  return buckets.flat();
+  // One expiry failing no longer discards the eleven that answered; every failure is
+  // logged, and a fetch where NOTHING answered still throws.
+  const failures = settled.flatMap((result, index) => result.status === "rejected" ? [`${unique[index]}: ${String(result.reason).slice(0, 120)}`] : []);
+  if (failures.length) console.error("Long-horizon chain fetch failed", underlying, `${failures.length}/${unique.length}`, failures.slice(0, 3).join(" | "));
+  if (unique.length && failures.length === unique.length) throw new Error(`Long-horizon chains failed for ${underlying}: ${failures[0]}`);
+  return settled.flatMap(result => result.status === "fulfilled" ? result.value : []);
 }
 
 export async function getOptionChain(underlying: Underlying,settings:RiskSettings=DEFAULT_RISK_SETTINGS,options?:{monitorOnly?:boolean}): Promise<Contract[]> {

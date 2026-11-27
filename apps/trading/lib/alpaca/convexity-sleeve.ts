@@ -4,7 +4,7 @@ import { createAlert } from "@/lib/alerts/server";
 import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { alpacaChainRows } from "@/lib/options/provider";
-import type { CommandCenter, Underlying } from "@/lib/options/types";
+import type { CommandCenter, Signal, Underlying } from "@/lib/options/types";
 
 // CONVEXITY SLEEVE — the third paper sleeve (user-authorized 2026-11-24: "convexity
 // with all these tickers. convexity has no cap loss. max investment should be 3k").
@@ -51,6 +51,18 @@ function pickExpiry(dateKey: string): { expiration: string; dte: number } {
   throw new Error("no Friday found within 10 days"); // unreachable
 }
 
+// The fire this sleeve acts on: the engine's own signal when it fired, otherwise the
+// swarm-only trigger (2026-11-27) — the same entry conditions on a name with no
+// contract expiring in the next three sessions, where the engine has nothing to attach
+// a signal to (see generateDirectionSignal). `swarmOnly` fires exist only in the
+// snapshot: no option_signals row, so they must never be used as a signal_id.
+function pickFire(snapshot: CommandCenter | null): { signal: Signal; swarmOnly: boolean } | null {
+  const isEntry = (signal: Signal | null | undefined): signal is Signal => signal != null && ["enter_call", "enter_put"].includes(signal.action);
+  if (isEntry(snapshot?.signal)) return { signal: snapshot.signal, swarmOnly: false };
+  if (isEntry(snapshot?.swarmSignal)) return { signal: snapshot.swarmSignal, swarmOnly: true };
+  return null;
+}
+
 export async function runConvexityEntry(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
   try {
     return await evaluate(snapshot, underlying);
@@ -58,8 +70,8 @@ export async function runConvexityEntry(snapshot: CommandCenter | null, underlyi
     // Fail loud (silent-failure doctrine): an exception while a qualified fire is
     // live is an incident, not a quiet miss.
     const message = error instanceof Error ? error.message : String(error);
-    const signal = snapshot?.signal;
-    if (signal && ["enter_call", "enter_put"].includes(signal.action)) {
+    const signal = pickFire(snapshot)?.signal;
+    if (signal) {
       const { data: owner } = await createAdminClient().from("profiles").select("id").limit(1).maybeSingle();
       if (owner) await createAlert({
         userId: owner.id, eventKey: `convexity-entry-error-${signal.id}`, severity: "critical",
@@ -73,8 +85,9 @@ export async function runConvexityEntry(snapshot: CommandCenter | null, underlyi
 }
 
 async function evaluate(snapshot: CommandCenter | null, underlying: string): Promise<{ entered: string | null; skipped?: string }> {
-  const signal = snapshot?.signal;
-  if (!signal || !["enter_call", "enter_put"].includes(signal.action)) return { entered: null };
+  const fire = pickFire(snapshot);
+  if (!fire) return { entered: null };
+  const { signal, swarmOnly } = fire;
   if (Date.now() - signal.generatedAt > 120_000) return { entered: null, skipped: "stale signal" };
   if (underlying === "SPX") return { entered: null, skipped: "SPX convexity rides the PAIR kicker" };
   const admin = createAdminClient();
@@ -164,10 +177,11 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
   // On that collision the row is journaled without the signal link (the source signal is
   // kept in risk_snapshot); any journal failure that remains pages, never hides.
   const journalRow = {
-    user_id: owner.id, signal_id: signal.id as string | null, alpaca_order_id: order.id, client_order_id: order.client_order_id,
+    // A swarm-only fire has no option_signals row; its id lives in risk_snapshot only.
+    user_id: owner.id, signal_id: (swarmOnly ? null : signal.id) as string | null, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity, order_type: "limit", limit_price: limit, max_debit: limit * quantity * 100, status: order.status,
-    risk_snapshot: { autonomous: true, strategy: "convexity-swarm", sourceSignalId: signal.id, legPct: Number(legPct.toFixed(2)), spot, otmPct: Number((Math.abs(contract.strike / spot - 1) * 100).toFixed(1)), expiration, dte, ...(usingExtra ? { userExtra: true, maxPrice: extraMaxPrice } : {}) },
+    risk_snapshot: { autonomous: true, strategy: "convexity-swarm", sourceSignalId: signal.id, legPct: Number(legPct.toFixed(2)), spot, otmPct: Number((Math.abs(contract.strike / spot - 1) * 100).toFixed(1)), expiration, dte, ...(usingExtra ? { userExtra: true, maxPrice: extraMaxPrice } : {}), ...(swarmOnly ? { swarmOnlyTrigger: true, setup: signal.setup } : {}) },
     broker_response: order,
   };
   let { error: journalError } = await admin.from("paper_trade_orders").insert(journalRow);
@@ -182,10 +196,10 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
     }).catch(error => console.error("convexity journal alert failed", error));
   }
   await createAlert({
-    userId: owner.id, signalId: signal.id, eventKey: `convexity-entry-${order.id}`, severity: "success",
+    userId: owner.id, signalId: swarmOnly ? undefined : signal.id, eventKey: `convexity-entry-${order.id}`, severity: "success",
     title: `${usingExtra ? "EXTRA SWARM (your request)" : "CONVEXITY SWARM"}: ${quantity} × ${underlying} ${contract.strike} ${side} (${expiration})`,
-    body: `${usingExtra ? `This is the extra swarm you asked for (contract at or under $${(extraMaxPrice ?? 0).toFixed(2)}), taken beyond the usual ${RULES.maxConcurrent}-open limit. ` : ""}${underlying} ran ${legPct.toFixed(1)}% in 30 minutes, so the convexity sleeve bought ${quantity} × ${contract.ticker.replace("O:", "")} at a $${limit.toFixed(2)} limit — about $${(limit * quantity * 100).toFixed(0)} of premium, ${(Math.abs(contract.strike / spot - 1) * 100).toFixed(1)}% out of the money, ${dte} days to expiry. No stop by design: max loss is the premium, exit at day+2 close or 14:00 on expiry day. The swarm study says ~7 of 10 of these die — the monsters pay for them.`,
-    metadata: { kind: "convexity_swarm_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: limit, quantity, legPct, expiration },
+    body: `${usingExtra ? `This is the extra swarm you asked for (contract at or under $${(extraMaxPrice ?? 0).toFixed(2)}), taken beyond the usual ${RULES.maxConcurrent}-open limit. ` : ""}${swarmOnly ? `${underlying} has no option expiring in the next three sessions, so there was no day trade to take — the entry conditions fired for the swarm only. ` : ""}${underlying} ran ${legPct.toFixed(1)}% in 30 minutes, so the convexity sleeve bought ${quantity} × ${contract.ticker.replace("O:", "")} at a $${limit.toFixed(2)} limit — about $${(limit * quantity * 100).toFixed(0)} of premium, ${(Math.abs(contract.strike / spot - 1) * 100).toFixed(1)}% out of the money, ${dte} days to expiry. No stop by design: max loss is the premium, exit at day+2 close or 14:00 on expiry day. The swarm study says ~7 of 10 of these die — the monsters pay for them.`,
+    metadata: { kind: "convexity_swarm_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: limit, quantity, legPct, expiration, swarmOnlyTrigger: swarmOnly },
   }).catch(error => console.error("convexity alert failed", error));
   return { entered: contract.ticker };
 }

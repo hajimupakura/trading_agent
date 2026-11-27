@@ -70,15 +70,26 @@ export async function refreshCommandCenter(underlying: Underlying,settings:RiskS
   // (every ~15 minutes); otherwise carried over from the previous snapshot. They are
   // NEVER passed to generateSignal — the 0-2 DTE strategy stays untouched.
   let longContracts:typeof contracts = [];
+  // longRefreshedAt/longError: same staleness stamp the watch names carry (2026-11-27),
+  // so a long-chain fetch that keeps failing ages visibly instead of serving old quotes.
+  let longRefreshedAt:number|null = null; let longError:string|null = null;
+  const previousPayload = async () => { const { data:previous } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying",underlying).maybeSingle(); return previous?.payload as CommandCenter|undefined; };
   if (options?.includeLongHorizons) {
-    const [longResult] = await Promise.allSettled([getHorizonChains(underlying,["1M","3M","6M","9M","1Y"],settings)]);
-    if (longResult.status === "fulfilled") longContracts = longResult.value; else errors.push(`Long-horizon chain: ${String(longResult.reason)}`);
+    const [longResult] = await Promise.allSettled([getHorizonChains(underlying,["1M","3M","6M","9M","1Y"],settings,spotPrice)]);
+    if (longResult.status === "fulfilled" && longResult.value.length) { longContracts = longResult.value; longRefreshedAt = Date.now(); }
+    else {
+      if (longResult.status === "rejected") { longError = String(longResult.reason).slice(0,200); errors.push(`Long-horizon chain: ${String(longResult.reason)}`); }
+      const previous = await previousPayload();
+      longContracts = (previous?.contracts ?? []).filter(contract => contract.dte > 7);
+      longRefreshedAt = previous?.longRefreshedAt ?? null; longError = longError ?? previous?.longError ?? null;
+    }
   } else {
-    const { data:previous } = await admin.from("options_monitor_snapshots").select("payload").eq("underlying",underlying).maybeSingle();
-    longContracts = ((previous?.payload as CommandCenter|undefined)?.contracts ?? []).filter(contract => contract.dte > 7);
+    const previous = await previousPayload();
+    longContracts = (previous?.contracts ?? []).filter(contract => contract.dte > 7);
+    longRefreshedAt = previous?.longRefreshedAt ?? null; longError = previous?.longError ?? null;
   }
   await scanUnusualFlow(underlying, contracts).catch(error => console.error("flow scan failed", error));
-  const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:[...contractsByDte, ...longContracts.slice(0,900)], signal, errors };
+  const snapshot = { configured:true, asOf:Date.now(), market, spotPrice, contracts:[...contractsByDte, ...longContracts.slice(0,900)], signal, errors, longRefreshedAt, longError };
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
   if (signal && ["enter_call", "enter_put"].includes(signal.action)) {

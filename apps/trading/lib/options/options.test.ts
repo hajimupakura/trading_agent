@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rankContracts } from "./ranker";
-import { generateSignal } from "./signal";
+import { generateSignal, generateDirectionSignal } from "./signal";
 import type { Contract, MarketState } from "./types";
 
 const raw = (overrides:Record<string,unknown> = {}) => ({ ticker:"O:SPY260806C00650000", underlying:"SPY" as const, expirationDate:"2026-08-06", dte:0, side:"call" as const, strike:650, exerciseStyle:"american", bid:1.9, ask:2, midpoint:1.95, spreadPct:5.1, quoteUpdatedAt:Date.now(), volume:10_000, openInterest:2_000, volumeToOpenInterest:5, impliedVolatility:.2, delta:.45, gamma:.1, theta:-.2, underlyingPrice:650, ...overrides });
@@ -33,5 +33,29 @@ describe("focused options engine", () => {
     const [contract] = rankContracts([raw()]); const base = market();
     const signal = generateSignal(market({ technicals:{...base.technicals,volumeConfirmation:false} }), [contract as Contract]);
     expect(signal.action).toBe("watch"); expect(signal.reasons.join(" ")).toContain("1.2×");
+  });
+});
+
+// Swarm-only trigger: a name with no contract expiring in the next three sessions must
+// still be able to tell the convexity sleeve that the entry conditions fired.
+describe("swarm-only trigger", () => {
+  it("fires with no contract where the engine itself can only say no_trade", () => {
+    expect(generateSignal(market(), []).action).toBe("no_trade");
+    const fire = generateDirectionSignal(market());
+    expect(fire.action).toBe("enter_call");
+    expect(fire.contract).toBeNull();
+    expect(fire.id.endsWith("-enter_call-swarm")).toBe(true);
+    expect(fire.reasons.some(reason => reason.includes("STAND-IN"))).toBe(false);
+  });
+  it("agrees with the engine's decision when a real contract exists", () => {
+    const [contract] = rankContracts([raw()]);
+    const engine = generateSignal(market(), [contract as Contract]);
+    const fire = generateDirectionSignal(market());
+    expect(fire.action).toBe(engine.action); expect(fire.setup).toBe(engine.setup);
+  });
+  it("applies the same entry rules — no fire on an overextended RSI or a false breakout", () => {
+    const base = market();
+    expect(generateDirectionSignal(market({ technicals:{ ...base.technicals, rsi14:82 } })).action.startsWith("enter")).toBe(false);
+    expect(generateDirectionSignal(market({ bars:[base.bars[0]!,{...base.bars[1]!,close:650.4}] })).action.startsWith("enter")).toBe(false);
   });
 });

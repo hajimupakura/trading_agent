@@ -36,4 +36,12 @@ export interface Signal {
 }
 export interface CommandCenter {
   configured: boolean; asOf: number; market: MarketState | null; spotPrice: number | null; contracts: Contract[]; signal: Signal | null; errors: string[];
+  // Swarm-only trigger: the engine's entry conditions fired on a name that has NO
+  // contract expiring in the next three sessions, so `signal` has nothing to attach
+  // to. Read by the convexity sleeve alone (it buys its own week-out contract); never
+  // persisted, carded, or traded by the day-trade lanes. See generateDirectionSignal.
+  swarmSignal?: Signal | null;
+  // When the long-dated chains last came back FRESH from the provider (not carried
+  // over from the previous snapshot), and the last failure if they have not.
+  longRefreshedAt?: number | null; longError?: string | null;
 }

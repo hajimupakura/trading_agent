@@ -89,6 +89,34 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
     }
   }
 
+  // ---- 1a. Long-dated chain freshness (10:30-15:30). Long chains refresh on the
+  // quarter-hour and every snapshot carries the time of its last FRESH fetch. Until
+  // 2026-11-27 a failed fetch silently reused the previous chains forever: ANT showed
+  // a single July-2027 expiry with Tuesday's quotes on Friday, and eleven of seventeen
+  // watch names had starved or days-old long chains while every panel still rendered.
+  // One alert a day naming every affected symbol, not one page per symbol.
+  if (clock.minutes >= 630 && clock.minutes <= 930) {
+    const stale = snapshots.filter(snap => snap.payload?.market != null).flatMap(snap => {
+      const refreshedAt = snap.payload?.longRefreshedAt ?? null;
+      const ageMinutes = refreshedAt == null ? null : Math.round((Date.now() - refreshedAt) / 60_000);
+      return ageMinutes == null || ageMinutes > 75 ? [{ underlying: snap.underlying, ageMinutes, error: snap.payload?.longError ?? null }] : [];
+    });
+    if (stale.length) {
+      const eventKey = `blindspot-long-chains-stale-${today}`;
+      const { data: seen } = await admin.from("alerts").select("id").eq("event_key", eventKey).limit(1).maybeSingle();
+      if (!seen) {
+        const firstError = stale.find(item => item.error)?.error ?? null;
+        await createAlert({
+          userId, eventKey, severity: "critical",
+          title: `BLIND-SPOT ALARM: long-dated option chains are stale for ${stale.length} symbol${stale.length === 1 ? "" : "s"}`,
+          body: `${stale.map(item => `${item.underlying} (${item.ageMinutes == null ? "never refreshed" : `${item.ageMinutes} min old`})`).join(", ")}. Expiries more than a week out are missing or showing old quotes for these names on the dashboard. Day-trade signals and swarm entries fetch their own contracts and are not affected.${firstError ? ` Last error: ${firstError.slice(0, 160)}.` : ""}`,
+          metadata: { kind: "blindspot_long_chains_stale", symbols: stale },
+        }).catch(() => undefined);
+        out.invariantViolations.push(`long chains stale: ${stale.map(item => item.underlying).join(",")}`);
+      }
+    }
+  }
+
   // ---- 1b. Telegram ticket invariant (same window): a buy/sell the user CONFIRMED
   // that is still 'executing' minutes later means the webhook died mid-trade — the
   // user believes they own (or sold) something they may not. Page critical.

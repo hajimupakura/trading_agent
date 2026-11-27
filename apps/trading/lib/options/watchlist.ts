@@ -2,7 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getMarketState, getOptionChain, getHorizonChains } from "./provider";
 import { scanUnusualFlow } from "./flow-scan";
-import { generateSignal } from "./signal";
+import { generateSignal, generateDirectionSignal } from "./signal";
 import { rankContracts } from "./ranker";
 import { DEFAULT_RISK_SETTINGS } from "@/lib/settings/config";
 import type { CommandCenter, WatchUnderlying } from "./types";
@@ -23,17 +23,36 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying, options?: { 
   // barely moves, and on the Huang-reinstatement morning it throttled us into
   // scattered single-expiry 403s. Off the quarter-hour, longs reuse the previous
   // snapshot (the command-center pattern).
+  // The long-horizon fetch waits for the spot price: it lets the expiry listing ask for
+  // a narrow strike band (one small request per name per day) instead of whole chains.
+  const marketPromise = getMarketState(symbol);
+  const longPromise = options?.includeLongHorizons !== false
+    ? marketPromise.then(state => state.displayPrice ?? state.price, () => null).then(spot => getHorizonChains(symbol, ["1M", "3M", "6M", "9M", "1Y"], undefined, spot))
+    : Promise.resolve(null);
   const [marketResult, shortResult, longResult] = await Promise.allSettled([
-    getMarketState(symbol),
+    marketPromise,
     getOptionChain(symbol, undefined, { monitorOnly:true }),
-    options?.includeLongHorizons !== false ? getHorizonChains(symbol, ["1M", "3M", "6M", "9M", "1Y"]) : Promise.resolve(null),
+    longPromise,
   ]);
   const market = marketResult.status === "fulfilled" ? marketResult.value : null;
   const shortContracts = shortResult.status === "fulfilled" ? shortResult.value : [];
-  let longContracts = longResult.status === "fulfilled" && longResult.value != null ? longResult.value : [];
-  if (!longContracts.length) {
-    const { data: previous } = await createAdminClient().from("options_monitor_snapshots").select("payload").eq("underlying", symbol).maybeSingle();
-    longContracts = ((previous?.payload as CommandCenter | undefined)?.contracts ?? []).filter(contract => contract.dte > 7);
+  // Long chains: a FRESH fetch stamps longRefreshedAt; anything else carries the
+  // previous snapshot's longs AND its stamp forward, so staleness stays measurable.
+  // Before 2026-11-27 a failed fetch fell back silently and forever — ANT showed one
+  // July-2027 expiry with Tuesday's quotes on Friday, and eleven of seventeen names
+  // had starved or days-old long chains with nothing saying so. blindspot.ts pages on
+  // the stamp.
+  const freshLong = longResult.status === "fulfilled" && longResult.value != null && longResult.value.length > 0;
+  let longContracts = freshLong && longResult.status === "fulfilled" ? longResult.value ?? [] : [];
+  let longRefreshedAt: number | null = freshLong ? Date.now() : null;
+  let longError: string | null = longResult.status === "rejected" ? String(longResult.reason).slice(0, 200) : null;
+  if (!freshLong) {
+    const { data: previousRow } = await createAdminClient().from("options_monitor_snapshots").select("payload").eq("underlying", symbol).maybeSingle();
+    const previous = previousRow?.payload as CommandCenter | undefined;
+    const todayEt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    longContracts = (previous?.contracts ?? []).filter(contract => contract.dte > 7 && contract.expirationDate >= todayEt);
+    longRefreshedAt = previous?.longRefreshedAt ?? null;
+    longError = longError ?? previous?.longError ?? null;
   }
   // Cap per expiration session actually present (Fridays fetch Fri/Mon/Tue, dte 0/3/4).
   const shortDtes = [...new Set(shortContracts.map(contract => contract.dte))].sort((a, b) => a - b).slice(0, 3);
@@ -45,7 +64,13 @@ export async function refreshWatchSnapshot(symbol: WatchUnderlying, options?: { 
   // Trading-grade signal on strictly re-screened contracts.
   const strictContracts = market ? rankContracts(shortContracts, DEFAULT_RISK_SETTINGS) : [];
   const signal = market ? generateSignal(market, strictContracts, { deltaTarget:DEFAULT_RISK_SETTINGS.deltaTarget, minDte:0, trendDayEnabled:DEFAULT_RISK_SETTINGS.trendDayEntriesEnabled }) : null;
-  const snapshot: CommandCenter = { configured:true, asOf:Date.now(), market, spotPrice, contracts, signal, errors };
+  // Swarm-only trigger: only when the scan SUCCEEDED and found no contract at all in
+  // the next three sessions (a failed scan is an outage, not a missing expiry). The
+  // day-trade lanes read `signal` and never see this.
+  const noNearExpiry = shortResult.status === "fulfilled" && shortContracts.length === 0;
+  const direction = market && noNearExpiry ? generateDirectionSignal(market, { trendDayEnabled:DEFAULT_RISK_SETTINGS.trendDayEntriesEnabled }) : null;
+  const swarmSignal = direction && ["enter_call","enter_put"].includes(direction.action) ? direction : null;
+  const snapshot: CommandCenter = { configured:true, asOf:Date.now(), market, spotPrice, contracts, signal, errors, swarmSignal, longRefreshedAt, longError };
   const admin = createAdminClient();
   const { error } = await admin.from("options_monitor_snapshots").upsert({ underlying:symbol, payload:snapshot, updated_at:new Date(snapshot.asOf).toISOString() });
   if (error) errors.push(`Snapshot persistence: ${error.message}`);
