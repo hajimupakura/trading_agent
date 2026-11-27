@@ -24,8 +24,9 @@ const RULES = {
   maxContracts: 250,     // sanity cap on swarm size
   // USER EXTRA SWARM (user call 2026-11-25: "I want another swarm that will be less
   // than 20c ... it should meet all the conditions for a swarm"). A one-off slot the
-  // user arms on position_manager_control.convexity_extra = {day, maxPrice}: ONE swarm
-  // beyond the daily and concurrent caps on that ET day. Every entry condition still
+  // user arms on position_manager_control.convexity_extra = {day, maxPrice, count?}:
+  // `count` swarms (default ONE) beyond the daily and concurrent caps on that ET day,
+  // each on a different name. Every entry condition still
   // applies (fresh engine fire, 30-min leg, Friday expiry, live two-sided book); the
   // contract must cost at most maxPrice and sit inside the depth band the swarm and
   // lottery studies actually measured, and never on a name that already has a swarm
@@ -111,9 +112,12 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
   const concurrent = new Set((recentRows ?? []).map(row => String(row.contract_ticker)).filter(ticker => openSymbols.has(ticker)));
   const overDaily = (todayRows?.length ?? 0) >= maxToday;
   const overConcurrent = concurrent.size >= RULES.maxConcurrent;
-  const extraOrder = (control as { convexity_extra?: { day?: string; maxPrice?: number } | null } | null)?.convexity_extra ?? null;
-  const extraSpent = (todayRows ?? []).some(row => (row.risk_snapshot as { userExtra?: boolean } | null)?.userExtra === true);
-  const extraMaxPrice = extraOrder?.day === et.dateKey && !extraSpent && Number(extraOrder?.maxPrice) > 0 ? Number(extraOrder.maxPrice) : null;
+  // `count` = how many extra swarms the user armed for the day (default 1, hard cap 5;
+  // user call 2026-11-27: "we need 2 swarms so we keep testing").
+  const extraOrder = (control as { convexity_extra?: { day?: string; maxPrice?: number; count?: number } | null } | null)?.convexity_extra ?? null;
+  const extraSlots = Math.min(5, Math.max(1, Math.floor(Number(extraOrder?.count ?? 1)) || 1));
+  const extrasUsed = (todayRows ?? []).filter(row => (row.risk_snapshot as { userExtra?: boolean } | null)?.userExtra === true).length;
+  const extraMaxPrice = extraOrder?.day === et.dateKey && extrasUsed < extraSlots && Number(extraOrder?.maxPrice) > 0 ? Number(extraOrder.maxPrice) : null;
   const usingExtra = (overDaily || overConcurrent) && extraMaxPrice != null;
   if (overDaily && !usingExtra) return { entered: null, skipped: `convexity budget: ${todayRows?.length} swarm(s) already opened today${armedDay ? " (armed-day cap 2)" : ""}` };
   if (overConcurrent && !usingExtra) return { entered: null, skipped: `convexity budget: ${concurrent.size} swarms already open` };
@@ -152,14 +156,31 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
   const quantity = Math.min(RULES.maxContracts, Math.floor(RULES.maxPremium / (limit * 100)));
   if (quantity < 1) return { entered: null, skipped: `pick ${contract.ticker} costs $${(limit * 100).toFixed(0)} — over the $${RULES.maxPremium} budget` };
   const order = await submitPaperOptionOrder({ symbol: contract.ticker, limitPrice: limit, clientOrderId: convClientId(signal.id), quantity });
-  const { error: journalError } = await admin.from("paper_trade_orders").insert({
-    user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
+  // paper_trade_orders allows ONE buy_to_open per signal_id (unique index). Since explore
+  // mode (2026-11-25) the equity sleeve usually takes the same signal a second earlier,
+  // so this insert collided, the failure was only console-logged, and the worker adopted
+  // the swarm as an "unmanaged position" in RIDE mode — wrong exits, and invisible to the
+  // daily/concurrent swarm caps, which count journal rows (SNDK 78C extra swarm, 11/25).
+  // On that collision the row is journaled without the signal link (the source signal is
+  // kept in risk_snapshot); any journal failure that remains pages, never hides.
+  const journalRow = {
+    user_id: owner.id, signal_id: signal.id as string | null, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity, order_type: "limit", limit_price: limit, max_debit: limit * quantity * 100, status: order.status,
-    risk_snapshot: { autonomous: true, strategy: "convexity-swarm", legPct: Number(legPct.toFixed(2)), spot, otmPct: Number((Math.abs(contract.strike / spot - 1) * 100).toFixed(1)), expiration, dte, ...(usingExtra ? { userExtra: true, maxPrice: extraMaxPrice } : {}) },
+    risk_snapshot: { autonomous: true, strategy: "convexity-swarm", sourceSignalId: signal.id, legPct: Number(legPct.toFixed(2)), spot, otmPct: Number((Math.abs(contract.strike / spot - 1) * 100).toFixed(1)), expiration, dte, ...(usingExtra ? { userExtra: true, maxPrice: extraMaxPrice } : {}) },
     broker_response: order,
-  });
-  if (journalError) console.error("convexity journal failed", journalError.message);
+  };
+  let { error: journalError } = await admin.from("paper_trade_orders").insert(journalRow);
+  if (journalError?.code === "23505") ({ error: journalError } = await admin.from("paper_trade_orders").insert({ ...journalRow, signal_id: null }));
+  if (journalError) {
+    console.error("convexity journal failed", journalError.message);
+    await createAlert({
+      userId: owner.id, eventKey: `convexity-journal-failed-${order.id}`, severity: "critical",
+      title: `Swarm bought but NOT recorded: ${contract.ticker.replace("O:", "")}`,
+      body: `The convexity sleeve bought ${quantity} × ${contract.ticker.replace("O:", "")} but could not write it to the trade journal (${journalError.message}). Until that is fixed the worker will treat it as an unmanaged position (wrong exit rules) and the swarm caps will not count it. Check the position's exit mode on the dashboard.`,
+      metadata: { kind: "convexity_journal_failed", orderId: order.id, contractTicker: contract.ticker, error: journalError.message },
+    }).catch(error => console.error("convexity journal alert failed", error));
+  }
   await createAlert({
     userId: owner.id, signalId: signal.id, eventKey: `convexity-entry-${order.id}`, severity: "success",
     title: `${usingExtra ? "EXTRA SWARM (your request)" : "CONVEXITY SWARM"}: ${quantity} × ${underlying} ${contract.strike} ${side} (${expiration})`,
