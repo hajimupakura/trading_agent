@@ -48,6 +48,11 @@ export class MarketCalendar {
     for (let cursor = addDays(openKey, 1); cursor <= nowKey; cursor = addDays(cursor, 1)) if (this.isTradingDay(cursor)) count++;
     return count;
   }
+  // The first trading session strictly after dateKey (searches up to three weeks).
+  nextSession(dateKey: string): string | null {
+    for (let cursor = addDays(dateKey, 1), step = 0; step < 21; cursor = addDays(cursor, 1), step++) if (this.isTradingDay(cursor)) return cursor;
+    return null;
+  }
   // A rule written for a regular 16:00 close ("15:10", "15:45") keeps its distance
   // from the close on a short day: min(minute, close - minutesBeforeClose).
   beforeClose(dateKey: string, regularMinute: number): number {
@@ -56,3 +61,20 @@ export class MarketCalendar {
   }
 }
 
+// BUY GATE for hand-placed and queued orders (2026-11-27). Returns why a buy must not
+// go in right now, or null. Every lane's worker sells a same-day contract at the forced
+// exit (15:10, or 50 minutes before an early close), so a same-day buy after that minute
+// is bought and sold at once — and on a half day it also runs into the broker's own
+// cutoff (11/27 12:42: "expires soon, unable to open new positions").
+export function buyBlockReason(calendar: MarketCalendar, now: Date, expirationDate?: string | null): string | null {
+  const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(now);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now).map(part => [part.type, part.value]));
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  const session = calendar.session(dateKey);
+  if (!session) return "The market is closed today (weekend or market holiday).";
+  if (minutes < session.openMin || minutes >= session.closeMin) return `The market is closed right now (today's session is ${clock(session.openMin)}-${clock(session.closeMin)} ET).`;
+  const forcedExit = calendar.beforeClose(dateKey, 910);
+  if (expirationDate === dateKey && minutes >= forcedExit) return `This contract expires today and it is past ${clock(forcedExit)} ET, when same-day positions are force-sold${session.closeMin < 960 ? " on this half day" : ""} — a buy now would be sold immediately.`;
+  return null;
+}
+const clock = (minutes: number) => { const hour = Math.floor(minutes / 60); return `${hour > 12 ? hour - 12 : hour}:${String(minutes % 60).padStart(2, "0")}${hour >= 12 ? " pm" : " am"}`; };

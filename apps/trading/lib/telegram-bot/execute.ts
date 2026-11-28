@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { getRobinhoodAccounts, resolveOptionInstrument, reviewAndPlaceOptionOrder } from "@/lib/brokers/robinhood-trading";
 import type { CommandCenter, Contract } from "@/lib/options/types";
+import { buyBlockReason } from "@/lib/market/calendar";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 
 // Execution layer for the Telegram bot. Buys and sells both run through the SAME
 // broker wrappers the autonomous lanes use, with the human's tap standing in for the
@@ -57,6 +59,10 @@ export async function executeBuyTicket(ticketId: string): Promise<string> {
   const ageMs = Date.now() - Date.parse(String(claimed.created_at));
   if (claimed.source === "engine" && ageMs > 15 * 60_000) return finish("expired", { reason: "stale" }, `⌛ That ${payload.underlying} card is ${Math.round(ageMs / 60_000)} min old — the quote has moved on. Reply "buy ${payload.quantity} ${Math.round(payload.strike)}${payload.side === "put" ? "p" : "c"}" for a fresh ticket.`);
   if (await killSwitchOn()) return finish("failed", { reason: "kill switch" }, "🛑 Kill switch is ON — no buys until it is cleared in the dashboard.");
+  // Market calendar (2026-11-27): no real-money buy when the market is shut, and no
+  // same-day contract after the forced-exit minute (12:10 on a half day).
+  const calendarBlock = buyBlockReason(await getMarketCalendar(), new Date(), payload.expirationDate);
+  if (calendarBlock) return finish("expired", { reason: "market calendar" }, `🕐 ${calendarBlock}`);
   // Goal guard — advisory by default: blocks only when the user armed "goal protect"
   // for the day; otherwise a banked goal just annotates the trade confirmation.
   const goalModule = await import("@/lib/ops/goal-guard");

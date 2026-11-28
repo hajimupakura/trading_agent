@@ -1,4 +1,5 @@
 import "server-only";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
@@ -90,7 +91,12 @@ async function runGates(snapshot: CommandCenter, signal: NonNullable<CommandCent
   const earningsBlock = await activeEarningsGuard(contract.underlying);
   if (earningsBlock) return { entered: null, skipped: earningsBlock };
   const minutes = etMinutes();
-  if (minutes < settings.entryStartMinutes || minutes > settings.entryEndMinutes) return { entered: null, skipped: "outside entry window" };
+  // Market calendar (2026-11-27): no entries on holidays; on a half day the window
+  // keeps its regular distance from the close (14:45 -> 11:45).
+  const calendar = await getMarketCalendar();
+  const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  if (!calendar.isTradingDay(todayKey)) return { entered: null, skipped: "market closed today" };
+  if (minutes < settings.entryStartMinutes || minutes > calendar.beforeClose(todayKey, settings.entryEndMinutes)) return { entered: null, skipped: "outside entry window" };
   const singleNameDteOk = !["SPY", "SPX"].includes(contract.underlying) && contract.dte <= 14; // 14: some Mondays only a ~11-DTE series exists (SPCX/SNDK 8/17)
   if (!settings.allowedDte.includes(contract.dte as 0 | 1 | 2) && !singleNameDteOk) return { entered: null, skipped: `dte ${contract.dte} not allowed` };
   // Concurrency: max 3 open positions, in CORRELATION GROUPS — SPY and SPX are the

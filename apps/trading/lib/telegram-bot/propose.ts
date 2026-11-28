@@ -4,6 +4,8 @@ import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { telegramConfigured } from "@/lib/notify/telegram";
 import { sendWithButtons, type InlineButton } from "./api";
 import type { CommandCenter, Contract, Signal } from "@/lib/options/types";
+import { buyBlockReason } from "@/lib/market/calendar";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 
 // SIGNAL FEED → Telegram buy proposals (user call, 2026-11-21): every engine fire on
 // EVERY watch name becomes a one-tap Robinhood ticket — on 11/20 the feed printed 21
@@ -20,6 +22,12 @@ export async function proposeTelegramTrade(signal: Signal, snapshot: CommandCent
   const contract = signal.contract;
   if (!contract || !["enter_call", "enter_put"].includes(signal.action)) return;
   if (Date.now() - signal.generatedAt > 120_000) return; // stale scans never propose
+  // Market calendar (2026-11-27): no card for a buy that could not go in — market shut,
+  // or a same-day contract within 15 minutes of its forced exit (the card lives 15).
+  {
+    const calendar = await getMarketCalendar();
+    if (buyBlockReason(calendar, new Date(), contract.expirationDate) || buyBlockReason(calendar, new Date(Date.now() + 15 * 60_000), contract.expirationDate)) return;
+  }
   const underlying = contract.underlying;
   const admin = createAdminClient();
   const { data: owner } = await admin.from("profiles").select("id").limit(1).maybeSingle();

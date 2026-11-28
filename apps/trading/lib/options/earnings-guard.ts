@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { WATCH_UNDERLYINGS } from "./types";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 
 // Earnings guard for single-name entries (real money AND paper):
 //   - No entries at all on a symbol's report DAY (elevated IV bleeds into the event
@@ -32,8 +33,11 @@ export async function activeEarningsGuard(symbol: string, options?: { swingEntry
   const todayReport = rows.find(row => row.symbol === symbol && row.report_date === today);
   if (todayReport) return `${symbol} reports earnings today (${todayReport.timing.toUpperCase()}) — single-name entries are blocked on report days`;
   if (options?.swingEntry) {
-    // Overnight holds must not sit through tomorrow's report (BMO) or today's AMC print.
-    const soon = rows.find(row => row.symbol === symbol && row.report_date <= etDate(1));
+    // Overnight holds must not sit through the NEXT SESSION's report (BMO) or today's
+    // AMC print. "Next session", not "tomorrow" (2026-11-27): a Friday swing used to
+    // check Saturday and walk straight into a Monday-morning report.
+    const nextSession = (await getMarketCalendar()).nextSession(today) ?? etDate(1);
+    const soon = rows.find(row => row.symbol === symbol && row.report_date <= nextSession);
     if (soon) return `${symbol} reports earnings ${soon.report_date} — no overnight holds into a report`;
   }
   return null;

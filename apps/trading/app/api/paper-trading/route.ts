@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { buyBlockReason } from "@/lib/market/calendar";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 import { getAuthenticatedUser } from "@/lib/supabase/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPaperTradingState, submitPaperOptionOrder } from "@/lib/alpaca/paper";
@@ -104,12 +106,10 @@ async function manualOrder(userId:string, input:{ underlying:string; contractTic
     if (!contract || !payload?.asOf || Date.now() - payload.asOf > 10 * 60_000) {
       return Response.json({ error:"Contract not found in a fresh scan — refresh and try again." }, { status:409 });
     }
-    const clock = new Intl.DateTimeFormat("en-US",{ timeZone:"America/New_York", hour:"2-digit", minute:"2-digit", weekday:"short", hourCycle:"h23" }).formatToParts(new Date());
-    const value = Object.fromEntries(clock.map(part => [part.type, part.value]));
-    const minutes = Number(value.hour) * 60 + Number(value.minute);
-    if (["Sat","Sun"].includes(String(value.weekday)) || minutes < 570 || minutes >= 960) {
-      return Response.json({ error:"Manual orders are limited to regular market hours (09:30-16:00 ET)." }, { status:422 });
-    }
+    // Real sessions (2026-11-27): holidays, early closes, and same-day contracts past
+    // their forced-exit minute are refused here, before any broker call.
+    const calendarBlock = buyBlockReason(await getMarketCalendar(), new Date(), contract.expirationDate);
+    if (calendarBlock) return Response.json({ error:calendarBlock }, { status:422 });
     if (settings.economicGuardEnabled) {
       const guard = activeEconomicGuard();
       if (guard) return Response.json({ error:`Economic event guard: ${guard.name} (${guard.releaseLabel}) — entries resume ${guard.resumesAt}. Disable the guard in Settings to override.` }, { status:422 });

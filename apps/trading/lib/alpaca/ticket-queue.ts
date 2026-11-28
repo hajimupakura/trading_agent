@@ -1,4 +1,5 @@
 import "server-only";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { submitPaperOptionOrder, submitPaperOptionSell } from "./paper";
@@ -29,7 +30,11 @@ async function quoteFromSnapshots(admin: ReturnType<typeof createAdminClient>, c
 
 export async function runPaperTicketQueue(): Promise<{ placed: number; skipped: number }> {
   const { weekday, minutes } = etNow();
-  if (["Sat", "Sun"].includes(weekday) || minutes < 571 || minutes > 955) return { placed: 0, skipped: 0 };
+  // Real sessions (2026-11-27): nothing queued goes in on a holiday or after an early
+  // close (the window keeps its regular 5-minute distance from the close).
+  const calendar = await getMarketCalendar();
+  const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  if (["Sat", "Sun"].includes(weekday) || !calendar.isTradingDay(todayKey) || minutes < 571 || minutes > calendar.beforeClose(todayKey, 955)) return { placed: 0, skipped: 0 };
   const admin = createAdminClient();
   const { data: control } = await admin.from("position_manager_control").select("kill_switch").eq("id", true).single();
   if (control?.kill_switch) return { placed: 0, skipped: 0 };
