@@ -9,6 +9,7 @@ async function request<T>(base:string,path:string,init:RequestInit = {}):Promise
   if (!response.ok) throw new Error(body?.message ?? `Alpaca ${response.status}`);
   return body as T;
 }
+export async function getMarketCalendar(start:string,end:string) { return request<Array<{ date:string; open:string; close:string }>>(PAPER,`/v2/calendar?start=${start}&end=${end}`); }
 export async function getPositions() { return request<AlpacaPosition[]>(PAPER,"/v2/positions"); }
 export async function getTodayOrders() { return request<AlpacaOrder[]>(PAPER,"/v2/orders?status=all&limit=500&direction=desc&nested=false"); }
 export async function getSpyPrice() {

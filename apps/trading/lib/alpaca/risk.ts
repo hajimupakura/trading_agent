@@ -1,3 +1,4 @@
+import { MarketCalendar } from "@/lib/market/calendar";
 import type { Contract, Signal } from "@/lib/options/types";
 import type { AlpacaAccount, AlpacaOrder, AlpacaPosition } from "./paper";
 import type { RiskSettings } from "@/lib/settings/config";
@@ -46,10 +47,10 @@ export function computePositionSize(input:{ask:number;equity:number;optionsBuyin
 function easternMinutes(now: Date) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", hour:"2-digit", minute:"2-digit", hourCycle:"h23", weekday:"short" }).formatToParts(now);
   const value = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return { minutes:Number(value.hour) * 60 + Number(value.minute), weekday:value.weekday };
+  return { minutes:Number(value.hour) * 60 + Number(value.minute), weekday:value.weekday, dateKey:new Intl.DateTimeFormat("en-CA", { timeZone:"America/New_York" }).format(now) };
 }
 
-export function validatePaperEntry(input: { signal:Signal; contract:Contract; account:AlpacaAccount; positions:AlpacaPosition[]; orders:AlpacaOrder[]; tradesToday:number; settings?:RiskSettings; quantity?:number; now?:Date }) {
+export function validatePaperEntry(input: { signal:Signal; contract:Contract; account:AlpacaAccount; positions:AlpacaPosition[]; orders:AlpacaOrder[]; tradesToday:number; settings?:RiskSettings; quantity?:number; now?:Date; calendar?:MarketCalendar }) {
   const errors:string[] = [];
   const { signal, contract, account, positions, orders, tradesToday } = input;
   const settings=input.settings??DEFAULT_RISK_SETTINGS;
@@ -72,9 +73,16 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if (tradesToday >= settings.maxTradesPerDay) errors.push(`Maximum ${settings.maxTradesPerDay} entries per day reached`);
   if (positions.length >= settings.maxOpenPositions) errors.push(`Maximum ${settings.maxOpenPositions} open option positions reached`);
   if (orders.some(order => ["new","accepted","pending_new","partially_filled"].includes(order.status))) errors.push("An Alpaca order is already open");
-  const inDayWindow = clock.minutes >= settings.entryStartMinutes && clock.minutes <= settings.entryEndMinutes;
-  const inSwingWindow = settings.swingTradingEnabled && clock.minutes >= settings.swingEntryStartMinutes && clock.minutes <= settings.swingEntryEndMinutes;
-  if (["Sat","Sun"].includes(clock.weekday) || (!inDayWindow && !inSwingWindow)) errors.push("Current time is outside the configured ET entry window");
+  // Real sessions (2026-11-27): a market holiday has no window, and on a half day new
+  // entries stop 30 minutes before the EARLY close — at 12:42 on 11/27 the broker
+  // rejected a same-day contract 18 minutes before the 13:00 close.
+  const calendar = input.calendar ?? new MarketCalendar();
+  const session = calendar.session(clock.dateKey);
+  const dayWindowEnd = session ? Math.min(settings.entryEndMinutes, session.closeMin - 30) : -1;
+  const inDayWindow = session != null && clock.minutes >= settings.entryStartMinutes && clock.minutes <= dayWindowEnd;
+  const inSwingWindow = settings.swingTradingEnabled && session != null && session.closeMin === 960 && clock.minutes >= settings.swingEntryStartMinutes && clock.minutes <= settings.swingEntryEndMinutes;
+  if (!session) errors.push("The market is closed today (weekend or market holiday)");
+  else if (!inDayWindow && !inSwingWindow) errors.push(session.closeMin < 960 ? `Half day: new entries stop 30 minutes before the ${Math.floor(session.closeMin / 60) - 12}:${String(session.closeMin % 60).padStart(2, "0")} pm close` : "Current time is outside the configured ET entry window");
   if (inSwingWindow && !inDayWindow && contract.dte < 1) errors.push("0DTE contracts expire at today's close and cannot be held overnight; swing entries require 1-2 DTE");
   if (account.status !== "ACTIVE") errors.push(`Alpaca paper account is ${account.status}`);
   if (settings.economicGuardEnabled) {

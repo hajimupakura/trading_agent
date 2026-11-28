@@ -2,14 +2,17 @@ import { config } from "./config.js";
 import { EXIT_RULES, dteFromOcc, evaluateExit, easternClock } from "./exit-engine.js";
 import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { adviseExit } from "./advisor.js";
-import { cancelOrder, getLatestOptionQuote, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
+import { cancelOrder, getLatestOptionQuote, getMarketCalendar, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
 import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, repointExitJournal, saveMonitor, updateEntryJournal } from "./store.js";
 import { RobinhoodExitManager } from "./robinhood.js";
 import type { AlpacaOrder, OptionQuote } from "./types.js";
+import { currentCalendar, refreshMarketCalendar } from "./market-calendar.js";
 
 const activeOrder = (order:AlpacaOrder) => ["new","accepted","pending_new","partially_filled","accepted_for_bidding"].includes(order.status);
-const marketSession = (now:Date) => { const clock = easternClock(now); return !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= 570 && clock.minutes < 960; };
+// Real sessions (2026-11-27): a holiday is not "in session" (Thanksgiving used to page
+// stale-quote and offline alarms all day) and a half day ends at its early close.
+const marketSession = (now:Date) => { const clock = easternClock(now); return currentCalendar().inSession(clock.dateKey, clock.minutes); };
 const fresh = (quote:OptionQuote|null,now:number) => quote && now - quote.timestamp <= 15_000 ? quote : null;
 const clientOrderId = (symbol:string,reason:string,now:number) => `velocity-exit-${symbol}-${reason}-${now}`.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,48);
 
@@ -28,6 +31,7 @@ export class PositionManager {
     setTimeout(() => void this.loop(),config.POSITION_POLL_INTERVAL_MS);
   }
   private async cycle() {
+    await refreshMarketCalendar(getMarketCalendar);
     const [positions,orders,control] = await Promise.all([getPositions(),getTodayOrders(),getControl()]);
     const optionPositions = positions.filter(position => position.asset_class === "us_option" && Number(position.qty) > 0);
     const entryOrders = orders.filter(order => order.side === "buy" && activeOrder(order));
@@ -169,7 +173,7 @@ export class PositionManager {
     // the 15:10 flat applies — an unsold expiring option settles worthless, which is
     // strictly worse than any close price.
     const clock = easternClock(new Date(now));
-    const expiryFlat = dte != null && dte <= 0 && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= EXIT_RULES.mandatoryExitMinutes;
+    const expiryFlat = dte != null && dte <= 0 && currentCalendar().isTradingDay(clock.dateKey) && clock.minutes >= currentCalendar().beforeClose(clock.dateKey, EXIT_RULES.mandatoryExitMinutes);
     const reason = trendMode
       ? (quote.bid <= position.entryPrice * 0.5 ? "premium_stop" as const : expiryFlat ? "mandatory_time_exit" as const : null)
       : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2,ml:mlAdvice});

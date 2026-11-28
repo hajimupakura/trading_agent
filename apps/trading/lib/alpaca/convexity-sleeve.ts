@@ -4,6 +4,8 @@ import { createAlert } from "@/lib/alerts/server";
 import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { alpacaChainRows } from "@/lib/options/provider";
+import { MarketCalendar } from "@/lib/market/calendar";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 import type { CommandCenter, Signal, Underlying } from "@/lib/options/types";
 
 // CONVEXITY SLEEVE — the third paper sleeve (user-authorized 2026-11-24: "convexity
@@ -42,13 +44,19 @@ function etNow() {
 // Nearest Friday at least 3 calendar days out (the study's 3-7 DTE window: Mon->4,
 // Tue->3; Wed/Thu/Fri roll to next week's Friday so a day+2 hold never collides
 // with expiry morning).
-function pickExpiry(dateKey: string): { expiration: string; dte: number } {
+// When that Friday is a market holiday (Good Friday) the weekly lists on the
+// Thursday before, so the expiry is the last trading session of that week.
+export function pickExpiry(dateKey: string, calendar: MarketCalendar = new MarketCalendar()): { expiration: string; dte: number } {
   const base = new Date(`${dateKey}T12:00:00Z`);
   for (let ahead = 3; ahead <= 10; ahead++) {
     const candidate = new Date(base.getTime() + ahead * 86_400_000);
-    if (candidate.getUTCDay() === 5) return { expiration: candidate.toISOString().slice(0, 10), dte: ahead };
+    if (candidate.getUTCDay() !== 5) continue;
+    for (let back = 0; back <= 3; back++) {
+      const session = new Date(candidate.getTime() - back * 86_400_000).toISOString().slice(0, 10);
+      if (calendar.isTradingDay(session)) return { expiration: session, dte: ahead - back };
+    }
   }
-  throw new Error("no Friday found within 10 days"); // unreachable
+  throw new Error("no listed weekly expiry found within 10 days"); // unreachable
 }
 
 // The fire this sleeve acts on: the engine's own signal when it fired, otherwise the
@@ -145,7 +153,7 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
   // contract (the kicker's lesson); a live two-sided book is the screen here.
   const spot = snapshot?.spotPrice ?? signal.market.price;
   if (!spot || spot <= 0) return { entered: null, skipped: "no spot price" };
-  const { expiration, dte } = pickExpiry(et.dateKey);
+  const { expiration, dte } = pickExpiry(et.dateKey, await getMarketCalendar());
   const chain = await alpacaChainRows(underlying as Underlying, expiration, dte);
   const side = signal.action === "enter_call" ? "call" : "put";
   const tradeable = chain.filter(row => row.side === side && row.bid > 0 && row.ask > 0

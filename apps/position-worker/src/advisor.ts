@@ -1,6 +1,7 @@
 import model from "./models/exit-advisor-v1.json" with { type: "json" };
 import { predictProba, type HistGbtModel } from "./histgbt.js";
 import { easternClock } from "./exit-engine.js";
+import { currentCalendar } from "./market-calendar.js";
 import { stampAdvisorRow } from "./store.js";
 import type { ManagedPosition } from "./types.js";
 
@@ -26,7 +27,7 @@ export function adviseExit(position: ManagedPosition, bid: number, now: number):
     if (position.exitMode !== "burst") return null; // model trained on the burst fire family
     if (bid <= 0 || position.entryPrice <= 0) return null;
     const clock = easternClock(new Date(now));
-    if (clock.minutes < 570 || clock.minutes > 960) return null;
+    if (!currentCalendar().inSession(clock.dateKey, clock.minutes)) return null;
     const opened = easternClock(new Date(position.openedAt));
     if (opened.dateKey !== clock.dateKey) return null; // same-day positions only
     const entry = position.entryPrice;

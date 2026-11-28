@@ -99,3 +99,17 @@ describe("already-invalid-at-entry gate", () => {
     expect(invalidAtEntry({ action: "enter_call", market, price: 0 })).toBe(false);
   });
 });
+
+describe("entry window on holidays and half days (built-in NYSE calendar)", () => {
+  const settings = { ...DEFAULT_RISK_SETTINGS, economicGuardEnabled: false };
+  const check = (iso: string) => validatePaperEntry({ signal, contract, account, positions:[], orders:[], tradesToday:0, settings, now:new Date(iso) });
+  it("allows entries on the half day before 12:30", () => expect(check("2026-11-27T17:15:00Z").allowed).toBe(true)); // 12:15 ET
+  it("stops entries 30 minutes before the 1:00 pm early close", () => {
+    const result = check("2026-11-27T17:42:00Z"); // 12:42 ET — the minute the broker rejected SPCX 11/27
+    expect(result.allowed).toBe(false); expect(result.errors.join(" ")).toContain("Half day");
+  });
+  it("allows no entries on Thanksgiving", () => {
+    const result = check("2026-11-26T15:00:00Z");
+    expect(result.allowed).toBe(false); expect(result.errors.join(" ")).toContain("market holiday");
+  });
+});

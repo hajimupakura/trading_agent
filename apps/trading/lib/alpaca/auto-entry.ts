@@ -4,6 +4,7 @@ import { createAlert } from "@/lib/alerts/server";
 import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { PAPER_RULES, computePositionSize, entryCooldownActive, invalidAtEntry, validatePaperEntry } from "./risk";
 import { STOCK_FEED } from "./data-plan";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { recordShadowSkip } from "@/lib/options/shadow-ledger";
@@ -262,7 +263,8 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // "An order is already open" is account-wide; in explore mode several names can fire in
   // the same minute, so only a pending order on THIS name blocks.
   const gateOrders = exploreAll ? trading.orders.filter(order => order.symbol.startsWith(underlying) && /\d/.test(order.symbol.charAt(underlying.length))) : trading.orders;
-  let risk = validatePaperEntry({ signal, contract, ...trading, orders: gateOrders, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
+  const calendar = await getMarketCalendar();
+  let risk = validatePaperEntry({ signal, contract, calendar, ...trading, orders: gateOrders, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
   if (!risk.allowed && exploreAll) {
     // Count budgets inside the risk gate (entries/day, concurrent positions, daily-loss
     // stop) tag instead of veto; every other risk error still blocks.
@@ -270,7 +272,7 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     const budgetErrors = risk.errors.filter(isBudgetError);
     if (budgetErrors.length) {
       budgetReason ??= budgetErrors[0]!;
-      risk = validatePaperEntry({ signal, contract, ...trading, orders: gateOrders, positions: [], tradesToday: 0, settings: { ...sleeveSettings, maxTradesPerDay: 10_000, maxOpenPositions: 10_000, maxDailyLoss: Number.MAX_SAFE_INTEGER }, quantity });
+      risk = validatePaperEntry({ signal, contract, calendar, ...trading, orders: gateOrders, positions: [], tradesToday: 0, settings: { ...sleeveSettings, maxTradesPerDay: 10_000, maxOpenPositions: 10_000, maxDailyLoss: Number.MAX_SAFE_INTEGER }, quantity });
     }
   }
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };

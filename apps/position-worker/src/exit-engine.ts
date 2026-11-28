@@ -1,3 +1,4 @@
+import { currentCalendar, type MarketCalendar } from "./market-calendar.js";
 import type { ManagedPosition } from "./types.js";
 
 // trailActivationPct 0.40→0.35 (2026-08-13, grid on 42 tapes: arm 35/trail 20 best,
@@ -25,8 +26,13 @@ export function easternClock(now:Date) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", weekday:"short", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(now).map(part => [part.type, part.value]));
   return { weekday:parts.weekday, dateKey:`${parts.year}-${parts.month}-${parts.day}`, minutes:Number(parts.hour) * 60 + Number(parts.minute) };
 }
-export function evaluateExit(input:{ position:ManagedPosition; bid:number; underlyingPrice:number|null; longDated?:boolean; now?:Date; ml?:{ prob:number; threshold:number }|null }):ExitReason|null {
+export function evaluateExit(input:{ position:ManagedPosition; bid:number; underlyingPrice:number|null; longDated?:boolean; now?:Date; ml?:{ prob:number; threshold:number }|null; calendar?:MarketCalendar }):ExitReason|null {
   const now = input.now ?? new Date(); const { position, bid, underlyingPrice } = input; const clock = easternClock(now);
+  // Real sessions (2026-11-27): holidays are not trading days, and on a half day every
+  // "N minutes before the close" rule keeps its distance from the EARLY close.
+  const calendar = input.calendar ?? currentCalendar();
+  const tradingToday = calendar.isTradingDay(clock.dateKey);
+  const flatMinutes = calendar.beforeClose(clock.dateKey, EXIT_RULES.mandatoryExitMinutes);
   const openedClock = easternClock(new Date(position.openedAt));
   const heldOvernight = openedClock.dateKey < clock.dateKey;
   // DOLLAR PROFIT LOCK (2026-08-19, user: "10% of a $90 option is $900. even a $300
@@ -64,17 +70,18 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     // Fri 11/27, the Thanksgiving HALF DAY that closes at 13:00 — a 14:00 guard and a
     // 15:45 day+2 flat would BOTH land after the close and the swarm would expire
     // unsold. 12:30 is inside every session the market has, half days included.
-    if (["Sat","Sun"].includes(clock.weekday)) return null;
+    if (!tradingToday) return null;
     const convexityDte = dteFromOcc(position.alpacaSymbol, now) ?? 0;
-    if (convexityDte <= 0 && clock.minutes >= 750) return "mandatory_time_exit";
-    if (tradingDaysHeld(openedClock.dateKey, clock.dateKey) >= 2 && clock.minutes >= 945) return "mandatory_time_exit";
+    if (convexityDte <= 0 && clock.minutes >= calendar.beforeClose(clock.dateKey, 750)) return "mandatory_time_exit";
+    // Day+2 counts real sessions; on a half day the 15:45 sale moves to 12:45.
+    if (calendar.tradingDaysBetween(openedClock.dateKey, clock.dateKey) >= 2 && clock.minutes >= calendar.beforeClose(clock.dateKey, 945)) return "mandatory_time_exit";
     return null;
   }
   if (position.exitMode === "scalp") {
     // The 15:10 flat and overnight guards still apply (a worker outage must never
     // leave a 0DTE position unguarded into the close).
-    if (heldOvernight && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= 570) return "mandatory_time_exit";
-    if (clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
+    if (heldOvernight && tradingToday && clock.minutes >= 570) return "mandatory_time_exit";
+    if (clock.minutes >= flatMinutes) return "mandatory_time_exit";
     if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
     const scalpGain = position.peakBid / position.entryPrice - 1;
     const scalpTrail = scalpGain >= EXIT_RULES.stretchActivationPct ? EXIT_RULES.stretchTrailPct : scalpGain >= EXIT_RULES.trailActivationPct ? EXIT_RULES.trailPct : null;
@@ -90,8 +97,8 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     // The 15%-after-2x tightening is deliberately absent here (it halved the edge:
     // +14% vs +26%). Profile: 7/21 win, median -30%, monsters carry it — convexity.
     // Until 10:15 only the disaster stop and gap-fill invalidation live.
-    if (heldOvernight && !["Sat","Sun"].includes(clock.weekday) && clock.minutes >= 570) return "mandatory_time_exit";
-    if (clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
+    if (heldOvernight && tradingToday && clock.minutes >= 570) return "mandatory_time_exit";
+    if (clock.minutes >= flatMinutes) return "mandatory_time_exit";
     if (bid <= position.entryPrice * (1 - EXIT_RULES.stopLossPct)) return "premium_stop";
     if (underlyingPrice != null && (position.side === "call" ? underlyingPrice <= position.market.openingRangeHigh : underlyingPrice >= position.market.openingRangeLow)) return "underlying_invalidation";
     if (clock.minutes >= 615) {
@@ -109,8 +116,8 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     // flat; overnight gets the morning grace (losers flat 9:45, winners ride on the new
     // day's peaks); hard flat 15:10 on EXPIRY day only. Big-premium overlay still applies.
     const thesisDte = dteFromOcc(position.alpacaSymbol, now) ?? 0;
-    const thesisWeekday = !["Sat","Sun"].includes(clock.weekday);
-    if (thesisWeekday && thesisDte <= 0 && clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
+    const thesisWeekday = tradingToday;
+    if (thesisWeekday && thesisDte <= 0 && clock.minutes >= flatMinutes) return "mandatory_time_exit";
     if (thesisWeekday && heldOvernight && clock.minutes >= 585 && bid <= position.entryPrice) return "mandatory_time_exit";
     const thesisBig = position.entryPrice >= 20;
     if (bid <= position.entryPrice * (1 - (thesisBig ? 0.12 : EXIT_RULES.stopLossPct))) return "premium_stop";
@@ -121,20 +128,20 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   }
   // A swing position is one deliberately opened in the late-day window; it is exempt from the
   // same-day 15:10 flat, held overnight, and force-sold by 10:30 the next morning instead of 09:30.
-  const isSwing = openedClock.minutes >= EXIT_RULES.swingOpenThresholdMinutes;
+  const isSwing = openedClock.minutes >= calendar.beforeClose(openedClock.dateKey, EXIT_RULES.swingOpenThresholdMinutes);
   // Long-dated positions (>2 DTE, typically manual buys) are position trades, not scalps:
   // only the stop, the trailing stops, and (when context exists) invalidation apply.
   // The 15:10 flat still fires once the contract itself is inside the 2-DTE window.
   const longDated = input.longDated === true;
-  const weekday = !["Sat","Sun"].includes(clock.weekday);
+  const weekday = tradingToday;
   // Morning grace for overnight positions (user 2026-08-14: "don't sell first thing —
   // wait until ~9:45 and see how the market goes"): 9:30-9:44 only the stop lives; at
   // 9:45 losers go flat while winners keep riding under the normal trail on the NEW
   // day's peaks (the workers reset peak_bid at the first sighting of each session so
   // yesterday's high can't trip the trail at the bell). Everything held overnight
   // still goes flat by 15:10.
-  if (!longDated && weekday && heldOvernight && (clock.minutes >= EXIT_RULES.mandatoryExitMinutes || (!isSwing && clock.minutes >= 585 && bid <= position.entryPrice))) return "mandatory_time_exit";
-  if (!longDated && weekday && !heldOvernight && !isSwing && clock.minutes >= EXIT_RULES.mandatoryExitMinutes) return "mandatory_time_exit";
+  if (!longDated && weekday && heldOvernight && (clock.minutes >= flatMinutes || (!isSwing && clock.minutes >= 585 && bid <= position.entryPrice))) return "mandatory_time_exit";
+  if (!longDated && weekday && !heldOvernight && !isSwing && clock.minutes >= flatMinutes) return "mandatory_time_exit";
   // BIG-PREMIUM PROFILE (entry >= $20/contract): the percentage rules were calibrated
   // on cheap short-dated tapes where ±33% is a wiggle. On a $9k contract, "arm at
   // +33%" means +$3,000 unprotected — a SNDK call's +$1,250 peak round-tripped to
@@ -188,19 +195,11 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
   return null;
 }
 
-// Weekdays strictly after openKey up to and including nowKey (ET date keys,
-// YYYY-MM-DD). Entry Friday -> Tuesday = 2; weekends never count as held days.
-export function tradingDaysHeld(openKey:string, nowKey:string):number {
-  if (nowKey <= openKey) return 0;
-  let count = 0;
-  const cursor = new Date(`${openKey}T12:00:00Z`);
-  const end = Date.parse(`${nowKey}T12:00:00Z`);
-  while (cursor.getTime() < end) {
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    const day = cursor.getUTCDay();
-    if (day !== 0 && day !== 6) count++;
-  }
-  return count;
+// Trading sessions strictly after openKey up to and including nowKey (ET date keys,
+// YYYY-MM-DD). Entry Friday -> Tuesday = 2; weekends and market holidays never count.
+export function tradingDaysHeld(openKey:string, nowKey:string, calendar:MarketCalendar = currentCalendar()):number {
+  // Real trading sessions since 2026-11-27 (holidays no longer count).
+  return calendar.tradingDaysBetween(openKey, nowKey);
 }
 
 // Days to expiry from an OCC symbol date (YYMMDD segment), in ET.

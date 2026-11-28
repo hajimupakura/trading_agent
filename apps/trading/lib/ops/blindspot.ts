@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts/server";
 import { WATCH_UNDERLYINGS } from "@/lib/options/types";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
 import type { CommandCenter } from "@/lib/options/types";
 
 // BLIND-SPOT DETECTORS. The week of 2026-08-11 lost real opportunities to bugs that
@@ -30,7 +31,12 @@ async function ownerId(admin: ReturnType<typeof createAdminClient>): Promise<str
 export async function runBlindspotChecks(): Promise<{ invariantViolations: string[]; missAudits: string[] }> {
   const clock = et();
   const out = { invariantViolations: [] as string[], missAudits: [] as string[] };
-  if (["Sat", "Sun"].includes(clock.weekday)) return out;
+  // Real sessions (2026-11-27): no invariant checks on market holidays, and on a half
+  // day the in-session windows end with the early close.
+  const calendar = await getMarketCalendar();
+  const session = calendar.session(etDate());
+  if (["Sat", "Sun"].includes(clock.weekday) || !session) return out;
+  const sessionEnd = Math.min(930, session.closeMin - 30);
   const admin = createAdminClient();
   const userId = await ownerId(admin);
   if (!userId) return out;
@@ -39,7 +45,7 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
   const snapshots = (rows ?? []).map(row => ({ underlying: String(row.underlying), payload: row.payload as CommandCenter | null, updatedAt: Date.parse(String(row.updated_at)) }));
 
   // ---- 1. In-session invariants (10:00-15:30 so the open's warmup doesn't false-alarm).
-  if (clock.minutes >= 600 && clock.minutes <= 930) {
+  if (clock.minutes >= 600 && clock.minutes <= sessionEnd) {
     for (const snap of snapshots) {
       const market = snap.payload?.market;
       if (!market) continue;
@@ -95,7 +101,7 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
   // a single July-2027 expiry with Tuesday's quotes on Friday, and eleven of seventeen
   // watch names had starved or days-old long chains while every panel still rendered.
   // One alert a day naming every affected symbol, not one page per symbol.
-  if (clock.minutes >= 630 && clock.minutes <= 930) {
+  if (clock.minutes >= 630 && clock.minutes <= sessionEnd) {
     const stale = snapshots.filter(snap => snap.payload?.market != null).flatMap(snap => {
       const refreshedAt = snap.payload?.longRefreshedAt ?? null;
       const ageMinutes = refreshedAt == null ? null : Math.round((Date.now() - refreshedAt) / 60_000);
@@ -120,7 +126,7 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
   // ---- 1b. Telegram ticket invariant (same window): a buy/sell the user CONFIRMED
   // that is still 'executing' minutes later means the webhook died mid-trade — the
   // user believes they own (or sold) something they may not. Page critical.
-  if (clock.minutes >= 600 && clock.minutes <= 930) {
+  if (clock.minutes >= 600 && clock.minutes <= sessionEnd) {
     const { data: stuck } = await admin.from("tg_tickets").select("id,kind,payload")
       .eq("status", "executing").lt("decided_at", new Date(Date.now() - 5 * 60_000).toISOString()).limit(3);
     for (const row of stuck ?? []) {
@@ -142,7 +148,7 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
   // myself") — so a manual_hold position still open at 14:30 on its own expiry day
   // gets one loud page. Fully manual must never silently become expired worthless
   // (cash-settled SPX) or auto-exercised into stock (equity contracts).
-  if (clock.minutes >= 870 && clock.minutes <= 930) {
+  if (clock.minutes >= 870 && clock.minutes <= sessionEnd) {
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
     const { data: expiring } = await admin.from("rh_position_monitors").select("occ_ticker,quantity,latest_bid,entry_price")
       .eq("status", "manual_hold").eq("expiration_date", today);
@@ -165,7 +171,7 @@ export async function runBlindspotChecks(): Promise<{ invariantViolations: strin
   // while positions are open means the ONLY process that can fire stops/trails is
   // dead — and until 2026-11-22 nothing paged (the worker could die at 10 AM and
   // the first sign was a P&L that stopped moving). 5 min clears Railway redeploys.
-  if (clock.minutes >= 600 && clock.minutes <= 930) {
+  if (clock.minutes >= 600 && clock.minutes <= sessionEnd) {
     const [{ data: openPositions }, { data: portfolioRow }] = await Promise.all([
       admin.from("rh_position_monitors").select("occ_ticker,status").in("status", ["monitoring", "closing", "manual_hold", "error"]).limit(10),
       admin.from("broker_portfolio_snapshots").select("updated_at").eq("broker", "robinhood").maybeSingle(),
