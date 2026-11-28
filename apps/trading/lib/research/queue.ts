@@ -336,8 +336,10 @@ async function runMlExport(params: Record<string, unknown> = {}, deadline: numbe
   }
   // ml-causal positions carry setup + spot and long two-session tapes: one line per
   // position with the path packed as min:price|min:price keeps a month under ~10 MB.
-  const packed = sourceKind === "ml-causal";
-  const lines: string[] = [packed ? "day,sym,dir,lvl,occ,fireMin,entryPrint,setup,spot,path" : "day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
+  const packed = sourceKind === "ml-causal" || sourceKind === "ml-swarm";
+  // ml-swarm rows also carry the 30-minute leg and the expiry (lvl = depth % OTM).
+  const swarm = sourceKind === "ml-swarm";
+  const lines: string[] = [packed ? `day,sym,dir,lvl,occ,fireMin,entryPrint,setup,spot,${swarm ? "leg,expiry," : ""}path` : "day,sym,dir,lvl,occ,fireMin,entryPrint,min,price"];
   let positions = 0;
   const pageSize = 50; let from = 0;
   for (;;) {
@@ -356,7 +358,7 @@ async function runMlExport(params: Record<string, unknown> = {}, deadline: numbe
     for (const row of data) {
       for (const position of (row.result as Array<{ day: string; sym: string; dir: number; lvl?: number; occ: string; fireMin: number; entryPrint: number; path: Array<[number, number]> }> ?? [])) {
         positions++;
-        if (packed) { const extra = position as unknown as { setup?: string; spot?: number }; lines.push(`${position.day},${position.sym},${position.dir},${position.lvl ?? 0},${position.occ},${position.fireMin},${position.entryPrint},${extra.setup ?? ""},${extra.spot ?? ""},${(position.path ?? []).map(([min, price]) => `${min}:${price}`).join("|")}`); continue; }
+        if (packed) { const extra = position as unknown as { setup?: string; spot?: number; leg?: number; expiry?: string }; lines.push(`${position.day},${position.sym},${position.dir},${position.lvl ?? 0},${position.occ},${position.fireMin},${position.entryPrint},${extra.setup ?? ""},${extra.spot ?? ""},${swarm ? `${extra.leg ?? ""},${extra.expiry ?? ""},` : ""}${(position.path ?? []).map(([min, price]) => `${min}:${price}`).join("|")}`); continue; }
         for (const [min, price] of position.path ?? []) lines.push(`${position.day},${position.sym},${position.dir},${position.lvl ?? 0},${position.occ},${position.fireMin},${position.entryPrint},${min},${price}`);
       }
     }
@@ -376,7 +378,7 @@ async function runMlExport(params: Record<string, unknown> = {}, deadline: numbe
 // tick into its 60s limit 19 times in 40 minutes, killing the blind-spot checks and
 // job-health heartbeat that run after this queue. Off-hours, or with
 // research_full_throttle on, they run normally.
-const HEAVY_KINDS = ["ml-export", "ml-causal"];
+const HEAVY_KINDS = ["ml-export", "ml-causal", "ml-swarm"];
 
 export async function runResearchQueue(tickStartedAt: number = Date.now()): Promise<{ ran: string | null; error?: string }> {
   // The tick owns 60s in total; research may only use what is left of the first 48s,
@@ -433,6 +435,7 @@ async function runOneResearchRequest(hardStop: number, lightOnly: boolean): Prom
     else if (request.kind === "ml-swing") result = await fetchSwingCorpusDay(params, deadline);
     else if (request.kind === "ml-lottery") result = await fetchSwingCorpusDay({ ...params, expiryMode: "nearest", levels: Array.isArray(params.levels) ? params.levels : [6, 10, 15] }, deadline);
     else if (request.kind === "ml-causal") result = await runCausalCorpus(params, deadline);
+    else if (request.kind === "ml-swarm") result = await (await import("./swarm-corpus")).runSwarmCorpus(params, deadline);
     else if (request.kind === "ml-export") result = await runMlExport(params, deadline);
     else throw new Error(`unknown research kind: ${request.kind}`);
     const encoded = JSON.stringify(result);

@@ -20,21 +20,21 @@ import type { Bar, Contract, Underlying } from "@/lib/options/types";
 
 const DATA_BASE = "https://data.alpaca.markets";
 type StoredBar = { t: string; o?: number; h?: number; l?: number; c: number; v: number; vw?: number };
-type Row = { min: number; ts: number; o: number; h: number; l: number; c: number; v: number; vw: number };
+export type Row = { min: number; ts: number; o: number; h: number; l: number; c: number; v: number; vw: number };
 export type CausalPosition = { day: string; sym: string; dir: number; lvl: number; occ: string; fireMin: number; entryPrint: number; setup: string; spot: number; path: Array<[number, number]> };
 
-const etDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
+export const etDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
 const etClock = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const minuteOf = (when: Date) => { const p = Object.fromEntries(etClock.formatToParts(when).map(part => [part.type, part.value])); return Number(p.hour) * 60 + Number(p.minute); };
+export const minuteOf = (when: Date) => { const p = Object.fromEntries(etClock.formatToParts(when).map(part => [part.type, part.value])); return Number(p.hour) * 60 + Number(p.minute); };
 
-const synthetic = (side: "call" | "put", sym: string) => ({
+export const synthetic = (side: "call" | "put", sym: string) => ({
   ticker: `REPLAY-${side}`, underlying: sym as Underlying, expirationDate: "", dte: 0, side, strike: 0, exerciseStyle: "american",
   bid: 1, ask: 1.02, midpoint: 1.01, spreadPct: 2, quoteUpdatedAt: null, volume: 1000, openInterest: 1000, volumeToOpenInterest: 1,
   impliedVolatility: null, delta: side === "call" ? 0.45 : -0.45, gamma: null, theta: null, underlyingPrice: null,
   liquidityScore: 1, eligible: true, rejectionReasons: [],
 }) as unknown as Contract;
 
-async function loadSessions(symbol: string, starts: string[]): Promise<Map<string, Row[]>> {
+export async function loadSessions(symbol: string, starts: string[]): Promise<Map<string, Row[]>> {
   const admin = createAdminClient();
   const sessions = new Map<string, Row[]>();
   for (const start of starts) {
@@ -96,8 +96,8 @@ function replayMonth(symbol: string, sessions: Map<string, Row[]>, monthPrefix: 
 // Strike grids differ by name and expiry (SPY lists $1 strikes at $750; MSFT weeklies
 // $2.50/$5), so try every plausible step and keep the traded strike NEAREST the spot —
 // the lane buys ~0.45 delta, i.e. the first strike out of the money, not $5-$10 away.
-const stepsFor = (spot: number) => spot >= 250 ? [1, 2.5, 5, 10] : spot >= 100 ? [1, 2.5, 5] : [0.5, 1, 2.5];
-const occFor = (sym: string, dir: number, strike: number, expiry: string) => `${sym}${expiry.slice(2).replaceAll("-", "")}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
+export const stepsFor = (spot: number) => spot >= 250 ? [1, 2.5, 5, 10] : spot >= 100 ? [1, 2.5, 5] : [0.5, 1, 2.5];
+export const occFor = (sym: string, dir: number, strike: number, expiry: string) => `${sym}${expiry.slice(2).replaceAll("-", "")}${dir > 0 ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
 function weekdaysFrom(day: string, count: number): string[] {
   const out: string[] = []; const base = Date.parse(`${day}T12:00:00Z`);
   for (let add = 0; out.length < count; add++) {
