@@ -430,6 +430,8 @@ async function runOneResearchRequest(hardStop: number, lightOnly: boolean): Prom
     if (request.kind === "option-bars") result = await fetchOptionBars(params, deadline);
     else if (request.kind === "stock-bars") result = await fetchStockBars(params, deadline);
     else if (request.kind === "news-history") result = await fetchNewsHistory(params, deadline);
+    else if (request.kind === "sec-filings") result = await (await import("./sec-edgar")).fetchSecFilings(params, deadline);
+    else if (request.kind === "sec-facts") result = await (await import("./sec-edgar")).fetchSecFacts(params, deadline);
     else if (request.kind === "pullback-scan") result = await runPullbackScan(params, deadline);
     else if (request.kind === "ml-corpus") result = await fetchMlCorpusDay(params, deadline);
     else if (request.kind === "ml-swing") result = await fetchSwingCorpusDay(params, deadline);
