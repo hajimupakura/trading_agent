@@ -64,3 +64,12 @@ describe("exits on Thanksgiving week", () => {
     expect(evaluateExit({ position: sameDay, bid: 1.15, underlyingPrice: null, now: et("2026-11-27", "12:10"), calendar: week })).toBe("mandatory_time_exit");
   });
 });
+
+describe("1-2 day test twin", () => {
+  // A Friday same-day signal's twin expires Monday (3 calendar days). The worker passes
+  // longDated:false for twins, so it is flattened at 15:10 exactly like the primary.
+  const twin: ManagedPosition = { ...base, ticker: "O:SPY261130C00726000", alpacaSymbol: "SPY261130C00726000", entryPrice: 1, peakBid: 1.2, openedAt: Date.parse("2026-11-20T15:00:00Z"), exitMode: "burst", sameDayRules: true };
+  const friday = new Date("2026-11-20T20:10:00Z"); // 15:10 ET on a regular Friday
+  it("is flattened at the same-day 15:10 exit when treated with same-day rules", () => expect(evaluateExit({ position: twin, bid: 1.15, underlyingPrice: null, now: friday, longDated: false })).toBe("mandatory_time_exit"));
+  it("would otherwise be held as a long-dated position", () => expect(evaluateExit({ position: twin, bid: 1.15, underlyingPrice: null, now: friday, longDated: true })).toBe(null));
+});

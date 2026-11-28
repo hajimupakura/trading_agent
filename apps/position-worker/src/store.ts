@@ -30,8 +30,13 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   const ticker = `O:${alpacaSymbol}`;
   const { data:entry, error } = await db.from("paper_trade_orders").select("user_id,signal_id,alpaca_order_id,created_at,risk_snapshot").eq("contract_ticker",ticker).eq("action","buy_to_open").order("created_at",{ascending:false}).limit(1).maybeSingle();
   if (error) throw new Error(`db error: ${error.message}`); if (!entry) return null;
+  // Rows journaled without signal_id (swarms and 1-2 day test twins, which share their
+  // source signal with a primary entry) carry it in risk_snapshot.sourceSignalId.
+  const snapshot = (entry.risk_snapshot ?? null) as { strategy?:string; sourceSignalId?:string; dteTest?:{ arm?:string } } | null;
+  const contextSignalId = entry.signal_id ?? snapshot?.sourceSignalId ?? null;
+  const testTwin = snapshot?.dteTest?.arm === "next-expiry";
   const [{data:signal,error:signalError},{data:state,error:stateError}] = await Promise.all([
-    entry.signal_id ? db.from("option_signals").select("action,setup,market_snapshot").eq("signal_id",entry.signal_id).maybeSingle() : Promise.resolve({data:null,error:null} as {data:null,error:null}),
+    contextSignalId ? db.from("option_signals").select("action,setup,market_snapshot").eq("signal_id",contextSignalId).maybeSingle() : Promise.resolve({data:null,error:null} as {data:null,error:null}),
     db.from("paper_position_monitors").select("peak_bid,opened_at,close_order_id,close_order_submitted_at,exit_mode,last_quote_at").eq("contract_ticker",ticker).maybeSingle(),
   ]);
   if (signalError) throw signalError; if (stateError) throw stateError;
@@ -41,7 +46,7 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
   // context is neutral (infinite range) so invalidation can never trigger.
   const market = (signal?.market_snapshot as SignalMarket|undefined) ?? { openingRangeHigh:Number.NEGATIVE_INFINITY, openingRangeLow:Number.POSITIVE_INFINITY, referencePrice:0, chartSymbol:alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"") };
   return { ticker,alpacaSymbol,side:signal ? (signal.action === "enter_put" ? "put":"call") : occSide,quantity:1,entryPrice,
-    peakBid:Number(state?.peak_bid ?? entryPrice),openedAt:Date.parse(state?.opened_at ?? brokerEntry?.filled_at ?? entry.created_at),signalId:entry.signal_id,userId:entry.user_id,
+    peakBid:Number(state?.peak_bid ?? entryPrice),openedAt:Date.parse(state?.opened_at ?? brokerEntry?.filled_at ?? entry.created_at),signalId:contextSignalId,userId:entry.user_id,sameDayRules:testTwin,
     market,closeOrderId:state?.close_order_id ?? null,closeOrderSubmittedAt:state?.close_order_submitted_at ? Date.parse(state.close_order_submitted_at):null,lastQuoteAt:state?.last_quote_at ? Date.parse(state.last_quote_at):null,
     // First sighting (no monitor row yet): convexity-sleeve entries (journaled with
     // strategy 'convexity-swarm') get the time-only convexity profile, scalp signals
@@ -49,7 +54,9 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
     // until 10:00), other 3+ day contracts are swings defaulting to trend (RIDE).
     // Existing rows keep their stored mode.
     exitMode:state ? (["trend","scalp","drive","thesis","convexity"].includes(String(state.exit_mode)) ? state.exit_mode as "trend"|"scalp"|"drive"|"thesis"|"convexity" : "burst")
-      : ((entry.risk_snapshot as {strategy?:string}|null)?.strategy === "convexity-swarm" ? "convexity"
+      : (snapshot?.strategy === "convexity-swarm" ? "convexity"
+        // A test twin gets the primary's mode regardless of its own expiry (never RIDE).
+        : testTwin ? ((signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : "burst")
         : (signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
 }
 export async function saveMonitor(position:ManagedPosition,input:{bid:number;ask:number;quoteAt:number;status:string;exitReason?:string|null;closeOrderId?:string|null;error?:string|null}) {
@@ -72,9 +79,10 @@ export async function markMissingPositions(openTickers:string[],orders:AlpacaOrd
       if(!journaled?.length) await adoptReplacedExit(String(row.contract_ticker),filled,fill);await createWorkerAlert({userId:row.user_id,signalId:row.signal_id,eventKey:`paper-exit-filled-${filled.id}`,severity:"success",title:"Paper exit filled",body:`SELL ${filled.qty} ${symbol} filled near $${fill.toFixed(2)}. The position is closed.`,metadata:{orderId:filled.id,contractTicker:row.contract_ticker,fillPrice:fill,entryPrice:Number(row.entry_price)}});}
   }
 }
-export async function journalExit(position:ManagedPosition,order:AlpacaOrder,limitPrice:number,reason:string) {
+export async function journalExit(position:ManagedPosition,order:AlpacaOrder,limitPrice:number,reason:string,quote?:{bid:number;ask:number;timestamp:number}|null) {
   const exitRoot = position.alpacaSymbol.replace(/\d{6}[CP]\d{8}$/,"");
-  const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:exitRoot==="SPXW"?"SPX":exitRoot,contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order },{onConflict:"alpaca_order_id"});
+  const { error } = await db.from("paper_trade_orders").upsert({ user_id:position.userId,signal_id:position.signalId,alpaca_order_id:order.id,client_order_id:order.client_order_id,action:"sell_to_close",underlying:exitRoot==="SPXW"?"SPX":exitRoot,contract_ticker:position.ticker,quantity:position.quantity,order_type:"limit",limit_price:limitPrice,max_debit:null,status:order.status,risk_snapshot:{exitReason:reason,entryPrice:position.entryPrice,peakBid:position.peakBid},broker_response:order,
+    ...(quote ? { decision_bid:quote.bid,decision_ask:quote.ask,decision_quote_at:new Date(quote.timestamp).toISOString() } : {}) },{onConflict:"alpaca_order_id"});
   if (error) throw new Error(`db error: ${error.message}`);
 }
 // Re-point a close order's journal row at the order that replaced it, so the row
@@ -115,4 +123,21 @@ export async function heartbeat(input:{healthy:boolean;positions:number;lastErro
 export async function createWorkerAlert(input:{userId:string;signalId?:string|null;eventKey:string;severity:"info"|"success"|"warning"|"critical";title:string;body:string;metadata?:Record<string,unknown>}) {
   const {error}=await db.from("alerts").insert({user_id:input.userId,signal_id:input.signalId??null,channel:"in_app",event_key:input.eventKey,severity:input.severity,title:input.title,body:input.body,metadata:input.metadata??{}});
   if(error&&error.code!=="23505")throw new Error(`db error: ${error.message}`);
+}
+
+// FILL CAPTURE (2026-11-27, user call: "record fills"): copy the broker's actual fill
+// onto every journaled paper order — entries and exits — once it fills. Journal prices
+// are limit prices; this is what the trade really cost. Idempotent: only rows still
+// missing fill_price are touched.
+export async function syncFills(orders:AlpacaOrder[]) {
+  const filled = orders.filter(order => order.status === "filled" && order.filled_avg_price != null);
+  if (!filled.length) return;
+  const { data, error } = await db.from("paper_trade_orders").select("id,alpaca_order_id").in("alpaca_order_id", filled.map(order => order.id)).is("fill_price", null);
+  if (error) throw new Error(`fill sync read: ${error.message}`);
+  for (const row of data ?? []) {
+    const order = filled.find(item => item.id === row.alpaca_order_id);
+    if (!order) continue;
+    const { error: updateError } = await db.from("paper_trade_orders").update({ fill_price:Number(order.filled_avg_price), filled_at:order.filled_at, filled_qty:Number(order.filled_qty), status:"filled", updated_at:new Date().toISOString() }).eq("id", row.id);
+    if (updateError) throw new Error(`fill sync write: ${updateError.message}`);
+  }
 }

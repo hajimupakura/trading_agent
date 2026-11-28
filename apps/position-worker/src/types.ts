@@ -10,4 +10,7 @@ export interface ManagedPosition {
   // convexity = the swarm sleeve: NO stop, NO trail, time-only exits (day+2 close /
   // expiry-day 14:00) — max loss is the premium, by design.
   exitMode:"burst"|"trend"|"scalp"|"drive"|"thesis"|"convexity";
+  // 1-2 day test twin (2026-11-27): a next-expiry contract managed with the SAME-DAY
+  // rules (15:10 flat, follow-through test) so the test isolates extra time alone.
+  sameDayRules?:boolean;
 }

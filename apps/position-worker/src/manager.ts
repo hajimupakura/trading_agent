@@ -4,7 +4,7 @@ import { ENTRY_RULES, planEntryOrder } from "./entry-engine.js";
 import { adviseExit } from "./advisor.js";
 import { cancelOrder, getLatestOptionQuote, getMarketCalendar, getPositions, getSpyPrice, getTodayOrders, replaceCloseOrder, submitCloseOrder } from "./alpaca.js";
 import { getSnapshotQuote, getSpxPrice, MassiveQuoteStream } from "./massive.js";
-import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, repointExitJournal, saveMonitor, updateEntryJournal } from "./store.js";
+import { adoptBrokerPosition, createWorkerAlert, getControl, getEntryJournal, getManagedPosition, heartbeat, journalExit, markMissingPositions, repointExitJournal, saveMonitor, syncFills, updateEntryJournal } from "./store.js";
 import { RobinhoodExitManager } from "./robinhood.js";
 import type { AlpacaOrder, OptionQuote } from "./types.js";
 import { currentCalendar, refreshMarketCalendar } from "./market-calendar.js";
@@ -17,7 +17,7 @@ const fresh = (quote:OptionQuote|null,now:number) => quote && now - quote.timest
 const clientOrderId = (symbol:string,reason:string,now:number) => `velocity-exit-${symbol}-${reason}-${now}`.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,48);
 
 export class PositionManager {
-  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = []; private lastRhSyncAt = 0; private mlExits = true;
+  readonly quotes = new MassiveQuoteStream(); readonly robinhood = new RobinhoodExitManager(); lastCycleAt:number|null = null; lastError:string|null = null; managedCount = 0; private rhSymbols:string[] = []; private lastRhSyncAt = 0; private lastFillSyncAt = 0; private mlExits = true;
   // Consecutive stale-quote cycles per ticker: a single miss (worker restart, stream
   // resubscribe) retries quietly; the critical alert fires only after the threshold.
   private quoteMisses = new Map<string, number>();
@@ -37,6 +37,8 @@ export class PositionManager {
     const entryOrders = orders.filter(order => order.side === "buy" && activeOrder(order));
     this.quotes.setSymbols([...optionPositions.map(position => `O:${position.symbol}`), ...entryOrders.map(order => `O:${order.symbol}`), ...this.rhSymbols]); this.managedCount = 0;
     await markMissingPositions(optionPositions.map(position => `O:${position.symbol}`),orders);
+    // Fill capture: at most every 30 seconds, never fatal to the exit cycle.
+    if (Date.now() - this.lastFillSyncAt >= 30_000) { this.lastFillSyncAt = Date.now(); await syncFills(orders).catch(error => console.error(JSON.stringify({ event:"fill_sync_error", error:String(error) }))); }
     const inSession = marketSession(new Date());
     const cycleErrors:string[] = [];
     const enabled = config.exitsEnabled && control.auto_exits_enabled;
@@ -176,7 +178,7 @@ export class PositionManager {
     const expiryFlat = dte != null && dte <= 0 && currentCalendar().isTradingDay(clock.dateKey) && clock.minutes >= currentCalendar().beforeClose(clock.dateKey, EXIT_RULES.mandatoryExitMinutes);
     const reason = trendMode
       ? (quote.bid <= position.entryPrice * 0.5 ? "premium_stop" as const : expiryFlat ? "mandatory_time_exit" as const : null)
-      : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:dte != null && dte > 2,ml:mlAdvice});
+      : evaluateExit({position,bid:quote.bid,underlyingPrice,longDated:!position.sameDayRules && dte != null && dte > 2,ml:mlAdvice});
     // Telegram-visible WHY for every model-driven sell (user call 2026-11-24: "send me
     // a message so I understand what's going on and why").
     if (reason === "ml_advisor_exit" && mlAdvice) {
@@ -191,12 +193,12 @@ export class PositionManager {
     // Urgent exits (hard stop / mandatory flat) price through the bid so they actually fill.
     const urgent = reason === "premium_stop" || reason === "mandatory_time_exit";
     const exitLimit = (aggressive:boolean) => Math.max(.01, Number((aggressive ? quote.bid * .95 : quote.bid).toFixed(2)));
-    if (recentlyFilled) { const fill=Number(recentlyFilled.filled_avg_price ?? quote.bid);await journalExit(position,recentlyFilled,fill,reason);await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`paper-exit-filled-${recentlyFilled.id}`,severity:"success",title:"Paper exit filled",body:`SELL ${position.quantity} ${position.alpacaSymbol} filled near $${fill.toFixed(2)} · ${reason.replaceAll("_"," ")}`,metadata:{orderId:recentlyFilled.id,contractTicker:position.ticker,fillPrice:fill,exitReason:reason}}); await saveMonitor(position,{...quoteState,status:"closing",exitReason:reason,closeOrderId:recentlyFilled.id}); return; }
+    if (recentlyFilled) { const fill=Number(recentlyFilled.filled_avg_price ?? quote.bid);await journalExit(position,recentlyFilled,fill,reason,quote);await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`paper-exit-filled-${recentlyFilled.id}`,severity:"success",title:"Paper exit filled",body:`SELL ${position.quantity} ${position.alpacaSymbol} filled near $${fill.toFixed(2)} · ${reason.replaceAll("_"," ")}`,metadata:{orderId:recentlyFilled.id,contractTicker:position.ticker,fillPrice:fill,exitReason:reason}}); await saveMonitor(position,{...quoteState,status:"closing",exitReason:reason,closeOrderId:recentlyFilled.id}); return; }
     if (openClose) {
       const age = now-Date.parse(openClose.updated_at ?? openClose.created_at); const currentLimit = Number(openClose.limit_price);
       // Escalate after 30s working (or immediately for urgent reasons): cross 5% below the bid.
       const target = exitLimit(urgent || age >= 30_000);
-      await journalExit(position,openClose,currentLimit || quote.bid,reason);
+      await journalExit(position,openClose,currentLimit || quote.bid,reason,quote);
       // A replace issues a NEW order id; move the journal row onto it right away.
       if (age >= 10_000 && Math.abs(currentLimit-target)>=.01) { const replaced = await replaceCloseOrder(openClose.id,target); if (replaced?.id && replaced.id !== openClose.id) await repointExitJournal(openClose.id,replaced,target); }
       await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`paper-exit-working-${openClose.id}`,severity:"warning",title:"Paper exit working",body:`SELL ${position.quantity} ${position.alpacaSymbol} is ${openClose.status} near $${(currentLimit||quote.bid).toFixed(2)} · ${reason.replaceAll("_"," ")}`,metadata:{orderId:openClose.id,contractTicker:position.ticker,limitPrice:currentLimit||quote.bid,exitReason:reason,status:openClose.status}});
@@ -204,7 +206,7 @@ export class PositionManager {
     }
     const submitLimit = exitLimit(urgent);
     let order:AlpacaOrder;try{order=await submitCloseOrder({symbol:position.alpacaSymbol,quantity:position.quantity,limitPrice:submitLimit,clientOrderId:clientOrderId(position.alpacaSymbol,reason,now)});}catch(error){await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`paper-exit-failed-${position.userId}-${position.ticker}-${reason}-${Math.floor(now/300000)}`,severity:"critical",title:"Paper exit submission failed",body:`Could not submit SELL for ${position.alpacaSymbol}: ${error instanceof Error?error.message:String(error)}. Check Alpaca immediately.`,metadata:{contractTicker:position.ticker,exitReason:reason,bid:quote.bid}});throw error;}
-    await journalExit(position,order,submitLimit,reason);
+    await journalExit(position,order,submitLimit,reason,quote);
     await createWorkerAlert({userId:position.userId,signalId:position.signalId,eventKey:`paper-exit-submitted-${order.id}`,severity:"warning",title:"Paper exit submitted",body:`SELL ${position.quantity} ${position.alpacaSymbol} at a $${submitLimit.toFixed(2)} limit · ${reason.replaceAll("_"," ")}`,metadata:{orderId:order.id,contractTicker:position.ticker,limitPrice:submitLimit,exitReason:reason,status:order.status}});
     await saveMonitor(position,{...quoteState,status:"closing",exitReason:reason,closeOrderId:order.id});
     console.log(JSON.stringify({event:"paper_exit_submitted",symbol:position.alpacaSymbol,reason,limitPrice:submitLimit,orderId:order.id}));

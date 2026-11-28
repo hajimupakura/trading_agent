@@ -291,6 +291,14 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   const outsideBudget = budgetReason != null;
   const clientOrderId = `velocity-auto-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
   const entryLimit = Math.max(0.01, Number(contract.midpoint.toFixed(2)));
+  // 1-2 DAY TEST (user call 2026-11-27, after the 34-month replay showed same-signal
+  // contracts with 1-2 more days stop out half as often: 19% vs 38% on 2,070 matched
+  // signals, profit +1.8 pts/trade but not proven). Every same-day entry gets a twin
+  // in the next listed expiry within two trading sessions: same signal, side and delta,
+  // the same premium budget, and the SAME exit rules (the worker treats the twin as a
+  // same-day trade: 15:10 flat, stops and trails unchanged). Twins are tagged
+  // dteTest.arm = "next-expiry"; the primary is tagged "same-day". Paper only.
+  const testArm = contract.dte === 0 && signal.setup !== "scalp_reclaim" ? await pickNextExpiryTwin(snapshot, contract) : null;
   const order = await submitPaperOptionOrder({ symbol: contract.ticker, limitPrice: entryLimit, clientOrderId, quantity: risk.quantity });
   await createAlert({
     userId: owner.id, signalId: signal.id, eventKey: `paper-entry-${order.id}`, severity: "success",
@@ -302,9 +310,13 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
-    risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason }, broker_response: order,
+    risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason,
+      ...(contract.dte === 0 ? { dteTest: { arm: "same-day", pairedWith: testArm?.contract.ticker ?? null, skipped: testArm ? null : "no next-expiry contract within two sessions" } } : {}) },
+    broker_response: order,
+    decision_bid: contract.bid, decision_ask: contract.ask, decision_quote_at: contract.quoteUpdatedAt ? new Date(contract.quoteUpdatedAt).toISOString() : null,
   });
   if (journalError) console.error("auto entry journal failed", journalError);
+  if (testArm) await placeTestTwin({ owner: String(owner.id), signalId: signal.id, setup: signal.setup, underlying, primary: contract, primaryLimit: entryLimit, primaryQuantity: risk.quantity, twin: testArm.contract, sessionsOut: testArm.sessionsOut });
   // CONVEX KICKER (user call, 2026-11-19): alongside the quality contract, one cheap
   // away-from-the-money contract under $200 — highest-delta eligible strike at ask
   // <= $2.00, same side and expiry. Its failure never voids the primary entry.
@@ -351,4 +363,61 @@ async function latestTradePrice(symbol: string): Promise<number | null> {
   const payload = await response.json() as { trade?: { p?: number; t?: string } };
   const price = Number(payload.trade?.p); const at = payload.trade?.t ? Date.parse(payload.trade.t) : NaN;
   return price > 0 && Number.isFinite(at) && Date.now() - at < 60_000 ? price : null;
+}
+
+// The 1-2 day test's twin: the next listed expiry after today, within two trading
+// sessions, same side, nearest the primary's |delta| (0.45 when unknown), with a real
+// two-sided book and a fresh quote. Null when no such contract is in the scan.
+type ScanContract = CommandCenter["contracts"][number];
+async function pickNextExpiryTwin(snapshot: CommandCenter | null, primary: ScanContract): Promise<{ contract: ScanContract; sessionsOut: number } | null> {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  const later = (snapshot?.contracts ?? []).filter(candidate => candidate.side === primary.side && candidate.expirationDate > today
+    && candidate.bid > 0 && candidate.ask > 0 && candidate.spreadPct <= 25 && candidate.quoteUpdatedAt != null && Date.now() - candidate.quoteUpdatedAt < 10 * 60_000);
+  if (!later.length) return null;
+  const nextExpiry = later.map(candidate => candidate.expirationDate).sort()[0]!;
+  const sessionsOut = (await getMarketCalendar()).tradingDaysBetween(today, nextExpiry);
+  if (sessionsOut < 1 || sessionsOut > 2) return null;
+  const targetDelta = Math.abs(primary.delta ?? 0.45);
+  const contract = later.filter(candidate => candidate.expirationDate === nextExpiry)
+    .sort((a, b) => Math.abs(Math.abs(a.delta ?? 0.45) - targetDelta) - Math.abs(Math.abs(b.delta ?? 0.45) - targetDelta) || b.liquidityScore - a.liquidityScore)[0];
+  return contract ? { contract, sessionsOut } : null;
+}
+
+// Places and journals the twin. Never blocks or undoes the primary; a failure pages.
+async function placeTestTwin(input: { owner: string; signalId: string; setup: string; underlying: string; primary: ScanContract; primaryLimit: number; primaryQuantity: number; twin: ScanContract; sessionsOut: number }): Promise<void> {
+  const admin = createAdminClient();
+  const { twin, primary } = input;
+  const short = (ticker: string) => ticker.replace("O:", "");
+  try {
+    const budget = input.primaryLimit * input.primaryQuantity;
+    const twinLimit = Math.max(0.01, Number(twin.midpoint.toFixed(2)));
+    const twinQuantity = Math.max(1, Math.floor(budget / twinLimit));
+    const twinOrder = await submitPaperOptionOrder({ symbol: twin.ticker, limitPrice: twinLimit, quantity: twinQuantity,
+      clientOrderId: ("velocity-dte2-" + input.signalId).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48) });
+    // signal_id stays null: one buy_to_open per signal_id is a unique index (the primary
+    // owns it); the worker reads sourceSignalId for the market context.
+    const { error } = await admin.from("paper_trade_orders").insert({
+      user_id: input.owner, signal_id: null, alpaca_order_id: twinOrder.id, client_order_id: twinOrder.client_order_id,
+      action: "buy_to_open", underlying: input.underlying, contract_ticker: twin.ticker,
+      quantity: twinQuantity, order_type: "limit", limit_price: twinLimit, max_debit: twinLimit * twinQuantity * 100, status: twinOrder.status,
+      risk_snapshot: { autonomous: true, strategy: input.setup, sourceSignalId: input.signalId, outsideBudget: true, budgetReason: "1-2 day test twin",
+        dteTest: { arm: "next-expiry", pairedWith: primary.ticker, sessionsOut: input.sessionsOut, primaryDebit: Number((budget * 100).toFixed(2)) } },
+      broker_response: twinOrder,
+      decision_bid: twin.bid, decision_ask: twin.ask, decision_quote_at: twin.quoteUpdatedAt ? new Date(twin.quoteUpdatedAt).toISOString() : null,
+    });
+    if (error) throw new Error("journal: " + error.message);
+    await createAlert({
+      userId: input.owner, signalId: input.signalId, eventKey: "paper-entry-" + twinOrder.id, severity: "success",
+      title: "1-2 DAY TEST: also bought " + twinQuantity + " x " + short(twin.ticker),
+      body: "Same signal, same side and the same ~$" + (budget * 100).toFixed(0) + " budget as the same-day buy (" + short(primary.ticker) + "), but expiring " + twin.expirationDate + " (" + input.sessionsOut + " trading session" + (input.sessionsOut === 1 ? "" : "s") + " later). Both follow the same exit rules, so the record shows what extra time alone does. Paper only.",
+      metadata: { kind: "dte_test_twin", orderId: twinOrder.id, contractTicker: twin.ticker, pairedWith: primary.ticker, quantity: twinQuantity, limitPrice: twinLimit },
+    }).catch(alertError => console.error("dte test alert failed", alertError));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("dte test twin failed", message);
+    await createAlert({ userId: input.owner, eventKey: ("dte-test-failed-" + input.signalId).slice(0, 120), severity: "warning",
+      title: "1-2 day test twin not placed: " + input.underlying,
+      body: "The same-day entry went in, but its 1-2 day twin (" + short(twin.ticker) + ") failed: " + message.slice(0, 200) + ". That pair is missing from the test.",
+      metadata: { kind: "dte_test_failed", signalId: input.signalId, error: message } }).catch(() => undefined);
+  }
 }

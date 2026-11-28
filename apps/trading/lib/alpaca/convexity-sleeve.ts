@@ -194,6 +194,7 @@ async function evaluate(snapshot: CommandCenter | null, underlying: string): Pro
     quantity, order_type: "limit", limit_price: limit, max_debit: limit * quantity * 100, status: order.status,
     risk_snapshot: { autonomous: true, strategy: "convexity-swarm", sourceSignalId: signal.id, legPct: Number(legPct.toFixed(2)), spot, otmPct: Number((Math.abs(contract.strike / spot - 1) * 100).toFixed(1)), expiration, dte, ...(usingExtra ? { userExtra: true, maxPrice: extraMaxPrice } : {}), ...(swarmOnly ? { swarmOnlyTrigger: true, setup: signal.setup } : {}) },
     broker_response: order,
+    decision_bid: contract.bid, decision_ask: contract.ask, decision_quote_at: contract.quoteUpdatedAt ? new Date(contract.quoteUpdatedAt).toISOString() : null,
   };
   let { error: journalError } = await admin.from("paper_trade_orders").insert(journalRow);
   if (journalError?.code === "23505") ({ error: journalError } = await admin.from("paper_trade_orders").insert({ ...journalRow, signal_id: null }));
