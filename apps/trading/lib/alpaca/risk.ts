@@ -73,16 +73,17 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if (tradesToday >= settings.maxTradesPerDay) errors.push(`Maximum ${settings.maxTradesPerDay} entries per day reached`);
   if (positions.length >= settings.maxOpenPositions) errors.push(`Maximum ${settings.maxOpenPositions} open option positions reached`);
   if (orders.some(order => ["new","accepted","pending_new","partially_filled"].includes(order.status))) errors.push("An Alpaca order is already open");
-  // Real sessions (2026-11-27): a market holiday has no window, and on a half day new
-  // entries stop 30 minutes before the EARLY close — at 12:42 on 11/27 the broker
-  // rejected a same-day contract 18 minutes before the 13:00 close.
+  // Real sessions (2026-11-27): a market holiday has no window, and on a half day the
+  // entry window keeps the same distance from the close as on a regular day (14:45 ->
+  // 11:45), so it always ends before the worker's forced exit (15:10 -> 12:10). Ending
+  // it at 12:30 would buy positions the worker sells on the next tick (Codex review).
   const calendar = input.calendar ?? new MarketCalendar();
   const session = calendar.session(clock.dateKey);
-  const dayWindowEnd = session ? Math.min(settings.entryEndMinutes, session.closeMin - 30) : -1;
+  const dayWindowEnd = session ? calendar.beforeClose(clock.dateKey, settings.entryEndMinutes) : -1;
   const inDayWindow = session != null && clock.minutes >= settings.entryStartMinutes && clock.minutes <= dayWindowEnd;
   const inSwingWindow = settings.swingTradingEnabled && session != null && session.closeMin === 960 && clock.minutes >= settings.swingEntryStartMinutes && clock.minutes <= settings.swingEntryEndMinutes;
   if (!session) errors.push("The market is closed today (weekend or market holiday)");
-  else if (!inDayWindow && !inSwingWindow) errors.push(session.closeMin < 960 ? `Half day: new entries stop 30 minutes before the ${Math.floor(session.closeMin / 60) - 12}:${String(session.closeMin % 60).padStart(2, "0")} pm close` : "Current time is outside the configured ET entry window");
+  else if (!inDayWindow && !inSwingWindow) errors.push(session.closeMin < 960 ? `Half day: new entries stop at ${Math.floor(dayWindowEnd / 60) > 12 ? Math.floor(dayWindowEnd / 60) - 12 : Math.floor(dayWindowEnd / 60)}:${String(dayWindowEnd % 60).padStart(2, "0")}, before the early close` : "Current time is outside the configured ET entry window");
   if (inSwingWindow && !inDayWindow && contract.dte < 1) errors.push("0DTE contracts expire at today's close and cannot be held overnight; swing entries require 1-2 DTE");
   if (account.status !== "ACTIVE") errors.push(`Alpaca paper account is ${account.status}`);
   if (settings.economicGuardEnabled) {

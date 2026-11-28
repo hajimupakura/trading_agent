@@ -72,7 +72,11 @@ export function evaluateExit(input:{ position:ManagedPosition; bid:number; under
     // unsold. 12:30 is inside every session the market has, half days included.
     if (!tradingToday) return null;
     const convexityDte = dteFromOcc(position.alpacaSymbol, now) ?? 0;
-    if (convexityDte <= 0 && clock.minutes >= calendar.beforeClose(clock.dateKey, 750)) return "mandatory_time_exit";
+    // Expiry-day guard: 12:30, or 30 minutes before an even earlier close. NOT the
+    // "same distance from the close" rule — on a 13:00 half day that maps 12:30 to the
+    // open (Codex review, 2026-11-27).
+    const expiryGuard = Math.min(750, (calendar.session(clock.dateKey)?.closeMin ?? 960) - 30);
+    if (convexityDte <= 0 && clock.minutes >= expiryGuard) return "mandatory_time_exit";
     // Day+2 counts real sessions; on a half day the 15:45 sale moves to 12:45.
     if (calendar.tradingDaysBetween(openedClock.dateKey, clock.dateKey) >= 2 && clock.minutes >= calendar.beforeClose(clock.dateKey, 945)) return "mandatory_time_exit";
     return null;

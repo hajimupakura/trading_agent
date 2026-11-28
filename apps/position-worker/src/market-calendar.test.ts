@@ -48,6 +48,12 @@ describe("exits on Thanksgiving week", () => {
     expect(evaluateExit({ position: tuesday, bid: 1, underlyingPrice: null, now: et("2026-11-27", "12:40"), calendar: week })).toBe(null);
     expect(evaluateExit({ position: tuesday, bid: 1, underlyingPrice: null, now: et("2026-11-27", "12:45"), calendar: week })).toBe("mandatory_time_exit");
   });
+  it("sells a swarm expiring on the half day at 12:30, not at the open", () => {
+    const expiring = { ...base, ticker: "O:SPCX261127P00119000", alpacaSymbol: "SPCX261127P00119000", openedAt: Date.parse("2026-11-26T15:00:00Z") };
+    expect(evaluateExit({ position: expiring, bid: 0.5, underlyingPrice: null, now: et("2026-11-27", "09:31"), calendar: week })).toBe(null);
+    expect(evaluateExit({ position: expiring, bid: 0.5, underlyingPrice: null, now: et("2026-11-27", "12:29"), calendar: week })).toBe(null);
+    expect(evaluateExit({ position: expiring, bid: 0.5, underlyingPrice: null, now: et("2026-11-27", "12:30"), calendar: week })).toBe("mandatory_time_exit");
+  });
   it("never fires a time exit on the holiday itself", () => {
     const tuesday = { ...base, openedAt: Date.parse("2026-11-24T15:02:00Z") };
     expect(evaluateExit({ position: tuesday, bid: 1, underlyingPrice: null, now: et("2026-11-26", "15:50"), calendar: week })).toBe(null);
