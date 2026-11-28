@@ -1,3 +1,4 @@
+import { eligibleBySessions, indexDteAllowed } from "@/lib/options/session-dte";
 import { MarketCalendar } from "@/lib/market/calendar";
 import type { Contract, Signal } from "@/lib/options/types";
 import type { AlpacaAccount, AlpacaOrder, AlpacaPosition } from "./paper";
@@ -50,7 +51,7 @@ function easternMinutes(now: Date) {
   return { minutes:Number(value.hour) * 60 + Number(value.minute), weekday:value.weekday, dateKey:new Intl.DateTimeFormat("en-CA", { timeZone:"America/New_York" }).format(now) };
 }
 
-export function validatePaperEntry(input: { signal:Signal; contract:Contract; account:AlpacaAccount; positions:AlpacaPosition[]; orders:AlpacaOrder[]; tradesToday:number; settings?:RiskSettings; quantity?:number; now?:Date; calendar?:MarketCalendar }) {
+export function validatePaperEntry(input: { signal:Signal; contract:Contract; account:AlpacaAccount; positions:AlpacaPosition[]; orders:AlpacaOrder[]; tradesToday:number; settings?:RiskSettings; quantity?:number; now?:Date; calendar?:MarketCalendar; sessionDte?:boolean }) {
   const errors:string[] = [];
   const { signal, contract, account, positions, orders, tradesToday } = input;
   const settings=input.settings??DEFAULT_RISK_SETTINGS;
@@ -64,7 +65,11 @@ export function validatePaperEntry(input: { signal:Signal; contract:Contract; ac
   if(!settings.paperTradingEnabled)errors.push("Paper entries are disabled in risk settings");
   if(!(settings.allowedUnderlyings as readonly string[]).includes(contract.underlying))errors.push(`${contract.underlying} is disabled in risk settings`);
   const singleNameDteOk = !["SPY","SPX"].includes(contract.underlying) && contract.dte <= 14; // 14: some Mondays only a ~11-DTE series exists (SPCX/SNDK 8/17)
-  if (!contract.eligible || (!settings.allowedDte.includes(contract.dte as 0|1|2) && !singleNameDteOk)) errors.push("Contract DTE is disabled or ineligible");
+  // sessionDte (paper next-expiry choice only): DTE counted in sessions, so Friday's
+  // Monday SPY/SPX expiry passes; every other screen still applies.
+  const eligible = input.sessionDte ? eligibleBySessions(contract, settings.allowedDte) : contract.eligible;
+  const dteOk = input.sessionDte ? indexDteAllowed(settings.allowedDte, contract) : settings.allowedDte.includes(contract.dte as 0|1|2);
+  if (!eligible || (!dteOk && !singleNameDteOk)) errors.push("Contract DTE is disabled or ineligible");
   if (contract.ask <= 0 || contract.ask > settings.maxOptionAsk) errors.push(`Contract ask exceeds the $${settings.maxOptionAsk.toFixed(2)} limit`);
   if(debit>settings.maxTradeDebit)errors.push(`Total debit (${quantity} contract${quantity===1?"":"s"}) exceeds the $${settings.maxTradeDebit.toFixed(0)} per-trade limit`);
   if (!Number.isFinite(equity) || debit > equity * (settings.maxEquityDebitPct / 100)) errors.push(`Total debit exceeds ${settings.maxEquityDebitPct}% of account equity`);

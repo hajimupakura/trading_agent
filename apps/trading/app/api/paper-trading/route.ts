@@ -25,9 +25,11 @@ async function entriesToday(userId:string) {
   const localAtGuess = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" }).formatToParts(new Date(midnightGuess)).map(part => [part.type, part.value]));
   const representedAsUtc = Date.UTC(Number(localAtGuess.year), Number(localAtGuess.month) - 1, Number(localAtGuess.day), Number(localAtGuess.hour), Number(localAtGuess.minute), Number(localAtGuess.second));
   const since = new Date(midnightGuess - (representedAsUtc - midnightGuess)).toISOString();
-  const { count, error } = await createAdminClient().from("paper_trade_orders").select("id", { count:"exact", head:true }).eq("user_id",userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
+  const { data, error } = await createAdminClient().from("paper_trade_orders").select("risk_snapshot").eq("user_id",userId).eq("action", "buy_to_open").gte("created_at", since).neq("status", "rejected");
   if (error) throw new Error(`Trade journal unavailable: ${error.message}`);
-  return count ?? 0;
+  // Same rule as the autonomous counter (lib/alpaca/auto-entry.ts): swarms, outside-budget
+  // rows (explore entries, 1-2 day test twins) and SPX kickers are not entries of their own.
+  return (data ?? []).filter(row => { const snap = row.risk_snapshot as { strategy?:string; outsideBudget?:boolean } | null; return snap?.strategy !== "convexity-swarm" && snap?.outsideBudget !== true && !String(snap?.strategy ?? "").endsWith("-kicker"); }).length;
 }
 
 export async function GET() {

@@ -28,8 +28,13 @@ export async function adoptBrokerPosition(alpacaSymbol:string,entryPrice:number,
 }
 export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,orders:AlpacaOrder[]):Promise<ManagedPosition|null> {
   const ticker = `O:${alpacaSymbol}`;
-  const { data:entry, error } = await db.from("paper_trade_orders").select("user_id,signal_id,alpaca_order_id,created_at,risk_snapshot").eq("contract_ticker",ticker).eq("action","buy_to_open").order("created_at",{ascending:false}).limit(1).maybeSingle();
-  if (error) throw new Error(`db error: ${error.message}`); if (!entry) return null;
+  const { data:entries, error } = await db.from("paper_trade_orders").select("user_id,signal_id,alpaca_order_id,created_at,risk_snapshot").eq("contract_ticker",ticker).eq("action","buy_to_open").order("created_at",{ascending:false}).limit(5);
+  if (error) throw new Error(`db error: ${error.message}`);
+  // Prefer the app's own journal over a worker adoption row: if the worker adopted a fill
+  // in the moment before the app's journal landed, the adoption row can be the NEWER one,
+  // and it carries no signal, mode or test tag (Codex review, 2026-11-28).
+  const entry = (entries ?? []).find(row => (row.risk_snapshot as { adopted?:boolean } | null)?.adopted !== true) ?? entries?.[0];
+  if (!entry) return null;
   // Rows journaled without signal_id (swarms and 1-2 day test twins, which share their
   // source signal with a primary entry) carry it in risk_snapshot.sourceSignalId.
   const snapshot = (entry.risk_snapshot ?? null) as { strategy?:string; sourceSignalId?:string; dteTest?:{ arm?:string } } | null;
@@ -53,9 +58,12 @@ export async function getManagedPosition(alpacaSymbol:string,entryPrice:number,o
     // get the scalp profile, opening drives get the drive profile (trail suspended
     // until 10:00), other 3+ day contracts are swings defaulting to trend (RIDE).
     // Existing rows keep their stored mode.
-    exitMode:state ? (["trend","scalp","drive","thesis","convexity"].includes(String(state.exit_mode)) ? state.exit_mode as "trend"|"scalp"|"drive"|"thesis"|"convexity" : "burst")
+    // A next-expiry test contract is never RIDE, even if a race stored it as trend before
+    // its journal landed (the worker adopts unjournaled fills; Codex review 2026-11-28).
+    exitMode:state && !(testTwin && state.exit_mode === "trend") ? (["trend","scalp","drive","thesis","convexity"].includes(String(state.exit_mode)) ? state.exit_mode as "trend"|"scalp"|"drive"|"thesis"|"convexity" : "burst")
       : (snapshot?.strategy === "convexity-swarm" ? "convexity"
-        // A test twin gets the primary's mode regardless of its own expiry (never RIDE).
+        // A next-expiry test contract (paper primary since 11/28) gets the same-day mode
+        // regardless of its own expiry (never RIDE).
         : testTwin ? ((signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : "burst")
         : (signal as {setup?:string}|null)?.setup === "scalp_reclaim" ? "scalp" : (signal as {setup?:string}|null)?.setup === "opening_drive" ? "drive" : (dteFromOcc(alpacaSymbol) ?? 0) >= 3 ? "trend" : "burst") };
 }

@@ -5,6 +5,7 @@ import { getPaperTradingState, submitPaperOptionOrder } from "./paper";
 import { PAPER_RULES, computePositionSize, entryCooldownActive, invalidAtEntry, validatePaperEntry } from "./risk";
 import { STOCK_FEED } from "./data-plan";
 import { getMarketCalendar } from "@/lib/market/calendar-server";
+import { eligibleBySessions } from "@/lib/options/session-dte";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { recordShadowSkip } from "@/lib/options/shadow-ledger";
@@ -34,7 +35,8 @@ async function entriesToday(userId: string) {
   if (error) throw new Error(`Trade journal unavailable: ${error.message}`);
   // Explore-mode entries taken OUTSIDE the old budget (2026-11-25) are excluded too, so
   // the budget keeps counting exactly what it would have allowed on its own.
-  const rows = (data ?? []).filter(row => { const snap = row.risk_snapshot as { strategy?: string; outsideBudget?: boolean } | null; return snap?.strategy !== "convexity-swarm" && snap?.outsideBudget !== true; });
+  // SPX kickers are companions of a counted primary, not entries of their own.
+  const rows = (data ?? []).filter(row => { const snap = row.risk_snapshot as { strategy?: string; outsideBudget?: boolean } | null; return snap?.strategy !== "convexity-swarm" && snap?.outsideBudget !== true && !String(snap?.strategy ?? "").endsWith("-kicker"); });
   const index = rows.filter(row => ["SPX", "SPY"].includes(String(row.underlying))).length;
   // Morning sub-count for the equity sleeve's budget: entries before 12:30 ET.
   const morningCutoff = new Date(new Date(since).getTime() + 750 * 60_000).toISOString();
@@ -278,17 +280,25 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // the same minute, so only a pending order on THIS name blocks.
   const gateOrders = exploreAll ? trading.orders.filter(order => order.symbol.startsWith(underlying) && /\d/.test(order.symbol.charAt(underlying.length))) : trading.orders;
   const calendar = await getMarketCalendar();
-  let risk = validatePaperEntry({ signal, contract, calendar, ...trading, orders: gateOrders, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity });
-  if (!risk.allowed && exploreAll) {
-    // Count budgets inside the risk gate (entries/day, concurrent positions, daily-loss
-    // stop) tag instead of veto; every other risk error still blocks.
-    const isBudgetError = (message: string) => /entries per day reached|open option positions reached|Daily loss limit/.test(message);
-    const budgetErrors = risk.errors.filter(isBudgetError);
-    if (budgetErrors.length) {
-      budgetReason ??= budgetErrors[0]!;
-      risk = validatePaperEntry({ signal, contract, calendar, ...trading, orders: gateOrders, positions: [], tradesToday: 0, settings: { ...sleeveSettings, maxTradesPerDay: 10_000, maxOpenPositions: 10_000, maxDailyLoss: Number.MAX_SAFE_INTEGER }, quantity });
+  // One risk check for any candidate contract (the next-expiry swap below re-runs it).
+  const checkRisk = (candidate: ScanContract, size: number, sessionDte = false) => {
+    let result = validatePaperEntry({ signal, contract: candidate, calendar, ...trading, orders: gateOrders, positions: sleevePositions, tradesToday: sleeveTradesToday, settings: sleeveSettings, quantity: size, sessionDte });
+    let budgetError: string | null = null;
+    if (!result.allowed && exploreAll) {
+      // Count budgets inside the risk gate (entries/day, concurrent positions, daily-loss
+      // stop) tag instead of veto; every other risk error still blocks.
+      const isBudgetError = (message: string) => /entries per day reached|open option positions reached|Daily loss limit/.test(message);
+      const budgetErrors = result.errors.filter(isBudgetError);
+      if (budgetErrors.length) {
+        budgetError = budgetErrors[0]!;
+        result = validatePaperEntry({ signal, contract: candidate, calendar, ...trading, orders: gateOrders, positions: [], tradesToday: 0, settings: { ...sleeveSettings, maxTradesPerDay: 10_000, maxOpenPositions: 10_000, maxDailyLoss: Number.MAX_SAFE_INTEGER }, quantity: size, sessionDte });
+      }
     }
-  }
+    return { result, budgetError };
+  };
+  const firstCheck = checkRisk(contract, quantity);
+  let risk = firstCheck.result;
+  if (firstCheck.budgetError) budgetReason ??= firstCheck.budgetError;
   if (!risk.allowed) return { entered: null, skipped: risk.errors[0] ?? "risk gate" };
   // Last check before the order: is this position already one the worker would sell?
   // Only SPY and SPX carry the underlying-invalidation exit (the worker has a live
@@ -302,35 +312,79 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
       return { entered: null, skipped: `already invalid at entry: ${underlying} at ${Number(livePrice).toFixed(2)} is back ${call ? "at or below" : "at or above"} ${level.toFixed(2)}, the level the exit rule sells on` };
     }
   }
+  // NEXT-EXPIRY DEFAULT (user call 2026-11-28: "put in all the suggestions", after the
+  // entry history tests). Same fire, same exits, 3,991 matched pairs over 34 months: the
+  // next listed expiry beat the 0DTE by +4.7 pts/trade in 2026 [+2.5, +7.1] and +7.1 in
+  // 2024-25 at 1c/side, and stopped out half as often (23% vs 46%). Holm-significant,
+  // and the only tested change that was. It is NOT proven profitable on its own
+  // (+1.3%/trade, range -1.6 to +4.6), so the 0DTE keeps running beside it as an
+  // outside-budget twin: the pair keeps measuring the difference on real paper fills.
+  // Paper only; scalp entries and the real-money lanes are unchanged. For this choice
+  // SPY/SPX DTE is counted in SESSIONS (lib/options/session-dte.ts), so Friday's Monday
+  // expiry qualifies; the shared screen elsewhere still counts calendar days.
+  const sameDayPick = contract;
+  let sameDayQuantity = risk.quantity;
+  let pairArm: { contract: ScanContract; sessionsOut: number } | null = null;
+  let swapSkipped: string | null = null;
+  if (contract.dte === 0 && signal.setup !== "scalp_reclaim") {
+    sameDayQuantity = risk.quantity;
+    const sameDayBudget = Math.max(0.01, Number(contract.midpoint.toFixed(2))) * risk.quantity;
+    const next = await nextExpiryCandidates(snapshot, contract, sleeveSettings, sameDayBudget);
+    if (!next) swapSkipped = "no next-expiry contract within two sessions that passes the same quality screen and fits the same budget";
+    else {
+      // Try the closest-delta candidates in order; the first that passes the full risk
+      // gate wins. Size = the same premium budget, never above the account's own sizing
+      // (contract-count cap, risk %, equity %) for that contract.
+      for (const candidate of next.candidates) {
+        if (trading.positions.some(position => `O:${position.symbol}` === candidate.ticker)) { swapSkipped = "already holding the next-expiry contract"; continue; }
+        const bySameBudget = Math.floor(sameDayBudget / Math.max(0.01, Number(candidate.midpoint.toFixed(2))));
+        const nextSize = Math.min(bySameBudget, computePositionSize({ ask: candidate.ask, equity: Number(trading.account.equity), optionsBuyingPower: Number(trading.account.options_buying_power), settings: sleeveSettings }));
+        if (nextSize < 1) { swapSkipped = "next expiry costs more than the same-day budget"; continue; }
+        const nextCheck = checkRisk(candidate, nextSize, true);
+        if (!nextCheck.result.allowed) { swapSkipped = `next expiry failed the risk gate: ${nextCheck.result.errors[0] ?? "risk gate"}`; continue; }
+        contract = candidate; risk = nextCheck.result; pairArm = { contract: sameDayPick, sessionsOut: next.sessionsOut }; swapSkipped = null;
+        break;
+      }
+    }
+  }
+  // Record-only entry context (no veto): the spread paid, a stricter cost screen's
+  // verdict, and the unsigned short-dated call/put volume split. These are the ideas the
+  // history could not test (no historical quotes or flow); real fills will judge them.
+  const shortDated = (snapshot?.contracts ?? []).filter(row => row.dte <= 7);
+  const callVolume = shortDated.filter(row => row.side === "call").reduce((sum, row) => sum + row.volume, 0);
+  const putVolume = shortDated.filter(row => row.side === "put").reduce((sum, row) => sum + row.volume, 0);
+  const entryContext = {
+    costGate: { spreadPct: contract.spreadPct, sameDaySpreadPct: sameDayPick.spreadPct, wouldSkipAt3pct: contract.spreadPct > 3, wouldSkipAt5pct: contract.spreadPct > 5 },
+    flow: { callVolume, putVolume, sameSideShare: callVolume + putVolume > 0 ? Number(((signal.action === "enter_call" ? callVolume : putVolume) / (callVolume + putVolume)).toFixed(3)) : null, signed: false },
+  };
   const outsideBudget = budgetReason != null;
   const clientOrderId = `velocity-auto-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
   const entryLimit = Math.max(0.01, Number(contract.midpoint.toFixed(2)));
-  // 1-2 DAY TEST (user call 2026-11-27, after the 34-month replay showed same-signal
-  // contracts with 1-2 more days stop out half as often: 19% vs 38% on 2,070 matched
-  // signals, profit +1.8 pts/trade but not proven). Every same-day entry gets a twin
-  // in the next listed expiry within two trading sessions: same signal, side and delta,
-  // the same premium budget, and the SAME exit rules (the worker treats the twin as a
-  // same-day trade: 15:10 flat, stops and trails unchanged). Twins are tagged
-  // dteTest.arm = "next-expiry"; the primary is tagged "same-day". Paper only.
-  const testArm = contract.dte === 0 && signal.setup !== "scalp_reclaim" ? await pickNextExpiryTwin(snapshot, contract, sleeveSettings, entryLimit * risk.quantity) : null;
+  // 1-2 DAY TEST, now inverted (2026-11-28): the next-expiry contract is the primary
+  // (dteTest.arm "next-expiry", role "primary" — the worker gives it the SAME-DAY exit
+  // rules: 15:10 flat, stops and trails unchanged) and the 0DTE it replaced is bought
+  // beside it as the outside-budget twin (arm "same-day", role "twin"), same budget.
   const order = await submitPaperOptionOrder({ symbol: contract.ticker, limitPrice: entryLimit, clientOrderId, quantity: risk.quantity });
-  await createAlert({
-    userId: owner.id, signalId: signal.id, eventKey: `paper-entry-${order.id}`, severity: "success",
-    title: `AUTONOMOUS entry: bought ${risk.quantity} ${signal.action === "enter_call" ? "call" : "put"}${risk.quantity === 1 ? "" : "s"} on ${underlying}`,
-    body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on its own: BUY ${risk.quantity} × ${contract.ticker} at a $${entryLimit.toFixed(2)} limit — about $${risk.debit.toFixed(0)} at risk, sized to the account. The worker guards the exit from here (stop, trail, time rules). Emergency stop in the dashboard halts future entries anytime.${outsideBudget ? ` EXPLORE entry — outside the old daily budget (${budgetReason}); taken because paper now trades every first signal per name and tags it.` : ""}`,
-    metadata: { kind: "auto_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: entryLimit, quantity: risk.quantity, maxDebit: risk.debit, outsideBudget, budgetReason },
-  }).catch(error => console.error("auto entry alert failed", error));
+  // Journal BEFORE the alert: the worker adopts any unjournaled position it sees, and an
+  // adopted 3+ day contract would be stored in RIDE mode (Codex review, 2026-11-28).
   const { error: journalError } = await admin.from("paper_trade_orders").insert({
     user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
-    risk_snapshot: { autonomous: true, strategy: signal.setup, entryGate, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason,
-      ...(contract.dte === 0 ? { dteTest: { arm: "same-day", pairedWith: testArm?.contract.ticker ?? null, skipped: testArm ? null : "no next-expiry contract within two sessions that passes the same quality screen and fits the same budget" } } : {}) },
+    risk_snapshot: { autonomous: true, strategy: signal.setup, entryGate, entryContext, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason,
+      ...(pairArm ? { dteTest: { arm: "next-expiry", role: "primary", pairedWith: sameDayPick.ticker, sessionsOut: pairArm.sessionsOut } }
+        : sameDayPick.dte === 0 ? { dteTest: { arm: "same-day", role: "primary", pairedWith: null, skipped: swapSkipped } } : {}) },
     broker_response: order,
     decision_bid: contract.bid, decision_ask: contract.ask, decision_quote_at: contract.quoteUpdatedAt ? new Date(contract.quoteUpdatedAt).toISOString() : null,
   });
   if (journalError) console.error("auto entry journal failed", journalError);
-  if (testArm) await placeTestTwin({ owner: String(owner.id), signalId: signal.id, setup: signal.setup, underlying, primary: contract, primaryLimit: entryLimit, primaryQuantity: risk.quantity, twin: testArm.contract, sessionsOut: testArm.sessionsOut });
+  await createAlert({
+    userId: owner.id, signalId: signal.id, eventKey: `paper-entry-${order.id}`, severity: "success",
+    title: `AUTONOMOUS entry: bought ${risk.quantity} ${signal.action === "enter_call" ? "call" : "put"}${risk.quantity === 1 ? "" : "s"} on ${underlying}`,
+    body: `The engine fired a ${signal.setup.replaceAll("_", " ")} signal (confidence ${signal.confidence}) and entered on its own: BUY ${risk.quantity} × ${contract.ticker} at a $${entryLimit.toFixed(2)} limit — about $${risk.debit.toFixed(0)} at risk, sized to the account.${pairArm ? ` Next-expiry contract (${contract.expirationDate}) instead of the same-day ${sameDayPick.ticker.replace("O:", "")} — the history's better choice; the same-day one is bought beside it to keep measuring.` : ""} The worker guards the exit from here (stop, trail, time rules). Emergency stop in the dashboard halts future entries anytime.${outsideBudget ? ` EXPLORE entry — outside the old daily budget (${budgetReason}); taken because paper now trades every first signal per name and tags it.` : ""}`,
+    metadata: { kind: "auto_entry", orderId: order.id, contractTicker: contract.ticker, limitPrice: entryLimit, quantity: risk.quantity, maxDebit: risk.debit, outsideBudget, budgetReason },
+  }).catch(error => console.error("auto entry alert failed", error));
+  if (pairArm) await placeTestTwin({ owner: String(owner.id), signalId: signal.id, setup: signal.setup, underlying, primary: contract, twin: pairArm.contract, twinQuantity: sameDayQuantity, sessionsOut: pairArm.sessionsOut });
   // CONVEX KICKER (user call, 2026-11-19): alongside the quality contract, one cheap
   // away-from-the-money contract under $200 — highest-delta eligible strike at ask
   // <= $2.00, same side and expiry. Its failure never voids the primary entry.
@@ -342,17 +396,19 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     // $0.10 spread on a $0.60 option is 17%. The kicker's screen is a two-sided
     // market with real volume; the ticket price caps the risk.
     const lottery = (snapshot?.contracts ?? [])
-      .filter(candidate => candidate.side === contract.side && candidate.expirationDate === contract.expirationDate
-        && candidate.ticker !== contract.ticker && candidate.ask > 0 && candidate.ask <= 2 && candidate.bid > 0 && candidate.volume >= 50)
+      .filter(candidate => candidate.side === sameDayPick.side && candidate.expirationDate === sameDayPick.expirationDate
+        && candidate.ticker !== sameDayPick.ticker && candidate.ask > 0 && candidate.ask <= 2 && candidate.bid > 0 && candidate.volume >= 50)
       .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))[0];
     if (lottery) {
       const lotteryLimit = Math.max(0.01, Number(lottery.midpoint.toFixed(2)));
       const lotteryOrder = await submitPaperOptionOrder({ symbol: lottery.ticker, limitPrice: lotteryLimit, clientOrderId: `velocity-auto-lot-${signal.id}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48), quantity: 1 });
+      // signal_id stays null: buy_to_open is unique per signal_id and the primary owns it
+      // (the kicker's journal used to be rejected silently). Context via sourceSignalId.
       await admin.from("paper_trade_orders").insert({
-        user_id: owner.id, signal_id: signal.id, alpaca_order_id: lotteryOrder.id, client_order_id: lotteryOrder.client_order_id,
+        user_id: owner.id, signal_id: null, alpaca_order_id: lotteryOrder.id, client_order_id: lotteryOrder.client_order_id,
         action: "buy_to_open", underlying, contract_ticker: lottery.ticker,
         quantity: 1, order_type: "limit", limit_price: lotteryLimit, max_debit: lotteryLimit * 100, status: lotteryOrder.status,
-        risk_snapshot: { autonomous: true, strategy: `${signal.setup}-kicker`, pairedWith: contract.ticker }, broker_response: lotteryOrder,
+        risk_snapshot: { autonomous: true, strategy: `${signal.setup}-kicker`, sourceSignalId: signal.id, pairedWith: contract.ticker }, broker_response: lotteryOrder,
       }).then(({ error }) => { if (error) console.error("kicker journal failed", error.message); });
       await createAlert({
         userId: owner.id, signalId: signal.id, eventKey: `paper-entry-kicker-${lotteryOrder.id}`, severity: "info",
@@ -379,7 +435,7 @@ async function latestTradePrice(symbol: string): Promise<number | null> {
   return price > 0 && Number.isFinite(at) && Date.now() - at < 60_000 ? price : null;
 }
 
-// The 1-2 day test's twin: the next listed expiry after today, within two trading
+// The 1-2 day test's next-expiry contract (the paper primary since 11/28): the next listed expiry after today, within two trading
 // sessions, same side, nearest the primary's |delta| (0.45 when unknown), with a real
 // two-sided book and a fresh quote. Null when no such contract is in the scan.
 type ScanContract = CommandCenter["contracts"][number];
@@ -387,10 +443,10 @@ type ScanContract = CommandCenter["contracts"][number];
 // (spread and volume limits from the lane's settings) and fit the SAME budget — a
 // minimum of one contract used to let a $400 twin pair with a $300 primary. A twin
 // that cannot be bought inside the primary's budget is skipped and the skip recorded.
-async function pickNextExpiryTwin(snapshot: CommandCenter | null, primary: ScanContract, settings: { maxSpreadPct: number; minContractVolume: number }, budget: number): Promise<{ contract: ScanContract; sessionsOut: number } | null> {
+async function nextExpiryCandidates(snapshot: CommandCenter | null, primary: ScanContract, settings: { maxSpreadPct: number; minContractVolume: number; allowedDte: number[] }, budget: number): Promise<{ candidates: ScanContract[]; sessionsOut: number } | null> {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const later = (snapshot?.contracts ?? []).filter(candidate => candidate.side === primary.side && candidate.expirationDate > today
-    && candidate.bid > 0 && candidate.ask > 0 && candidate.spreadPct <= settings.maxSpreadPct && candidate.volume >= settings.minContractVolume
+    && eligibleBySessions(candidate, settings.allowedDte) && candidate.bid > 0 && candidate.ask > 0 && candidate.spreadPct <= settings.maxSpreadPct && candidate.volume >= settings.minContractVolume
     && candidate.midpoint > 0 && candidate.midpoint <= budget
     && candidate.quoteUpdatedAt != null && Date.now() - candidate.quoteUpdatedAt < 10 * 60_000);
   if (!later.length) return null;
@@ -398,21 +454,22 @@ async function pickNextExpiryTwin(snapshot: CommandCenter | null, primary: ScanC
   const sessionsOut = (await getMarketCalendar()).tradingDaysBetween(today, nextExpiry);
   if (sessionsOut < 1 || sessionsOut > 2) return null;
   const targetDelta = Math.abs(primary.delta ?? 0.45);
-  const contract = later.filter(candidate => candidate.expirationDate === nextExpiry)
-    .sort((a, b) => Math.abs(Math.abs(a.delta ?? 0.45) - targetDelta) - Math.abs(Math.abs(b.delta ?? 0.45) - targetDelta) || b.liquidityScore - a.liquidityScore)[0];
-  return contract ? { contract, sessionsOut } : null;
+  const candidates = later.filter(candidate => candidate.expirationDate === nextExpiry)
+    .sort((a, b) => Math.abs(Math.abs(a.delta ?? 0.45) - targetDelta) - Math.abs(Math.abs(b.delta ?? 0.45) - targetDelta) || b.liquidityScore - a.liquidityScore);
+  return candidates.length ? { candidates, sessionsOut } : null;
 }
 
-// Places and journals the twin. Never blocks or undoes the primary; a failure pages.
-async function placeTestTwin(input: { owner: string; signalId: string; setup: string; underlying: string; primary: ScanContract; primaryLimit: number; primaryQuantity: number; twin: ScanContract; sessionsOut: number }): Promise<void> {
+// Places and journals the same-day twin. Never blocks or undoes the primary; a failure pages.
+async function placeTestTwin(input: { owner: string; signalId: string; setup: string; underlying: string; primary: ScanContract; twin: ScanContract; twinQuantity: number; sessionsOut: number }): Promise<void> {
   const admin = createAdminClient();
   const { twin, primary } = input;
   const short = (ticker: string) => ticker.replace("O:", "");
   try {
-    const budget = input.primaryLimit * input.primaryQuantity;
+    // The twin is the 0DTE the primary replaced, bought at the quantity the risk gate had
+    // already approved for it: the original same-day budget, not the primary's rounded spend.
     const twinLimit = Math.max(0.01, Number(twin.midpoint.toFixed(2)));
-    const twinQuantity = Math.floor(budget / twinLimit);
-    if (twinQuantity < 1) throw new Error(`twin costs $${(twinLimit * 100).toFixed(0)} per contract, over the primary's $${(budget * 100).toFixed(0)} budget`);
+    const twinQuantity = Math.max(1, Math.floor(input.twinQuantity));
+    const budget = twinLimit * twinQuantity;
     const twinOrder = await submitPaperOptionOrder({ symbol: twin.ticker, limitPrice: twinLimit, quantity: twinQuantity,
       clientOrderId: ("velocity-dte2-" + input.signalId).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48) });
     // signal_id stays null: one buy_to_open per signal_id is a unique index (the primary
@@ -421,16 +478,16 @@ async function placeTestTwin(input: { owner: string; signalId: string; setup: st
       user_id: input.owner, signal_id: null, alpaca_order_id: twinOrder.id, client_order_id: twinOrder.client_order_id,
       action: "buy_to_open", underlying: input.underlying, contract_ticker: twin.ticker,
       quantity: twinQuantity, order_type: "limit", limit_price: twinLimit, max_debit: twinLimit * twinQuantity * 100, status: twinOrder.status,
-      risk_snapshot: { autonomous: true, strategy: input.setup, sourceSignalId: input.signalId, outsideBudget: true, budgetReason: "1-2 day test twin",
-        dteTest: { arm: "next-expiry", pairedWith: primary.ticker, sessionsOut: input.sessionsOut, primaryDebit: Number((budget * 100).toFixed(2)) } },
+      risk_snapshot: { autonomous: true, strategy: input.setup, sourceSignalId: input.signalId, outsideBudget: true, budgetReason: "1-2 day test twin (same-day side)",
+        dteTest: { arm: "same-day", role: "twin", pairedWith: primary.ticker, sessionsOut: input.sessionsOut, primaryDebit: Number((budget * 100).toFixed(2)) } },
       broker_response: twinOrder,
       decision_bid: twin.bid, decision_ask: twin.ask, decision_quote_at: twin.quoteUpdatedAt ? new Date(twin.quoteUpdatedAt).toISOString() : null,
     });
     if (error) throw new Error("journal: " + error.message);
     await createAlert({
       userId: input.owner, signalId: input.signalId, eventKey: "paper-entry-" + twinOrder.id, severity: "success",
-      title: "1-2 DAY TEST: also bought " + twinQuantity + " x " + short(twin.ticker),
-      body: "Same signal, same side and the same ~$" + (budget * 100).toFixed(0) + " budget as the same-day buy (" + short(primary.ticker) + "), but expiring " + twin.expirationDate + " (" + input.sessionsOut + " trading session" + (input.sessionsOut === 1 ? "" : "s") + " later). Both follow the same exit rules, so the record shows what extra time alone does. Paper only.",
+      title: "1-2 DAY TEST: also bought the same-day " + twinQuantity + " x " + short(twin.ticker),
+      body: "Same signal, side and ~$" + (budget * 100).toFixed(0) + " budget as the main buy (" + short(primary.ticker) + ", expiring " + primary.expirationDate + ", " + input.sessionsOut + " trading session" + (input.sessionsOut === 1 ? "" : "s") + " out), but expiring today. Both follow the same exit rules, so the record shows what the extra time does. Outside the budget. Paper only.",
       metadata: { kind: "dte_test_twin", orderId: twinOrder.id, contractTicker: twin.ticker, pairedWith: primary.ticker, quantity: twinQuantity, limitPrice: twinLimit },
     }).catch(alertError => console.error("dte test alert failed", alertError));
   } catch (error) {
@@ -438,7 +495,7 @@ async function placeTestTwin(input: { owner: string; signalId: string; setup: st
     console.error("dte test twin failed", message);
     await createAlert({ userId: input.owner, eventKey: ("dte-test-failed-" + input.signalId).slice(0, 120), severity: "warning",
       title: "1-2 day test twin not placed: " + input.underlying,
-      body: "The same-day entry went in, but its 1-2 day twin (" + short(twin.ticker) + ") failed: " + message.slice(0, 200) + ". That pair is missing from the test.",
+      body: "The next-expiry entry went in, but its same-day twin (" + short(twin.ticker) + ") failed: " + message.slice(0, 200) + ". That pair is missing from the test.",
       metadata: { kind: "dte_test_failed", signalId: input.signalId, error: message } }).catch(() => undefined);
   }
 }
