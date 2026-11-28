@@ -8,6 +8,7 @@ import { getMarketCalendar } from "@/lib/market/calendar-server";
 import { loadRiskSettings } from "@/lib/settings/risk-settings";
 import { activeEarningsGuard } from "@/lib/options/earnings-guard";
 import { recordShadowSkip } from "@/lib/options/shadow-ledger";
+import type { entryGateDecision } from "@/lib/ml/entry-gate";
 import type { CommandCenter } from "@/lib/options/types";
 
 // Fully autonomous PAPER entries — SPY plus every watchlist ticker (SPX excluded:
@@ -121,7 +122,7 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // One order per signal, ever.
   const { data: existing } = await admin.from("paper_trade_orders").select("id").eq("signal_id", signal.id).limit(1).maybeSingle();
   if (existing) return { entered: null, skipped: "signal already traded" };
-  const { data: control } = await admin.from("position_manager_control").select("kill_switch,paper_explore_all").eq("id", true).single();
+  const { data: control } = await admin.from("position_manager_control").select("*").eq("id", true).single();
   if (control?.kill_switch) return { entered: null, skipped: "kill switch" };
   // EXPLORE MODE (user call 2026-11-25: "does it make sense to cap the number of trades
   // on the paper account — we are missing some real bangers"). Paper losses are free and
@@ -136,12 +137,12 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // switch. The index sleeve (SPX/SPY) and real money are untouched.
   const exploreAll = Boolean((control as { paper_explore_all?: boolean } | null)?.paper_explore_all) && !["SPX", "SPY"].includes(underlying);
   let budgetReason: string | null = null;
-  // ENTRY-QUALITY GATE (2026-11-24, walk-forward 54%->81% win on unseen months): the
-  // scorer estimates P(this fire never reaches +10%) from fire-time facts and skips
-  // the historically-dying profile. Visible skip — shadow-tracked, so the ledger
-  // keeps score on every trade the gate refuses.
-  {
-    const { scoreEntry } = await import("@/lib/ml/entry-gate");
+  // Select the control row without naming the optional column: old databases
+  // must still return kill_switch and paper_explore_all before migration.
+  const gateMode = control?.entry_gate_mode === "enforce" ? "enforce" : "shadow";
+  let entryGate: ReturnType<typeof entryGateDecision> | { mode: typeof gateMode; error: string };
+  try {
+    const { scoreEntry, entryGateDecision } = await import("@/lib/ml/entry-gate");
     const etParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map(part => [part.type, part.value]));
     const verdict = scoreEntry({
       bars: ((snapshot?.market as { bars?: Array<{ close: number }> })?.bars ?? []),
@@ -151,7 +152,20 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
       dow: ["Mon", "Tue", "Wed", "Thu", "Fri"].indexOf(String(etParts.weekday)),
       premium: contract.ask,
     });
-    if (verdict.skip) return { entered: null, skipped: `entry scorer: dying-trade profile (score ${verdict.prob.toFixed(4)} above ${verdict.threshold.toFixed(4)}${verdict.legPct != null ? `, 30-min leg ${verdict.legPct.toFixed(2)}%` : ", leg unknown"})` };
+    entryGate = entryGateDecision(verdict, gateMode);
+    if (verdict.skip) {
+      const reason = `entry scorer: dying-trade profile (score ${verdict.prob.toFixed(4)} above ${verdict.threshold.toFixed(4)}${verdict.legPct != null ? `, 30-min leg ${verdict.legPct.toFixed(2)}%` : ", leg unknown"})`;
+      if (gateMode === "enforce") return { entered: null, skipped: reason };
+      // Shadow: the opinion lives ONLY on the entry's risk_snapshot.entryGate. It must
+      // not touch signal_shadow_ledger — that table is the Signal Feed's "skipped" list
+      // and it keeps one row per underlying+action+setup per hour, so a counterfactual
+      // row there would list a traded fire as skipped AND take the hour's slot, silencing
+      // a genuine later skip and its "NOT traded" alert (Opus review, 2026-11-28).
+    }
+  } catch (error) {
+    if (gateMode === "enforce") throw error;
+    entryGate = { mode: gateMode, error: error instanceof Error ? error.message : String(error) };
+    console.error("entry gate shadow scoring failed", entryGate.error);
   }
   const [trading, tradesToday, { data: recentExits, error: recentExitsError }] = await Promise.all([
     getPaperTradingState(), entriesToday(owner.id),
@@ -310,7 +324,7 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     user_id: owner.id, signal_id: signal.id, alpaca_order_id: order.id, client_order_id: order.client_order_id,
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
-    risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason,
+    risk_snapshot: { autonomous: true, strategy: signal.setup, entryGate, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason,
       ...(contract.dte === 0 ? { dteTest: { arm: "same-day", pairedWith: testArm?.contract.ticker ?? null, skipped: testArm ? null : "no next-expiry contract within two sessions that passes the same quality screen and fits the same budget" } } : {}) },
     broker_response: order,
     decision_bid: contract.bid, decision_ask: contract.ask, decision_quote_at: contract.quoteUpdatedAt ? new Date(contract.quoteUpdatedAt).toISOString() : null,
