@@ -298,7 +298,7 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
   // the same premium budget, and the SAME exit rules (the worker treats the twin as a
   // same-day trade: 15:10 flat, stops and trails unchanged). Twins are tagged
   // dteTest.arm = "next-expiry"; the primary is tagged "same-day". Paper only.
-  const testArm = contract.dte === 0 && signal.setup !== "scalp_reclaim" ? await pickNextExpiryTwin(snapshot, contract) : null;
+  const testArm = contract.dte === 0 && signal.setup !== "scalp_reclaim" ? await pickNextExpiryTwin(snapshot, contract, sleeveSettings, entryLimit * risk.quantity) : null;
   const order = await submitPaperOptionOrder({ symbol: contract.ticker, limitPrice: entryLimit, clientOrderId, quantity: risk.quantity });
   await createAlert({
     userId: owner.id, signalId: signal.id, eventKey: `paper-entry-${order.id}`, severity: "success",
@@ -311,7 +311,7 @@ async function evaluateAutoEntry(snapshot: CommandCenter | null, underlying: str
     action: "buy_to_open", underlying, contract_ticker: contract.ticker,
     quantity: risk.quantity, order_type: "limit", limit_price: entryLimit, max_debit: risk.debit, status: order.status,
     risk_snapshot: { autonomous: true, strategy: signal.setup, equity: risk.equity, dayPnl: risk.dayPnl, rules: settings, systemCaps: PAPER_RULES, outsideBudget, budgetReason,
-      ...(contract.dte === 0 ? { dteTest: { arm: "same-day", pairedWith: testArm?.contract.ticker ?? null, skipped: testArm ? null : "no next-expiry contract within two sessions" } } : {}) },
+      ...(contract.dte === 0 ? { dteTest: { arm: "same-day", pairedWith: testArm?.contract.ticker ?? null, skipped: testArm ? null : "no next-expiry contract within two sessions that passes the same quality screen and fits the same budget" } } : {}) },
     broker_response: order,
     decision_bid: contract.bid, decision_ask: contract.ask, decision_quote_at: contract.quoteUpdatedAt ? new Date(contract.quoteUpdatedAt).toISOString() : null,
   });
@@ -369,10 +369,16 @@ async function latestTradePrice(symbol: string): Promise<number | null> {
 // sessions, same side, nearest the primary's |delta| (0.45 when unknown), with a real
 // two-sided book and a fresh quote. Null when no such contract is in the scan.
 type ScanContract = CommandCenter["contracts"][number];
-async function pickNextExpiryTwin(snapshot: CommandCenter | null, primary: ScanContract): Promise<{ contract: ScanContract; sessionsOut: number } | null> {
+// Codex audit (2026-11-28): the twin must pass the SAME quality screen as the primary
+// (spread and volume limits from the lane's settings) and fit the SAME budget — a
+// minimum of one contract used to let a $400 twin pair with a $300 primary. A twin
+// that cannot be bought inside the primary's budget is skipped and the skip recorded.
+async function pickNextExpiryTwin(snapshot: CommandCenter | null, primary: ScanContract, settings: { maxSpreadPct: number; minContractVolume: number }, budget: number): Promise<{ contract: ScanContract; sessionsOut: number } | null> {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const later = (snapshot?.contracts ?? []).filter(candidate => candidate.side === primary.side && candidate.expirationDate > today
-    && candidate.bid > 0 && candidate.ask > 0 && candidate.spreadPct <= 25 && candidate.quoteUpdatedAt != null && Date.now() - candidate.quoteUpdatedAt < 10 * 60_000);
+    && candidate.bid > 0 && candidate.ask > 0 && candidate.spreadPct <= settings.maxSpreadPct && candidate.volume >= settings.minContractVolume
+    && candidate.midpoint > 0 && candidate.midpoint <= budget
+    && candidate.quoteUpdatedAt != null && Date.now() - candidate.quoteUpdatedAt < 10 * 60_000);
   if (!later.length) return null;
   const nextExpiry = later.map(candidate => candidate.expirationDate).sort()[0]!;
   const sessionsOut = (await getMarketCalendar()).tradingDaysBetween(today, nextExpiry);
@@ -391,7 +397,8 @@ async function placeTestTwin(input: { owner: string; signalId: string; setup: st
   try {
     const budget = input.primaryLimit * input.primaryQuantity;
     const twinLimit = Math.max(0.01, Number(twin.midpoint.toFixed(2)));
-    const twinQuantity = Math.max(1, Math.floor(budget / twinLimit));
+    const twinQuantity = Math.floor(budget / twinLimit);
+    if (twinQuantity < 1) throw new Error(`twin costs $${(twinLimit * 100).toFixed(0)} per contract, over the primary's $${(budget * 100).toFixed(0)} budget`);
     const twinOrder = await submitPaperOptionOrder({ symbol: twin.ticker, limitPrice: twinLimit, quantity: twinQuantity,
       clientOrderId: ("velocity-dte2-" + input.signalId).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48) });
     // signal_id stays null: one buy_to_open per signal_id is a unique index (the primary
