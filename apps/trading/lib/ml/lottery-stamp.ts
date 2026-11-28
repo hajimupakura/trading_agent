@@ -1,6 +1,10 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getMarketCalendar } from "@/lib/market/calendar-server";
+import { addDays, type MarketCalendar } from "@/lib/market/calendar";
+import { STOCK_FEED } from "@/lib/alpaca/data-plan";
 import { MIN_LEG_PCT, morningLegs } from "./morning-legs";
+import { LOTTERY_SHADOW_MODEL, LOTTERY_THRESHOLD, priorSessionFeatures, scoreLotteryDay, type MinuteBar } from "./lottery-detector";
 
 // LOTTERY-DAY STAMP — INPUTS ONLY SINCE 2026-11-27. It never arms.
 //
@@ -22,6 +26,11 @@ import { MIN_LEG_PCT, morningLegs } from "./morning-legs";
 // So this job now does the one thing that is certainly useful: it records the real
 // 11:00 inputs every day (per-name moves included, so any universe can be rebuilt),
 // and stamps armed=false. A detector goes back in only after it validates on these.
+//
+// 2026-11-28 (user call: "fix this" on Opus's suggestion): the frozen causal candidate
+// from the 11/28 rebuild is now SCORED each morning and its probability stored in
+// `prob` (+ features.shadow) — still armed=false, still read by nothing that trades.
+// That turns every future session into an out-of-sample test at zero cost.
 
 // The names the historical bar set covers; the aggregate inputs use exactly these so
 // live stamps stay comparable with the history a future model is trained on.
@@ -33,11 +42,33 @@ const etNow = () => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: ET, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map(part => [part.type, part.value]));
   return { weekday: String(parts.weekday), minutes: Number(parts.hour) * 60 + Number(parts.minute), dateKey: new Intl.DateTimeFormat("en-CA", { timeZone: ET }).format(new Date()) };
 };
-const prevWeekday = (dateKey: string): string => {
-  const date = new Date(`${dateKey}T12:00:00Z`);
-  do { date.setUTCDate(date.getUTCDate() - 1); } while ([0, 6].includes(date.getUTCDay()));
-  return date.toISOString().slice(0, 10);
+// The previous EXCHANGE session (holidays skipped), as the research census used.
+const prevSession = (calendar: MarketCalendar, dateKey: string): string => {
+  let key = addDays(dateKey, -1);
+  for (let i = 0; i < 10 && !calendar.isTradingDay(key); i++) key = addDays(key, -1);
+  return key;
 };
+
+// One regular session of 1-minute bars for SPY/QQQ, ET minute-stamped, from Alpaca.
+async function sessionBars(symbol: string, dateKey: string, openMin: number, closeMin: number): Promise<MinuteBar[]> {
+  const key = process.env.ALPACA_API_KEY_ID; const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) throw new Error("Alpaca market-data keys are not configured");
+  const url = new URL(`https://data.alpaca.markets/v2/stocks/${symbol}/bars`);
+  url.searchParams.set("timeframe", "1Min"); url.searchParams.set("start", `${dateKey}T12:00:00Z`); url.searchParams.set("end", `${dateKey}T23:00:00Z`);
+  url.searchParams.set("feed", STOCK_FEED); url.searchParams.set("adjustment", "all"); url.searchParams.set("sort", "asc"); url.searchParams.set("limit", "1000");
+  const response = await fetch(url, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`Alpaca ${symbol} bars ${dateKey}: ${response.status}`);
+  const payload = await response.json() as { bars?: Array<{ t: string; o: number; h: number; l: number; c: number }> };
+  const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone: ET });
+  const minuteOf = new Intl.DateTimeFormat("en-US", { timeZone: ET, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  return (payload.bars ?? []).flatMap(bar => {
+    const at = new Date(bar.t);
+    if (dayOf.format(at) !== dateKey) return [];
+    const parts = Object.fromEntries(minuteOf.formatToParts(at).map(part => [part.type, part.value]));
+    const min = Number(parts.hour) * 60 + Number(parts.minute);
+    return min >= openMin && min < closeMin && bar.c > 0 ? [{ min, open: bar.o, high: bar.h, low: bar.l, close: bar.c }] : [];
+  });
+}
 
 export async function runLotteryDayStamp(): Promise<{ stamped: boolean; skipped?: string }> {
   const clock = etNow();
@@ -46,8 +77,10 @@ export async function runLotteryDayStamp(): Promise<{ stamped: boolean; skipped?
   const admin = createAdminClient();
   const { data: existing } = await admin.from("lottery_day_stamps").select("day").eq("day", clock.dateKey).maybeSingle();
   if (existing) return { stamped: false, skipped: "already stamped" };
-  const prev1 = prevWeekday(clock.dateKey);
-  const prev2 = prevWeekday(prev1);
+  const calendar = await getMarketCalendar();
+  if (!calendar.isTradingDay(clock.dateKey)) return { stamped: false, skipped: "market holiday" };
+  const prev1 = prevSession(calendar, clock.dateKey);
+  const prev2 = prevSession(calendar, prev1);
   const [{ data: snapshots }, { data: events }] = await Promise.all([
     // Only the bars — a full snapshot payload is ~1 MB per name.
     admin.from("options_monitor_snapshots").select("underlying,bars:payload->market->bars"),
@@ -83,7 +116,28 @@ export async function runLotteryDayStamp(): Promise<{ stamped: boolean; skipped?
     // Every name's legs, universe or not, so the inputs can be rebuilt for any name set.
     legs: allLegs, universe: UNIVERSE, minLegPct: MIN_LEG_PCT,
   };
-  const { error } = await admin.from("lottery_day_stamps").insert({ day: clock.dateKey, prob: 0, armed: false, features, model: "inputs-only-2026-11-27" });
+  // Shadow score. SPY/QQQ context comes from Alpaca; a failed fetch is NOT hidden — the
+  // missing flag goes in (as it did for gaps in history) and the error is written down.
+  const errors: string[] = [];
+  const priorSession = calendar.session(prev1); const todaySession = calendar.session(clock.dateKey);
+  const context = await Promise.all(["SPY", "QQQ"].map(async sym => {
+    try {
+      if (!priorSession || !todaySession) throw new Error("no calendar session");
+      const [prior, today] = await Promise.all([sessionBars(sym, prev1, priorSession.openMin, priorSession.closeMin), sessionBars(sym, clock.dateKey, todaySession.openMin, todaySession.closeMin)]);
+      return priorSessionFeatures(prior, today, priorSession.closeMin);
+    } catch (error) {
+      errors.push(`${sym}: ${error instanceof Error ? error.message : String(error)}`);
+      return [0, 0, 0, 1] as [number, number, number, number];
+    }
+  }));
+  const vector = [features.n_by11, features.maxleg_by11, features.syms_by11, features.first_fire, features.dow,
+    features.cpi, features.jobs, features.fomc, features.fomc_prev, features.megacap_react, features.react_prev, features.nvda_react,
+    ...context[0], ...context[1], 0];
+  const prob = scoreLotteryDay(vector);
+  const shadow = { model: LOTTERY_SHADOW_MODEL, prob, threshold: LOTTERY_THRESHOLD, wouldArm: prob >= LOTTERY_THRESHOLD, vector, errors };
+  if (errors.length) console.error("lottery shadow score: index context missing", errors);
+  // armed stays false: the convexity sleeve reads `armed`, and this model has not earned it.
+  const { error } = await admin.from("lottery_day_stamps").insert({ day: clock.dateKey, prob, armed: false, features: { ...features, shadow }, model: `inputs+${LOTTERY_SHADOW_MODEL}` });
   if (error) throw new Error(`lottery stamp persistence: ${error.message}`);
   return { stamped: true };
 }
